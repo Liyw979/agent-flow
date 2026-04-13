@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #172019;
+  background:
+    radial-gradient(circle at top, rgba(201, 111, 59, 0.15), transparent 30%),
+    linear-gradient(135deg, #f6f0e8 0%, #efe4d4 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body {
+  font-family: "IBM Plex Sans", "PingFang SC", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.window-drag-region {
+  -webkit-app-region: drag;
+  background:
+    linear-gradient(180deg, rgba(23, 32, 25, 0.06), rgba(23, 32, 25, 0)),
+    linear-gradient(90deg, rgba(255, 248, 240, 0.85), rgba(255, 248, 240, 0.55));
+  border-bottom: 1px solid rgba(44, 74, 63, 0.08);
+  user-select: none;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.PANEL-surface {
+  background: rgba(255, 248, 240, 0.82);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(44, 74, 63, 0.09);
+  box-shadow: 0 20px 40px rgba(44, 74, 63, 0.1);
+}
+
+.mesh-bg {
+  background-image:
+    radial-gradient(circle at 20% 20%, rgba(157, 173, 127, 0.15), transparent 26%),
+    radial-gradient(circle at 80% 12%, rgba(201, 111, 59, 0.18), transparent 24%),
+    linear-gradient(rgba(44, 74, 63, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(44, 74, 63, 0.05) 1px, transparent 1px);
+  background-size: auto, auto, 24px 24px, 24px 24px;
+  background-position: 0 0, 0 0, -1px -1px, -1px -1px;
+}
+
+.react-flow__attribution,
+.react-flow__minimap,
+.react-flow__controls {
+  display: none !important;
+}

@@ -1,0 +1,6 @@
+layout {
+  pane size=1 borderless=true {
+    command "sh"
+    args "-lc" "echo Agent Flow Zellij Layout Ready; exec $SHELL"
+  }
+}

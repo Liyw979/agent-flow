@@ -1,0 +1,35 @@
+/// <reference types="vite/client" />
+
+import type {
+  AgentRuntimeSnapshot,
+  AgentFlowEvent,
+  CreateProjectPayload,
+  DeleteTaskPayload,
+  GetTaskRuntimePayload,
+  OpenTaskSessionPayload,
+  ProjectSnapshot,
+  SaveAgentFilePayload,
+  SubmitTaskPayload,
+  TaskSnapshot,
+  UpdateTopologyPayload,
+} from "@shared/types";
+
+declare global {
+  interface Window {
+    agentFlow: {
+      bootstrap: () => Promise<ProjectSnapshot[]>;
+      createProject: (payload: CreateProjectPayload) => Promise<ProjectSnapshot>;
+      pickProjectPath: () => Promise<string | null>;
+      submitTask: (payload: SubmitTaskPayload) => Promise<TaskSnapshot>;
+      deleteTask: (payload: DeleteTaskPayload) => Promise<ProjectSnapshot>;
+      openTaskSession: (payload: OpenTaskSessionPayload) => Promise<void>;
+      selectAgentPANEL: (projectId: string, taskId: string, agentId: string) => Promise<void>;
+      saveAgentFile: (payload: SaveAgentFilePayload) => Promise<ProjectSnapshot>;
+      saveTopology: (payload: UpdateTopologyPayload) => Promise<ProjectSnapshot>;
+      getTaskRuntime: (payload: GetTaskRuntimePayload) => Promise<AgentRuntimeSnapshot[]>;
+      onAgentFlowEvent: (listener: (event: AgentFlowEvent) => void) => () => void;
+    };
+  }
+}
+
+export {};

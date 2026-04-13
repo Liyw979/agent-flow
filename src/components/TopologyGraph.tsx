@@ -1,0 +1,1475 @@
+import { useEffect, useMemo, useRef, useState, type ComponentType, type MouseEvent } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import {
+  BaseEdge,
+  Background,
+  MarkerType,
+  Position,
+  ReactFlow,
+  getNodesBounds,
+  type ReactFlowInstance,
+  type EdgeProps,
+  type Edge,
+  type Node,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import { isBuiltinAgentPath, resolveTopologyRootAgent } from "@shared/types";
+import type {
+  AgentRole,
+  AgentRuntimeSnapshot,
+  MessageRecord,
+  ProjectSnapshot,
+  TaskSnapshot,
+  TopologyEdge,
+  TopologyRecord,
+} from "@shared/types";
+
+interface TopologyGraphProps {
+  project: ProjectSnapshot | undefined;
+  task: TaskSnapshot | undefined;
+  selectedAgentId: string | null;
+  onSelectAgent: (agentId: string) => void;
+  onSaveTopology: (topology: TopologyRecord) => Promise<void>;
+  compact?: boolean;
+  showEdgeList?: boolean;
+  runtimeSnapshots?: Record<string, AgentRuntimeSnapshot>;
+}
+
+interface TopologyEdgeData {
+  edgeKind: TopologyEdge["triggerOn"];
+  laneIndex: number;
+  span: number;
+  horizontalPhase: number;
+  sourceBlockHeight: number;
+  targetBlockHeight: number;
+}
+
+const NODE_COLUMN_GAP = 8;
+const NODE_START_X = 0;
+const NODE_START_Y = 0;
+const MAIN_NODE_COLUMN_HEIGHT = 440;
+const EXPANDED_NODE_COLUMN_HEIGHT = 820;
+const MAIN_NODE_CARD_WIDTH = 264;
+const EXPANDED_NODE_CARD_WIDTH = 292;
+const MAIN_NODE_CARD_MAX_WIDTH = 324;
+const EXPANDED_NODE_CARD_MAX_WIDTH = 360;
+const MAIN_NODE_CARD_MIN_WIDTH = 120;
+const EXPANDED_NODE_CARD_MIN_WIDTH = 144;
+const NODE_COLUMN_MIN_GAP = 4;
+const IDLE_AGENT_BLOCK_HEIGHT = 26;
+const RUNNING_AGENT_BLOCK_HEIGHT = 88;
+const HISTORY_STACK_GAP = 0;
+const MAX_VISIBLE_HISTORY_ITEMS = 10;
+const AGENT_EDGE_TOP_INSET = 2;
+const AGENT_EDGE_BOTTOM_INSET = 2;
+const MAIN_FIT_PADDING = 0.015;
+const PREVIEW_FIT_PADDING = 0.05;
+const EXPANDED_FIT_PADDING = 0.015;
+const FLOW_MIN_ZOOM = 0.1;
+const FLOW_MAX_ZOOM = 2;
+const MAIN_FLOW_LEFT_INSET = 6;
+const MAIN_FLOW_RIGHT_INSET = 6;
+const EXPANDED_FLOW_LEFT_INSET = 6;
+const EXPANDED_FLOW_RIGHT_INSET = 6;
+const FLOW_TOP_INSET = 8;
+const MAIN_FLOW_BOTTOM_INSET = 8;
+const EXPANDED_FLOW_BOTTOM_INSET = 10;
+
+const preferredRoleRank: Partial<Record<AgentRole, number>> = {
+  business_analyst: 0,
+  implementation: 1,
+  docs_review: 2,
+  code_review: 2,
+  unit_test: 2,
+  integration_test: 2,
+};
+
+const preferredRoleRowOrder: Partial<Record<AgentRole, number>> = {
+  docs_review: 0,
+  unit_test: 1,
+  integration_test: 2,
+  code_review: 3,
+};
+
+function getAgentDisplayName(name: string) {
+  if (name === "build") {
+    return "Build";
+  }
+  return name.replace(/-Agent$/i, "");
+}
+
+function getAgentBlockHeight(agentState: string) {
+  return agentState === "running" ? RUNNING_AGENT_BLOCK_HEIGHT : IDLE_AGENT_BLOCK_HEIGHT;
+}
+
+function getAgentCardAppearance(agentState: string) {
+  switch (agentState) {
+    case "running":
+      return {
+        borderColor: "rgba(201, 111, 59, 0.92)",
+        background: "#C96F3B",
+        color: "#FFF8F0",
+        shadow: "0 12px 30px rgba(201,111,59,0.24)",
+      };
+    case "needs_revision":
+      return {
+        borderColor: "rgba(226, 178, 111, 0.95)",
+        background: "#E8A24D",
+        color: "#172019",
+        shadow: "0 10px 26px rgba(226,178,111,0.22)",
+      };
+    case "success":
+      return {
+        borderColor: "rgba(157, 173, 127, 0.95)",
+        background: "#9DAD7F",
+        color: "#172019",
+        shadow: "0 10px 26px rgba(157,173,127,0.2)",
+      };
+    case "failed":
+      return {
+        borderColor: "rgba(44, 74, 63, 0.95)",
+        background: "#2C4A3F",
+        color: "#FFF8F0",
+        shadow: "0 12px 28px rgba(44,74,63,0.22)",
+      };
+    default:
+      return {
+        borderColor: "rgba(44, 74, 63, 0.22)",
+        background: "#F7F2E8",
+        color: "#172019",
+        shadow: "0 8px 24px rgba(44,74,63,0.08)",
+      };
+  }
+}
+
+function getDisplayWidthUnits(value: string) {
+  return [...value].reduce((total, char) => {
+    if (/[\u3400-\u9fff\uf900-\ufaff]/.test(char)) {
+      return total + 1;
+    }
+    if (/[A-Z0-9]/.test(char)) {
+      return total + 0.74;
+    }
+    return total + 0.64;
+  }, 0);
+}
+
+function getAgentNameStyle(displayName: string, nodeCardWidth: number) {
+  const availableWidth = Math.max(108, nodeCardWidth - 40);
+  const widthUnits = Math.max(1, getDisplayWidthUnits(displayName));
+  const isShortName = widthUnits <= 2.2;
+  const maxFontSize = isShortName ? 16 : nodeCardWidth >= 270 ? 20 : 18;
+  const computedFontSize = availableWidth / (widthUnits * 0.9);
+  const fontSize = Math.max(14, Math.min(maxFontSize, computedFontSize));
+
+  return {
+    fontSize: `${fontSize}px`,
+    lineHeight: fontSize <= 16 ? 1.05 : 1,
+    letterSpacing: "0",
+  } as const;
+}
+
+function createEdgeId(source: string, target: string, triggerOn: TopologyEdge["triggerOn"]) {
+  return `${source}__${target}__${triggerOn}`;
+}
+
+function getRoleRank(role: AgentRole | null | undefined) {
+  return preferredRoleRank[role ?? ""] ?? 2;
+}
+
+function getRoleRowOrder(role: AgentRole | null | undefined) {
+  return preferredRoleRowOrder[role ?? ""] ?? 99;
+}
+
+function computeNodeLayout(
+  draft: TopologyRecord,
+  agentRoles: Map<string, AgentRole | null>,
+  options?: {
+    viewportWidth: number;
+    viewportHeight: number;
+    nodeCardWidth: number;
+    nodeColumnHeight: number;
+    horizontalInsetLeft: number;
+    horizontalInsetRight: number;
+    topInset: number;
+    bottomInset: number;
+    maxNodeCardWidth?: number;
+    minNodeCardWidth?: number;
+    minNodeGap?: number;
+  },
+) {
+  const layoutByNode = new Map<
+    string,
+    {
+      x: number;
+      y: number;
+      sourcePosition: Position;
+      targetPosition: Position;
+    }
+  >();
+  const nodeIds = draft.nodes.map((node) => node.id);
+  const nodeIdSet = new Set(nodeIds);
+  const rootAgentId = nodeIdSet.has(draft.rootAgentId ?? "") ? draft.rootAgentId : nodeIds[0] ?? null;
+  const directIncomingByNode = new Map(nodeIds.map((nodeId) => [nodeId, 0]));
+  const ancestorSets = new Map(nodeIds.map((nodeId) => [nodeId, new Set<string>()]));
+
+  for (const edge of draft.edges) {
+    if (!nodeIdSet.has(edge.source) || !nodeIdSet.has(edge.target) || edge.source === edge.target) {
+      continue;
+    }
+    directIncomingByNode.set(edge.target, (directIncomingByNode.get(edge.target) ?? 0) + 1);
+  }
+
+  const maxIterations = Math.max(1, nodeIds.length * Math.max(draft.edges.length, 1));
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    let changed = false;
+
+    for (const edge of draft.edges) {
+      if (
+        !nodeIdSet.has(edge.source) ||
+        !nodeIdSet.has(edge.target) ||
+        edge.source === edge.target ||
+        edge.target === rootAgentId
+      ) {
+        continue;
+      }
+
+      const sourceAncestors = ancestorSets.get(edge.source) ?? new Set<string>();
+      const sourceReachable = edge.source === rootAgentId || sourceAncestors.size > 0;
+      if (!sourceReachable || sourceAncestors.has(edge.target)) {
+        continue;
+      }
+
+      const currentTargetAncestors = ancestorSets.get(edge.target) ?? new Set<string>();
+      const nextTargetAncestors = new Set(currentTargetAncestors);
+      nextTargetAncestors.add(edge.source);
+      for (const ancestor of sourceAncestors) {
+        if (ancestor !== edge.target) {
+          nextTargetAncestors.add(ancestor);
+        }
+      }
+
+      if (nextTargetAncestors.size !== currentTargetAncestors.size) {
+        ancestorSets.set(edge.target, nextTargetAncestors);
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      break;
+    }
+  }
+
+  const sortedNodeIds = [...nodeIds].sort((left, right) => {
+    if (left === rootAgentId) {
+      return -1;
+    }
+    if (right === rootAgentId) {
+      return 1;
+    }
+
+    const leftReachable = (ancestorSets.get(left)?.size ?? 0) > 0;
+    const rightReachable = (ancestorSets.get(right)?.size ?? 0) > 0;
+    if (leftReachable !== rightReachable) {
+      return leftReachable ? -1 : 1;
+    }
+
+    const leftAncestorCount = ancestorSets.get(left)?.size ?? 0;
+    const rightAncestorCount = ancestorSets.get(right)?.size ?? 0;
+    if (leftAncestorCount !== rightAncestorCount) {
+      return leftAncestorCount - rightAncestorCount;
+    }
+
+    const leftIncoming = directIncomingByNode.get(left) ?? 0;
+    const rightIncoming = directIncomingByNode.get(right) ?? 0;
+    if (leftIncoming !== rightIncoming) {
+      return leftIncoming - rightIncoming;
+    }
+
+    const rankGap = getRoleRank(agentRoles.get(left)) - getRoleRank(agentRoles.get(right));
+    if (rankGap !== 0) {
+      return rankGap;
+    }
+    const rowGap = getRoleRowOrder(agentRoles.get(left)) - getRoleRowOrder(agentRoles.get(right));
+    if (rowGap !== 0) {
+      return rowGap;
+    }
+    return left.localeCompare(right);
+  });
+
+  const nodeCount = Math.max(sortedNodeIds.length, 1);
+  const fallbackGap = NODE_COLUMN_GAP;
+  const viewportWidth = options?.viewportWidth ?? 0;
+  const viewportHeight = options?.viewportHeight ?? 0;
+  const baseNodeCardWidth = options?.nodeCardWidth ?? MAIN_NODE_CARD_WIDTH;
+  const baseNodeColumnHeight = options?.nodeColumnHeight ?? MAIN_NODE_COLUMN_HEIGHT;
+  const maxNodeCardWidth = options?.maxNodeCardWidth ?? baseNodeCardWidth;
+  const minNodeCardWidth = Math.min(options?.minNodeCardWidth ?? baseNodeCardWidth, baseNodeCardWidth);
+  const minNodeGap = Math.max(0, Math.min(options?.minNodeGap ?? NODE_COLUMN_MIN_GAP, fallbackGap));
+  const leftPadding = options?.horizontalInsetLeft ?? 0;
+  const rightPadding = options?.horizontalInsetRight ?? 0;
+  const topPadding = options?.topInset ?? 0;
+  const bottomPadding = options?.bottomInset ?? 0;
+  const availableWidth = Math.max(1, viewportWidth - leftPadding - rightPadding);
+  const availableHeight = Math.max(1, viewportHeight - topPadding - bottomPadding);
+  const resolvedNodeColumnHeight = viewportHeight > 0 ? availableHeight : baseNodeColumnHeight;
+  const gapCount = Math.max(nodeCount - 1, 0);
+  const baseContentWidth = baseNodeCardWidth * nodeCount + fallbackGap * gapCount;
+  let resolvedNodeCardWidth = baseNodeCardWidth;
+  let resolvedGap = fallbackGap;
+  let startOffsetX = leftPadding;
+
+  if (viewportWidth > 0) {
+    if (availableWidth >= baseContentWidth) {
+      const extraWidth = availableWidth - baseContentWidth;
+      const widthCapacity = Math.max(0, maxNodeCardWidth - baseNodeCardWidth) * nodeCount;
+      const appliedWidthExtra = Math.min(extraWidth, widthCapacity);
+      resolvedNodeCardWidth =
+        baseNodeCardWidth + (nodeCount > 0 ? appliedWidthExtra / nodeCount : 0);
+      const remainingExtraWidth = extraWidth - appliedWidthExtra;
+      resolvedGap = gapCount > 0 ? fallbackGap + remainingExtraWidth / gapCount : 0;
+      startOffsetX = leftPadding;
+    } else {
+      const missingWidth = baseContentWidth - availableWidth;
+      const widthShrinkCapacity = Math.max(0, baseNodeCardWidth - minNodeCardWidth) * nodeCount;
+      const appliedWidthShrink = Math.min(missingWidth, widthShrinkCapacity);
+      resolvedNodeCardWidth =
+        baseNodeCardWidth - (nodeCount > 0 ? appliedWidthShrink / nodeCount : 0);
+      const remainingShrink = missingWidth - appliedWidthShrink;
+      const nextGap = gapCount > 0 ? fallbackGap - remainingShrink / gapCount : 0;
+      resolvedGap = gapCount > 0 ? Math.max(minNodeGap, nextGap) : 0;
+      startOffsetX = leftPadding;
+    }
+  }
+
+  sortedNodeIds.forEach((nodeId, index) => {
+    layoutByNode.set(nodeId, {
+      x:
+        NODE_START_X +
+        startOffsetX +
+        index * (resolvedNodeCardWidth + (viewportWidth > 0 ? resolvedGap : fallbackGap)),
+      y: NODE_START_Y,
+      sourcePosition: Position.Bottom,
+      targetPosition: Position.Bottom,
+    });
+  });
+
+  return {
+    layoutByNode,
+    nodeCardWidth: resolvedNodeCardWidth,
+    nodeColumnHeight: resolvedNodeColumnHeight,
+  };
+}
+
+function buildRuntimeTooltip(snapshot: AgentRuntimeSnapshot | undefined) {
+  if (!snapshot || snapshot.activities.length === 0) {
+    return undefined;
+  }
+
+  return snapshot.activities
+    .slice(0, 4)
+    .map((activity) => `${activity.label}${activity.detail ? ` · ${activity.detail}` : ""}`)
+    .join("\n");
+}
+
+function getAgentKindMeta(isBuiltin: boolean) {
+  return isBuiltin
+    ? {
+        label: "Built-in",
+        badgeClassName: "border border-sky-200/90 bg-sky-100/90 text-sky-700",
+        panelClassName: "border-sky-200/70 bg-sky-50/65",
+      }
+    : {
+        label: "Custom",
+        badgeClassName: "border border-amber-200/90 bg-amber-100/90 text-amber-800",
+        panelClassName: "border-amber-200/70 bg-amber-50/55",
+      };
+}
+
+function toShortTime(timestamp: string | null | undefined) {
+  if (!timestamp) {
+    return "";
+  }
+
+  const value = new Date(timestamp);
+  if (Number.isNaN(value.getTime())) {
+    return "";
+  }
+
+  return value.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function summarizeHistoryText(content: string | null | undefined) {
+  const normalized = (content ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "暂无详细记录";
+  }
+  return normalized.length > 34 ? `${normalized.slice(0, 34)}...` : normalized;
+}
+
+function getRuntimeActivityAppearance(kind: string, label: string) {
+  switch (kind) {
+    case "tool":
+      return {
+        label: label.replace(/^tool:\s*/i, "") || "Tool",
+        className: "border-[#d4b07b] bg-[#fff3e1] text-[#7a4d15]",
+      };
+    case "step":
+      return {
+        label: "步骤",
+        className: "border-[#9cb9d7] bg-[#edf4fb] text-[#27496b]",
+      };
+    default:
+      return {
+        label: "消息",
+        className: "border-[#a9cbb6] bg-[#e9f4ee] text-[#1f4b34]",
+      };
+  }
+}
+
+function getHistoryAppearance(status: string) {
+  switch (status) {
+    case "running":
+      return {
+        label: "运行中",
+        className: "border-secondary/50 bg-secondary/12 text-secondary-foreground",
+      };
+    case "needs_revision":
+      return {
+        label: "待修改",
+        className: "border-[#e2b26f] bg-[#fff1da] text-[#8a5a19]",
+      };
+    case "failed":
+      return {
+        label: "失败",
+        className: "border-primary/35 bg-primary/10 text-primary",
+      };
+    default:
+      return {
+        label: "通过",
+        className: "border-accent/55 bg-accent/18 text-foreground",
+      };
+  }
+}
+
+function getAgentHistoryFromMessages(messages: MessageRecord[], agentId: string) {
+  return messages
+    .filter((message) => message.sender === agentId && message.meta?.kind === "agent-final")
+    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
+    .slice(0, MAX_VISIBLE_HISTORY_ITEMS)
+    .map((message) => {
+      const status = message.meta?.reviewDecision === "needs_revision" ? "needs_revision" : message.meta?.status ?? "success";
+      const appearance = getHistoryAppearance(status);
+      return {
+        id: message.id,
+        label: appearance.label,
+        className: appearance.className,
+        timestamp: toShortTime(message.timestamp),
+        detail: summarizeHistoryText(message.meta?.finalMessage ?? message.content),
+      };
+    });
+}
+
+function getRuntimeHistoryItems(snapshot: AgentRuntimeSnapshot | undefined, agentId: string) {
+  if (!snapshot) {
+    return [];
+  }
+
+  return snapshot.activities.slice(0, MAX_VISIBLE_HISTORY_ITEMS).map((activity, index) => {
+    const appearance = getRuntimeActivityAppearance(activity.kind, activity.label);
+    return {
+      id: `${agentId}-runtime-${activity.id}-${index}`,
+      label: appearance.label,
+      className: appearance.className,
+      timestamp: toShortTime(activity.timestamp),
+      detail: summarizeHistoryText(activity.detail || activity.label),
+    };
+  });
+}
+
+function CurvedTopologyEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  markerEnd,
+  style,
+  data,
+}: EdgeProps<Edge<TopologyEdgeData>>) {
+  const laneIndex = data?.laneIndex ?? 0;
+  const span = data?.span ?? 1;
+  const horizontalPhase = data?.horizontalPhase ?? 0;
+  const sourceBlockHeight = data?.sourceBlockHeight ?? IDLE_AGENT_BLOCK_HEIGHT;
+  const targetBlockHeight = data?.targetBlockHeight ?? IDLE_AGENT_BLOCK_HEIGHT;
+  const sourceTopY = sourceY - sourceBlockHeight + AGENT_EDGE_TOP_INSET;
+  const targetTopY = targetY - targetBlockHeight + AGENT_EDGE_TOP_INSET;
+
+  if (Math.abs(targetX - sourceX) < 2) {
+    const loopWidth = 28 + laneIndex * 8;
+    const loopDepth = 28 + laneIndex * 10;
+    const path = [
+      `M ${sourceX} ${sourceTopY}`,
+      `C ${sourceX + loopWidth} ${sourceTopY - 8}, ${sourceX + loopWidth} ${sourceTopY - loopDepth}, ${sourceX} ${sourceTopY - loopDepth}`,
+      `C ${sourceX - loopWidth} ${sourceTopY - loopDepth}, ${sourceX - loopWidth} ${sourceTopY - 8}, ${sourceX} ${sourceTopY}`,
+    ].join(" ");
+
+    return (
+      <BaseEdge
+        id={id}
+        path={path}
+        markerEnd={markerEnd}
+        style={{
+          ...style,
+          strokeLinecap: "round",
+          strokeLinejoin: "round",
+        }}
+      />
+    );
+  }
+
+  const direction = targetX > sourceX ? 1 : -1;
+  const horizontalDistance = Math.abs(targetX - sourceX);
+  const verticalDepth = 18 + span * 7 + laneIndex * 6;
+  const horizontalBias = horizontalPhase * 10;
+  const startX = sourceX;
+  const endX = targetX;
+  const startY = sourceTopY;
+  const endY = targetTopY;
+  const controlReach = Math.max(28, Math.min(76, horizontalDistance * 0.18));
+  const sourceControlX = startX + direction * (controlReach + horizontalBias);
+  const targetControlX = endX - direction * (controlReach - horizontalBias);
+  const sourceControlY = startY - verticalDepth * 0.45;
+  const targetControlY = endY - verticalDepth;
+  const path = [
+    `M ${startX} ${startY}`,
+    `C ${sourceControlX} ${sourceControlY}, ${targetControlX} ${targetControlY}, ${endX} ${endY}`,
+  ].join(" ");
+
+  return (
+    <BaseEdge
+      id={id}
+      path={path}
+      markerEnd={markerEnd}
+      style={{
+        ...style,
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+      }}
+    />
+  );
+}
+
+interface BottomAnchoredFlowProps {
+  nodes: Node[];
+  edges: Edge[];
+  edgeTypes: Record<string, ComponentType<EdgeProps<Edge<TopologyEdgeData>>>>;
+  fitPadding?: number;
+  horizontalInsetLeft?: number;
+  horizontalInsetRight?: number;
+  topInset?: number;
+  bottomInset?: number;
+  fitVersion?: number;
+  framed?: boolean;
+  onNodeClick?: (_event: MouseEvent, node: Node) => void;
+  onNodeMouseEnter?: (_event: MouseEvent, node: Node) => void;
+  onNodeMouseLeave?: (_event: MouseEvent, node: Node) => void;
+}
+
+function BottomAnchoredFlow({
+  nodes,
+  edges,
+  edgeTypes,
+  fitPadding = EXPANDED_FIT_PADDING,
+  horizontalInsetLeft = 18,
+  horizontalInsetRight = 18,
+  topInset = 8,
+  bottomInset = 8,
+  fitVersion = 0,
+  framed = true,
+  onNodeClick,
+  onNodeMouseEnter,
+  onNodeMouseLeave,
+}: BottomAnchoredFlowProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const flowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
+  const viewportSignature = useMemo(
+    () =>
+      [
+        nodes
+          .map((node) => {
+            const height =
+              typeof node.style?.height === "number" || typeof node.style?.height === "string"
+                ? node.style.height
+                : "";
+            return `${node.id}:${node.position.x}:${node.position.y}:${height}`;
+          })
+          .join("|"),
+        edges.map((edge) => `${edge.id}:${edge.source}:${edge.target}`).join("|"),
+      ].join("::"),
+    [edges, nodes],
+  );
+
+  useEffect(() => {
+    if (!containerRef.current || !flowRef.current || nodes.length === 0) {
+      return;
+    }
+
+    const applyViewport = () => {
+      if (!containerRef.current || !flowRef.current) {
+        return;
+      }
+
+      const bounds = getNodesBounds(nodes);
+      const width = containerRef.current.clientWidth;
+      const height = containerRef.current.clientHeight;
+      if (width <= 0 || height <= 0) {
+        return;
+      }
+
+      const leftPadding = horizontalInsetLeft;
+      const rightPadding = horizontalInsetRight;
+      const topPadding = Math.max(topInset, Math.round(height * fitPadding * 0.2));
+      const bottomPadding = Math.max(bottomInset, Math.round(height * fitPadding * 0.2));
+      const availableWidth = Math.max(1, width - leftPadding - rightPadding);
+      const availableHeight = Math.max(1, height - topPadding - bottomPadding);
+      const widthZoom = availableWidth / Math.max(bounds.width, 1);
+      const heightZoom = availableHeight / Math.max(bounds.height, 1);
+      const zoom = Math.min(FLOW_MAX_ZOOM, Math.max(FLOW_MIN_ZOOM, Math.min(widthZoom, heightZoom)));
+      void flowRef.current.setViewport(
+        {
+          x: leftPadding - bounds.x * zoom,
+          y: topPadding - bounds.y * zoom,
+          zoom,
+        },
+        { duration: 0 },
+      );
+    };
+
+    void applyViewport();
+    const observer = new ResizeObserver(() => {
+      void applyViewport();
+    });
+    observer.observe(containerRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [fitPadding, fitVersion, horizontalInsetLeft, horizontalInsetRight, topInset, bottomInset, viewportSignature]);
+
+  return (
+    <div
+      ref={containerRef}
+      className={
+        framed
+          ? "min-h-0 h-full w-full overflow-hidden rounded-[8px] border border-border/70 bg-card"
+          : "min-h-0 h-full w-full overflow-hidden"
+      }
+    >
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        edgeTypes={edgeTypes}
+        proOptions={{ hideAttribution: true }}
+        onInit={(instance) => {
+          flowRef.current = instance;
+        }}
+        onNodeClick={onNodeClick}
+        onNodeMouseEnter={onNodeMouseEnter}
+        onNodeMouseLeave={onNodeMouseLeave}
+      >
+        <Background color="rgba(44,74,63,0.08)" gap={24} />
+      </ReactFlow>
+    </div>
+  );
+}
+
+export function TopologyGraph({
+  project,
+  task,
+  selectedAgentId,
+  onSelectAgent,
+  onSaveTopology,
+  compact = false,
+  showEdgeList = !compact,
+  runtimeSnapshots = {},
+}: TopologyGraphProps) {
+  const topology = project?.topology;
+  const [draft, setDraft] = useState<TopologyRecord | null>(topology ?? null);
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [hoveredAgentId, setHoveredAgentId] = useState<string | null>(null);
+  const [expandedOpen, setExpandedOpen] = useState(false);
+  const [mainFitVersion, setMainFitVersion] = useState(0);
+  const [expandedFitVersion, setExpandedFitVersion] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const mainViewportRef = useRef<HTMLDivElement | null>(null);
+  const expandedViewportRef = useRef<HTMLDivElement | null>(null);
+  const [mainViewportSize, setMainViewportSize] = useState({ width: 0, height: 0 });
+  const [expandedViewportSize, setExpandedViewportSize] = useState({ width: 0, height: 0 });
+  const edgeTypes = useMemo(
+    () => ({
+      curvedTopology: CurvedTopologyEdge,
+    }),
+    [],
+  );
+
+  useEffect(() => {
+    setDraft(topology ?? null);
+  }, [topology]);
+
+  useEffect(() => {
+    if (!mainViewportRef.current) {
+      return;
+    }
+
+    const element = mainViewportRef.current;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) {
+        return;
+      }
+      setMainViewportSize({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      });
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!expandedViewportRef.current || !expandedOpen) {
+      return;
+    }
+
+    const element = expandedViewportRef.current;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) {
+        return;
+      }
+      setExpandedViewportSize({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      });
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [expandedOpen]);
+
+  const taskStatuses = useMemo(
+    () => new Map(task?.agents.map((agent) => [agent.name, agent.status]) ?? []),
+    [task],
+  );
+  const agentRoles = useMemo(
+    () => new Map(project?.agentFiles.map((agent) => [agent.name, agent.role]) ?? []),
+    [project],
+  );
+  const defaultRootAgentId = useMemo(
+    () =>
+      resolveTopologyRootAgent(
+        project?.agentFiles.map((agent) => ({
+          name: agent.name,
+          mode: agent.mode,
+          role: agent.role,
+          relativePath: agent.relativePath,
+        })) ?? [],
+      ),
+    [project],
+  );
+  const autoLayout = useMemo(() => {
+    if (!draft) {
+      return {
+        layoutByNode: new Map(),
+        nodeCardWidth: MAIN_NODE_CARD_WIDTH,
+        nodeColumnHeight: MAIN_NODE_COLUMN_HEIGHT,
+      };
+    }
+    return computeNodeLayout(
+      {
+        ...draft,
+        rootAgentId: draft.rootAgentId ?? defaultRootAgentId,
+      },
+      agentRoles,
+      {
+        viewportWidth: mainViewportSize.width,
+        viewportHeight: mainViewportSize.height,
+        nodeCardWidth: MAIN_NODE_CARD_WIDTH,
+        nodeColumnHeight: MAIN_NODE_COLUMN_HEIGHT,
+        horizontalInsetLeft: MAIN_FLOW_LEFT_INSET,
+        horizontalInsetRight: MAIN_FLOW_RIGHT_INSET,
+        topInset: FLOW_TOP_INSET,
+        bottomInset: MAIN_FLOW_BOTTOM_INSET,
+        maxNodeCardWidth: MAIN_NODE_CARD_MAX_WIDTH,
+        minNodeCardWidth: MAIN_NODE_CARD_MIN_WIDTH,
+        minNodeGap: NODE_COLUMN_MIN_GAP,
+      },
+    );
+  }, [agentRoles, defaultRootAgentId, draft, mainViewportSize.height, mainViewportSize.width]);
+  const expandedAutoLayout = useMemo(() => {
+    if (!draft) {
+      return {
+        layoutByNode: new Map(),
+        nodeCardWidth: EXPANDED_NODE_CARD_WIDTH,
+        nodeColumnHeight: EXPANDED_NODE_COLUMN_HEIGHT,
+      };
+    }
+    return computeNodeLayout(
+      {
+        ...draft,
+        rootAgentId: draft.rootAgentId ?? defaultRootAgentId,
+      },
+      agentRoles,
+      {
+        viewportWidth: expandedViewportSize.width,
+        viewportHeight: expandedViewportSize.height,
+        nodeCardWidth: EXPANDED_NODE_CARD_WIDTH,
+        nodeColumnHeight: EXPANDED_NODE_COLUMN_HEIGHT,
+        horizontalInsetLeft: EXPANDED_FLOW_LEFT_INSET,
+        horizontalInsetRight: EXPANDED_FLOW_RIGHT_INSET,
+        topInset: FLOW_TOP_INSET,
+        bottomInset: EXPANDED_FLOW_BOTTOM_INSET,
+        maxNodeCardWidth: EXPANDED_NODE_CARD_MAX_WIDTH,
+        minNodeCardWidth: EXPANDED_NODE_CARD_MIN_WIDTH,
+        minNodeGap: NODE_COLUMN_MIN_GAP,
+      },
+    );
+  }, [agentRoles, defaultRootAgentId, draft, expandedViewportSize.height, expandedViewportSize.width]);
+  const agentHistories = useMemo(() => {
+    const taskMessages = task?.messages ?? [];
+    const histories = new Map<string, ReturnType<typeof getAgentHistoryFromMessages>>();
+
+    for (const node of draft?.nodes ?? []) {
+      histories.set(node.id, getAgentHistoryFromMessages(taskMessages, node.id));
+    }
+
+    return histories;
+  }, [draft, task?.messages]);
+  const highlightedOutgoingTargets = useMemo(() => {
+    if (!draft || !hoveredAgentId) {
+      return new Set<string>();
+    }
+
+    return new Set(
+      draft.edges
+        .filter((edge) => edge.source === hoveredAgentId && edge.target !== hoveredAgentId)
+        .map((edge) => edge.target),
+    );
+  }, [draft, hoveredAgentId]);
+
+  function buildNodes(
+    layoutByNode: Map<
+      string,
+      {
+        x: number;
+        y: number;
+        sourcePosition: Position;
+        targetPosition: Position;
+      }
+    >,
+    nodeColumnHeight: number,
+    nodeCardWidth: number,
+  ): Node[] {
+    if (!draft) {
+      return [];
+    }
+
+    return draft.nodes.map((node) => {
+      const agentState = taskStatuses.get(node.id) ?? "idle";
+      const active = node.id === selectedAgentId;
+      const hovered = node.id === hoveredAgentId;
+      const connectedFromHovered = highlightedOutgoingTargets.has(node.id);
+      const layout = layoutByNode.get(node.id) ?? {
+        x: NODE_START_X,
+        y: NODE_START_Y,
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+      };
+      const runtime = agentState === "running" ? runtimeSnapshots[node.id] : undefined;
+      const runtimeTooltip = buildRuntimeTooltip(runtime);
+      const runtimeHeadline = runtime?.headline ?? "运行中，等待实时消息...";
+      const toolNames = runtime?.activeToolNames ?? [];
+      const hasActiveTools = toolNames.length > 0;
+      const agentBlockHeight = getAgentBlockHeight(agentState);
+      const historyItems = agentHistories.get(node.id) ?? [];
+      const appearance = getAgentCardAppearance(agentState);
+      const visibleHistory =
+        runtime && agentState === "running"
+          ? [...getRuntimeHistoryItems(runtime, node.id), ...historyItems].slice(0, MAX_VISIBLE_HISTORY_ITEMS)
+          : historyItems;
+      const historyBottomOffset = agentBlockHeight + HISTORY_STACK_GAP;
+      const cardStyle = {
+        borderRadius: "0 0 8px 8px",
+        border:
+          active || hovered || connectedFromHovered
+            ? "2px solid #3E8F63"
+            : `1px solid ${appearance.borderColor}`,
+        background: appearance.background,
+        color: appearance.color,
+        boxShadow:
+          hovered || connectedFromHovered
+            ? "0 0 0 3px rgba(62,143,99,0.16), 0 18px 38px rgba(62,143,99,0.16)"
+            : active
+              ? "0 20px 40px rgba(44,74,63,0.14)"
+              : appearance.shadow,
+      } as const;
+
+      return {
+        id: node.id,
+        position: { x: layout.x, y: layout.y },
+        sourcePosition: layout.sourcePosition,
+        targetPosition: layout.targetPosition,
+        width: nodeCardWidth,
+        height: nodeColumnHeight,
+        data: {
+          label: (
+            <div className="relative h-full w-full" title={runtimeTooltip}>
+              <div
+                className="absolute inset-x-0 top-0"
+                style={{
+                  bottom: historyBottomOffset,
+                }}
+              >
+                {visibleHistory.length > 0 ? (
+                  <div
+                    className="flex h-full flex-col rounded-t-[12px] rounded-b-none border border-border/70 border-b-0 bg-card/55 px-3 py-2 text-left text-foreground shadow-sm"
+                  >
+                    <div className="overflow-hidden">
+                      {visibleHistory.map((item) => (
+                        <div
+                          key={item.id}
+                          className={`rounded-[8px] border px-3 py-1.5 text-left text-[11px] leading-4 ${item.className}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold">{item.label}</span>
+                            {item.timestamp ? <span className="opacity-70">{item.timestamp}</span> : null}
+                          </div>
+                          <p className="mt-1 line-clamp-3 whitespace-pre-wrap break-all opacity-90">
+                            {item.detail}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className="flex h-full flex-col rounded-t-[12px] rounded-b-none border border-border/70 border-b-0 bg-card/55 px-4 py-3 text-left text-[14px] font-medium text-muted-foreground shadow-sm"
+                  >
+                    待启动
+                  </div>
+                )}
+              </div>
+
+              <div
+                className={`absolute inset-x-0 bottom-0 flex flex-col px-2.5 text-center ${agentState === "running" ? "justify-start py-3" : "justify-center py-0.5"}`}
+                style={{
+                  ...cardStyle,
+                  minHeight: agentBlockHeight,
+                  maxHeight: agentBlockHeight,
+                }}
+              >
+                <p
+                  className="mx-auto max-w-full break-all text-balance font-semibold"
+                  style={getAgentNameStyle(getAgentDisplayName(node.label), nodeCardWidth)}
+                >
+                  {getAgentDisplayName(node.label)}
+                </p>
+                {agentState === "running" ? (
+                  <div className="mt-3 rounded-[8px] border border-white/35 bg-white/14 px-3 py-2 text-left shadow-sm backdrop-blur-sm">
+                    {hasActiveTools ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {toolNames.slice(0, 2).map((toolName) => (
+                          <span
+                            key={toolName}
+                            className="rounded-[6px] border border-white/35 bg-white/18 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.05em] text-white"
+                          >
+                            {`tool: ${toolName}`}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    <p className={`${hasActiveTools ? "mt-2" : ""} truncate text-[11px] leading-4 text-white/92`}>
+                      {runtimeHeadline}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ),
+        },
+        style: {
+          background: "transparent",
+          border: "none",
+          boxShadow: "none",
+          padding: 0,
+          width: nodeCardWidth,
+          height: nodeColumnHeight,
+        },
+      };
+    });
+  }
+
+  const nodes = useMemo(
+    () => buildNodes(autoLayout.layoutByNode, autoLayout.nodeColumnHeight, autoLayout.nodeCardWidth),
+    [agentHistories, autoLayout, draft, highlightedOutgoingTargets, hoveredAgentId, runtimeSnapshots, selectedAgentId, taskStatuses],
+  );
+  const expandedNodes = useMemo(
+    () =>
+      buildNodes(
+        expandedAutoLayout.layoutByNode,
+        expandedAutoLayout.nodeColumnHeight,
+        expandedAutoLayout.nodeCardWidth,
+      ),
+    [agentHistories, draft, expandedAutoLayout, highlightedOutgoingTargets, hoveredAgentId, runtimeSnapshots, selectedAgentId, taskStatuses],
+  );
+
+  const edges = useMemo<Edge[]>(() => {
+    const nodeOrder = new Map(
+      draft?.nodes
+        .map((node) => node.id)
+        .sort((left, right) => {
+          const leftX = autoLayout.layoutByNode.get(left)?.x ?? 0;
+          const rightX = autoLayout.layoutByNode.get(right)?.x ?? 0;
+          return leftX - rightX;
+        })
+        .map((nodeId, index) => [nodeId, index]) ?? [],
+    );
+    const orderedEdges = [...(draft?.edges ?? [])].sort((left, right) => {
+      const leftSourceOrder = nodeOrder.get(left.source) ?? 0;
+      const rightSourceOrder = nodeOrder.get(right.source) ?? 0;
+      if (leftSourceOrder !== rightSourceOrder) {
+        return leftSourceOrder - rightSourceOrder;
+      }
+      const leftTargetOrder = nodeOrder.get(left.target) ?? 0;
+      const rightTargetOrder = nodeOrder.get(right.target) ?? 0;
+      if (leftTargetOrder !== rightTargetOrder) {
+        return leftTargetOrder - rightTargetOrder;
+      }
+      return left.id.localeCompare(right.id);
+    });
+
+    return orderedEdges.map((edge, index) => ({
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: "curvedTopology",
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color:
+          hoveredAgentId &&
+          edge.source === hoveredAgentId &&
+          edge.target !== hoveredAgentId
+            ? "#3E8F63"
+            : edge.triggerOn === "manual"
+              ? "#C96F3B"
+              : "#2C4A3F",
+      },
+      style: {
+        stroke:
+          hoveredAgentId &&
+          edge.source === hoveredAgentId &&
+          edge.target !== hoveredAgentId
+            ? "#3E8F63"
+            : edge.triggerOn === "manual"
+              ? "#C96F3B"
+              : "#2C4A3F",
+        strokeWidth:
+          hoveredAgentId &&
+          edge.source === hoveredAgentId &&
+          edge.target !== hoveredAgentId
+            ? 3
+            : edge.triggerOn === "manual"
+              ? 2.1
+              : 2,
+        strokeDasharray:
+          hoveredAgentId &&
+          edge.source === hoveredAgentId &&
+          edge.target !== hoveredAgentId
+            ? undefined
+            : edge.triggerOn === "manual"
+              ? "7 6"
+              : undefined,
+      },
+      zIndex:
+        hoveredAgentId &&
+        edge.source === hoveredAgentId &&
+        edge.target !== hoveredAgentId
+          ? 3
+          : edge.triggerOn === "manual"
+            ? 2
+            : 1,
+      animated:
+        hoveredAgentId &&
+        edge.source === hoveredAgentId &&
+        edge.target !== hoveredAgentId
+          ? true
+          : edge.triggerOn === "manual",
+      interactionWidth: 24,
+      sourceHandle: null,
+      targetHandle: null,
+      data: {
+        edgeKind: edge.triggerOn,
+        laneIndex: index % 4,
+        span: Math.max(
+          1,
+          Math.abs((nodeOrder.get(edge.target) ?? 0) - (nodeOrder.get(edge.source) ?? 0)),
+        ),
+        horizontalPhase: (index % 3) - 1,
+        sourceBlockHeight: getAgentBlockHeight(taskStatuses.get(edge.source) ?? "idle"),
+        targetBlockHeight: getAgentBlockHeight(taskStatuses.get(edge.target) ?? "idle"),
+      },
+    }));
+  }, [autoLayout, draft, hoveredAgentId, taskStatuses]);
+
+  const editingAgent = project?.agentFiles.find((agent) => agent.name === editingAgentId);
+  const downstreamNames = useMemo(() => {
+    if (!draft || !editingAgentId) {
+      return new Set<string>();
+    }
+    return new Set(
+      draft.edges.filter((edge) => edge.source === editingAgentId).map((edge) => edge.target),
+    );
+  }, [draft, editingAgentId]);
+
+  async function saveDraft(next: TopologyRecord) {
+    if (!project) {
+      return;
+    }
+    setDraft(next);
+    setSaving(true);
+    try {
+      await onSaveTopology(next);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleDownstream(target: string, checked: boolean) {
+    if (!draft || !editingAgentId) {
+      return;
+    }
+
+    const retained = draft.edges.filter(
+      (edge) => !(edge.source === editingAgentId && edge.target === target),
+    );
+    const nextEdges = checked
+      ? [
+          ...retained,
+          {
+            id: createEdgeId(editingAgentId, target, "success"),
+            source: editingAgentId,
+            target,
+            triggerOn: "success" as const,
+          },
+        ]
+      : retained;
+
+    await saveDraft({
+      ...draft,
+      edges: nextEdges,
+    });
+  }
+
+  async function toggleRootAgent(agentId: string, checked: boolean) {
+    if (!draft) {
+      return;
+    }
+
+    await saveDraft({
+      ...draft,
+      rootAgentId: checked ? agentId : defaultRootAgentId,
+    });
+  }
+
+  return (
+    <section className="PANEL-surface flex h-full min-h-0 flex-col overflow-hidden rounded-[10px] p-4">
+      <div className="mb-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="font-display text-[1.45rem] font-bold text-primary">拓扑图</p>
+            <p className="text-xs text-muted-foreground">
+              {compact
+                ? "右上角显示拓扑图预览，点击整块区域即可放大查看和编辑。"
+                : "当前展示的是当前 Project 的生效拓扑图；运行中的 Agent 会在节点内显示实时工具和消息摘要，点击节点即可编辑下游关系。"}
+            </p>
+          </div>
+          {!compact && draft ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-[8px] border border-border bg-card px-4 py-2 text-sm text-foreground transition hover:border-primary"
+                onClick={() => {
+                  setMainFitVersion((current) => current + 1);
+                }}
+              >
+                自动适配
+              </button>
+              <button
+                type="button"
+                className="rounded-[8px] border border-border bg-card px-4 py-2 text-sm text-foreground transition hover:border-primary"
+                onClick={() => {
+                  setExpandedOpen(true);
+                }}
+              >
+                放大查看
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div
+        className={
+          compact || !showEdgeList
+            ? "min-h-0 flex-1"
+            : "grid min-h-0 flex-1 grid-rows-[320px_minmax(0,1fr)] gap-4"
+        }
+      >
+        {compact ? (
+          <button
+            type="button"
+            onClick={() => setExpandedOpen(true)}
+            className="group relative block h-full min-h-0 w-full overflow-hidden rounded-[8px] border border-border/70 bg-card text-left"
+          >
+            <div className="pointer-events-none h-full w-full">
+              <BottomAnchoredFlow
+                nodes={nodes}
+                edges={edges}
+                edgeTypes={edgeTypes}
+                fitPadding={PREVIEW_FIT_PADDING}
+                horizontalInsetLeft={MAIN_FLOW_LEFT_INSET}
+                horizontalInsetRight={MAIN_FLOW_RIGHT_INSET}
+                topInset={FLOW_TOP_INSET}
+                bottomInset={MAIN_FLOW_BOTTOM_INSET}
+                framed={false}
+              />
+            </div>
+            <div className="pointer-events-none absolute right-3 top-3">
+              <span className="rounded-[6px] bg-white/90 px-3 py-1 text-[11px] text-foreground/75 shadow-sm transition group-hover:bg-primary group-hover:text-primary-foreground">
+                点击放大
+              </span>
+            </div>
+          </button>
+        ) : (
+          <div ref={mainViewportRef} className="min-h-0 h-full">
+            <BottomAnchoredFlow
+              nodes={nodes}
+              edges={edges}
+              edgeTypes={edgeTypes}
+              fitPadding={MAIN_FIT_PADDING}
+              horizontalInsetLeft={MAIN_FLOW_LEFT_INSET}
+              horizontalInsetRight={MAIN_FLOW_RIGHT_INSET}
+              topInset={FLOW_TOP_INSET}
+              bottomInset={MAIN_FLOW_BOTTOM_INSET}
+              fitVersion={mainFitVersion}
+              onNodeClick={(_event, node) => {
+                onSelectAgent(node.id);
+                setEditingAgentId(node.id);
+              }}
+              onNodeMouseEnter={(_event, node) => {
+                setHoveredAgentId(node.id);
+              }}
+              onNodeMouseLeave={() => {
+                setHoveredAgentId(null);
+              }}
+            />
+          </div>
+        )}
+
+        {compact || !showEdgeList ? null : (
+          <div className="min-h-0 rounded-[8px] border border-border/70 bg-card/80 p-4">
+            <div className="mb-3">
+              <p className="font-semibold text-primary">触发关系</p>
+            </div>
+            <div className="max-h-full space-y-2 overflow-y-auto">
+              {(draft?.edges ?? []).map((edge) => (
+                <button
+                  key={edge.id}
+                  type="button"
+                  onClick={() => {
+                    onSelectAgent(edge.source);
+                    setEditingAgentId(edge.source);
+                  }}
+                  className="flex w-full items-center justify-between gap-3 rounded-[8px] border border-border/60 bg-white/70 px-3 py-2 text-left text-sm transition hover:border-primary"
+                >
+                  <span className="truncate">
+                    {getAgentDisplayName(edge.source)} {"->"} {getAgentDisplayName(edge.target)}
+                  </span>
+                  <span className="rounded-[6px] bg-muted px-2.5 py-1 text-[11px]">
+                    {edge.triggerOn}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <Dialog.Root open={expandedOpen} onOpenChange={setExpandedOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/25" />
+          <Dialog.Content className="PANEL-surface fixed left-1/2 top-1/2 h-[96vh] w-[98.5vw] -translate-x-1/2 -translate-y-1/2 rounded-[10px] p-6">
+            <div className="flex h-full min-h-0 flex-col">
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <Dialog.Title className="font-display text-2xl font-bold text-primary">
+                    拓扑图
+                  </Dialog.Title>
+                  <Dialog.Description className="mt-1 text-sm text-muted-foreground">
+                    这里是放大版拓扑图。运行中的 Agent 会在节点内显示实时工具调用和消息摘要。
+                  </Dialog.Description>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-[8px] border border-border bg-card px-4 py-2 text-sm text-foreground transition hover:border-primary"
+                    onClick={() => {
+                      setExpandedFitVersion((current) => current + 1);
+                    }}
+                  >
+                    自动适配
+                  </button>
+                  <Dialog.Close asChild>
+                    <button
+                      type="button"
+                      className="rounded-[8px] border border-border bg-card px-4 py-2 text-sm text-foreground transition hover:border-primary"
+                    >
+                      关闭
+                    </button>
+                  </Dialog.Close>
+                </div>
+              </div>
+
+              <div ref={expandedViewportRef} className="min-h-0 flex-1">
+                <BottomAnchoredFlow
+                  nodes={expandedNodes}
+                  edges={edges}
+                  edgeTypes={edgeTypes}
+                  fitPadding={EXPANDED_FIT_PADDING}
+                  horizontalInsetLeft={EXPANDED_FLOW_LEFT_INSET}
+                  horizontalInsetRight={EXPANDED_FLOW_RIGHT_INSET}
+                  topInset={FLOW_TOP_INSET}
+                  bottomInset={EXPANDED_FLOW_BOTTOM_INSET}
+                  fitVersion={expandedFitVersion}
+                  onNodeClick={(_event, node) => {
+                    onSelectAgent(node.id);
+                    setEditingAgentId(node.id);
+                  }}
+                  onNodeMouseEnter={(_event, node) => {
+                    setHoveredAgentId(node.id);
+                  }}
+                  onNodeMouseLeave={() => {
+                    setHoveredAgentId(null);
+                  }}
+                />
+              </div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={!!editingAgentId} onOpenChange={(open) => !open && setEditingAgentId(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/25" />
+          <Dialog.Content className="PANEL-surface fixed left-1/2 top-1/2 w-[min(640px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-[10px] p-6">
+            <Dialog.Title className="font-display text-2xl font-bold text-primary">
+              {editingAgentId ? getAgentDisplayName(editingAgentId) : "Agent"} 下游配置
+            </Dialog.Title>
+            <Dialog.Description className="mt-1 text-sm text-muted-foreground">
+              这里编辑的是 Project 级拓扑关系，不是 Agent 原始配置文件。
+            </Dialog.Description>
+
+            <div className="mt-5 rounded-[8px] border border-border bg-card/70 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold text-primary">
+                  {getAgentDisplayName(editingAgent?.name ?? editingAgentId ?? "Agent")}
+                </p>
+                {editingAgent ? (
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold tracking-[0.06em] ${
+                      getAgentKindMeta(isBuiltinAgentPath(editingAgent.relativePath)).badgeClassName
+                    }`}
+                  >
+                    {getAgentKindMeta(isBuiltinAgentPath(editingAgent.relativePath)).label}
+                  </span>
+                ) : null}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{editingAgent?.mode ?? "未读取到模式信息"}</p>
+              <label className="mt-3 flex items-center justify-between rounded-[8px] border border-border/70 bg-[#fff8f0] px-3 py-2">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">设为最左起点</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    勾选后，这个 Agent 会固定作为拓扑图最左侧起点，其余节点按累计上游依赖层级向右排列。
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={(draft?.rootAgentId ?? defaultRootAgentId) === editingAgentId}
+                  onChange={(event) => {
+                    if (!editingAgentId) {
+                      return;
+                    }
+                    void toggleRootAgent(editingAgentId, event.target.checked);
+                  }}
+                  className="h-4 w-4 accent-[#2C4A3F]"
+                />
+              </label>
+            </div>
+
+            <div className="mt-5 space-y-2">
+              {project?.agentFiles
+                .filter((agent) => agent.name !== editingAgentId)
+                .map((agent) => {
+                  const checked = downstreamNames.has(agent.name);
+                  const kindMeta = getAgentKindMeta(isBuiltinAgentPath(agent.relativePath));
+                  return (
+                    <label
+                      key={agent.name}
+                      className={`flex cursor-pointer items-center justify-between rounded-[8px] border px-4 py-3 ${kindMeta.panelClassName}`}
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold text-foreground">
+                            {getAgentDisplayName(agent.name)}
+                          </p>
+                          <span
+                            className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold tracking-[0.06em] ${kindMeta.badgeClassName}`}
+                          >
+                            {kindMeta.label}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">{agent.mode}</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) => {
+                          void toggleDownstream(agent.name, event.target.checked);
+                        }}
+                        className="h-4 w-4 accent-[#2C4A3F]"
+                      />
+                    </label>
+                  );
+                })}
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <Dialog.Close asChild>
+                <button type="button" className="rounded-[8px] border border-border px-4 py-2 text-sm">
+                  关闭
+                </button>
+              </Dialog.Close>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </section>
+  );
+}

@@ -1,0 +1,706 @@
+import fs from "node:fs";
+import path from "node:path";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
+import type { TaskPanelRecord } from "@shared/types";
+
+const execFileAsync = promisify(execFile);
+
+interface ZellijPaneInfo {
+  id: string;
+  title: string;
+  isPlugin: boolean;
+  exited: boolean;
+  isFloating: boolean;
+  x: number;
+  y: number;
+  rows: number;
+  columns: number;
+}
+
+interface AgentPaneSpec {
+  name: string;
+  opencodeSessionId: string | null;
+  status?: "idle" | "running" | "success" | "failed" | "needs_revision";
+}
+
+const HIDDEN_PANEL_AGENTS = new Set<string>();
+
+export class ZellijManager {
+  async createTaskSession(projectId: string, taskId: string): Promise<string> {
+    const sessionName = `oap-${projectId.slice(0, 6)}-${taskId.slice(0, 6)}`;
+
+    if (!(await this.hasZellij())) {
+      return sessionName;
+    }
+
+    try {
+      await execFileAsync("zellij", ["attach", "--create-background", sessionName], {
+        timeout: 4000,
+      });
+    } catch {
+      return sessionName;
+    }
+
+    return sessionName;
+  }
+
+  async openTaskSession(sessionName: string, _cwd: string): Promise<void> {
+    if (process.platform === "darwin") {
+      spawn("open", ["-na", "Terminal", "--args", "zellij", "attach", sessionName, "--create"], {
+        detached: true,
+        stdio: "ignore",
+      }).unref();
+      return;
+    }
+
+    if (process.platform === "linux") {
+      spawn("x-terminal-emulator", ["-e", "zellij", "attach", sessionName, "--create"], {
+        detached: true,
+        stdio: "ignore",
+      }).unref();
+    }
+  }
+
+  async deleteTaskSession(sessionName: string | null | undefined): Promise<void> {
+    if (!sessionName || !(await this.hasZellij())) {
+      return;
+    }
+
+    await execFileAsync("zellij", ["kill-session", sessionName]).catch(async () => {
+      await execFileAsync("zellij", ["delete-session", sessionName]).catch(() => undefined);
+    });
+  }
+
+  async listSessionNames(): Promise<Set<string> | null> {
+    if (!(await this.hasZellij())) {
+      return null;
+    }
+
+    try {
+      const { stdout } = await execFileAsync("zellij", ["list-sessions", "--no-formatting"], {
+        timeout: 2000,
+      });
+      return new Set(this.extractActiveSessionNames(stdout));
+    } catch (error) {
+      if (this.isEmptySessionListError(error)) {
+        return new Set();
+      }
+      return null;
+    }
+  }
+
+  createPanelBindings(options: {
+    projectId: string;
+    taskId: string;
+    sessionName: string;
+    cwd: string;
+    agents: AgentPaneSpec[];
+  }): TaskPanelRecord[] {
+    return this.sortVisibleAgents(options.agents).map((agent, index) => ({
+      id: `${options.taskId}:${agent.name}`,
+      taskId: options.taskId,
+      projectId: options.projectId,
+      sessionName: options.sessionName,
+      paneId: `pane-${index + 1}`,
+      agentName: agent.name,
+      cwd: options.cwd,
+    }));
+  }
+
+  async materializePanelBindings(options: {
+    projectId: string;
+    taskId: string;
+    sessionName: string;
+    cwd: string;
+    agents: AgentPaneSpec[];
+  }): Promise<TaskPanelRecord[]> {
+    if (!(await this.hasZellij())) {
+      return this.createPanelBindings(options);
+    }
+
+    const visibleAgents = this.sortVisibleAgents(options.agents);
+    const panes = await this.listTerminalPanes(options.sessionName);
+    const agentNames = visibleAgents.map((agent) => agent.name);
+    const hadManagedPanes = panes.some((pane) => agentNames.includes(pane.title));
+    const unassigned = panes.filter((pane) => !agentNames.includes(pane.title));
+    const records: TaskPanelRecord[] = [];
+
+    let refreshedPanes = await this.listTerminalPanes(options.sessionName);
+    if (!hadManagedPanes && visibleAgents.length > 0) {
+      const applied = await this.applyAgentGridLayout(
+        options.sessionName,
+        options.cwd,
+        visibleAgents,
+      ).catch(() => false);
+      if (applied) {
+        refreshedPanes = await this.listTerminalPanes(options.sessionName);
+      } else {
+        const orderedForCreation = this.getLayoutCreationOrder(visibleAgents);
+        for (const agent of orderedForCreation) {
+          const agentName = agent.name;
+          let pane = refreshedPanes.find((item) => item.title === agentName && !item.exited);
+          if (!pane) {
+            const stalePane = refreshedPanes.find((item) => item.title === agentName && item.exited);
+            if (stalePane) {
+              await this.closePane(options.sessionName, stalePane.id).catch(() => undefined);
+            }
+            const paneId = await this.runAgentPane(
+              options.sessionName,
+              options.cwd,
+              agentName,
+              agent.opencodeSessionId,
+            );
+            pane = {
+              id: paneId,
+              title: agentName,
+              isPlugin: false,
+              exited: false,
+              isFloating: false,
+            };
+            refreshedPanes = [...refreshedPanes.filter((item) => item.id !== paneId), pane];
+          }
+        }
+      }
+    } else {
+      for (const agent of visibleAgents) {
+        const agentName = agent.name;
+        let pane = refreshedPanes.find((item) => item.title === agentName && !item.exited);
+        if (!pane) {
+          const stalePane = refreshedPanes.find((item) => item.title === agentName && item.exited);
+          if (stalePane) {
+            await this.closePane(options.sessionName, stalePane.id).catch(() => undefined);
+          }
+          const paneId = await this.runAgentPane(
+            options.sessionName,
+            options.cwd,
+            agentName,
+            agent.opencodeSessionId,
+          );
+          pane = {
+            id: paneId,
+            title: agentName,
+            isPlugin: false,
+            exited: false,
+            isFloating: false,
+          };
+          refreshedPanes = [...refreshedPanes.filter((item) => item.id !== paneId), pane];
+        }
+      }
+    }
+
+    for (const agent of visibleAgents) {
+      const pane = refreshedPanes.find((item) => item.title === agent.name && !item.exited);
+      if (!pane) {
+        continue;
+      }
+      records.push({
+        id: `${options.taskId}:${agent.name}`,
+        taskId: options.taskId,
+        projectId: options.projectId,
+        sessionName: options.sessionName,
+        paneId: pane.id,
+        agentName: agent.name,
+        cwd: options.cwd,
+      });
+    }
+
+    if (!hadManagedPanes) {
+      for (const pane of refreshedPanes.filter((item) => !item.exited && !agentNames.includes(item.title))) {
+        await this.closePane(options.sessionName, pane.id).catch(() => undefined);
+      }
+    }
+
+    return records;
+  }
+
+  async dispatchTaskToPane(panel: TaskPanelRecord, content: string): Promise<void> {
+    if (!(await this.hasZellij())) {
+      return;
+    }
+
+    await execFileAsync("zellij", [
+      "-s",
+      panel.sessionName,
+      "action",
+      "write-chars",
+      "-p",
+      panel.paneId,
+      content,
+    ]).catch(() => undefined);
+    await execFileAsync("zellij", [
+      "-s",
+      panel.sessionName,
+      "action",
+      "send-keys",
+      "-p",
+      panel.paneId,
+      "Enter",
+    ]).catch(() => undefined);
+  }
+
+  async focusAgentPANEL(panel: TaskPanelRecord): Promise<void> {
+    if (!(await this.hasZellij())) {
+      return;
+    }
+
+    await execFileAsync("zellij", [
+      "-s",
+      panel.sessionName,
+      "action",
+      "focus-pane-id",
+      panel.paneId,
+    ]).catch(() => undefined);
+
+    if (process.platform === "darwin") {
+      spawn("open", ["-na", "Terminal", "--args", "zellij", "attach", panel.sessionName], {
+        detached: true,
+        stdio: "ignore",
+      }).unref();
+    }
+  }
+
+  async syncRunningAgentLayout(
+    panels: TaskPanelRecord[],
+    runningAgentNames: string[],
+  ): Promise<void> {
+    if (!(await this.hasZellij())) {
+      return;
+    }
+    if (panels.length === 0) {
+      return;
+    }
+
+    const sessionName = panels[0].sessionName;
+    const managedAgentNames = new Set(panels.map((panel) => panel.agentName));
+
+    let paneInfos = await this.listTerminalPanes(sessionName);
+    let resetFloating = false;
+    for (const pane of paneInfos) {
+      if (pane.exited || !pane.isFloating || !managedAgentNames.has(pane.title)) {
+        continue;
+      }
+      await this.toggleFloating(sessionName, pane.id).catch(() => undefined);
+      resetFloating = true;
+    }
+    if (resetFloating) {
+      paneInfos = await this.listTerminalPanes(sessionName);
+    }
+
+    const runningOrder = runningAgentNames.filter((agentName) => managedAgentNames.has(agentName));
+    if (runningOrder.length === 0) {
+      return;
+    }
+
+    const tiledManagedPanes = paneInfos.filter(
+      (pane) => !pane.exited && !pane.isFloating && managedAgentNames.has(pane.title),
+    );
+    if (tiledManagedPanes.length <= 1) {
+      return;
+    }
+
+    const primaryRunningPane = tiledManagedPanes.find((pane) => pane.title === runningOrder[0]);
+    if (primaryRunningPane) {
+      await this.movePane(sessionName, primaryRunningPane.id, "left").catch(() => undefined);
+    }
+
+    if (runningOrder.length <= 1) {
+      return;
+    }
+
+    for (const [offset, agentName] of runningOrder.slice(1).entries()) {
+      let currentPanes = await this.listTerminalPanes(sessionName);
+      let tiledPanes = currentPanes.filter(
+        (pane) => !pane.exited && !pane.isFloating && managedAgentNames.has(pane.title),
+      );
+      const leadingPane = this.getLeadingPane(tiledPanes);
+      const rightStack = this.getRightStackPanes(tiledPanes, leadingPane?.id ?? null);
+      let currentIndex = rightStack.findIndex((pane) => pane.title === agentName);
+      const desiredIndex = offset;
+
+      while (currentIndex > desiredIndex) {
+        const targetPane = rightStack[currentIndex];
+        await this.movePane(sessionName, targetPane.id, "up").catch(() => undefined);
+        currentPanes = await this.listTerminalPanes(sessionName);
+        tiledPanes = currentPanes.filter(
+          (pane) => !pane.exited && !pane.isFloating && managedAgentNames.has(pane.title),
+        );
+        const refreshedLeadingPane = this.getLeadingPane(tiledPanes);
+        const refreshedRightStack = this.getRightStackPanes(tiledPanes, refreshedLeadingPane?.id ?? null);
+        currentIndex = refreshedRightStack.findIndex((pane) => pane.title === agentName);
+      }
+    }
+  }
+
+  private async hasZellij(): Promise<boolean> {
+    try {
+      await execFileAsync("zellij", ["--version"], {
+        timeout: 2000,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private isEmptySessionListError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    const execError = error as Error & {
+      stdout?: string;
+      stderr?: string;
+      code?: number | string;
+    };
+    const combined = [execError.stdout, execError.stderr, execError.message]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .join("\n")
+      .toLowerCase();
+
+    return (
+      combined.includes("no active zellij sessions") ||
+      combined.includes("no zellij sessions") ||
+      combined.includes("no sessions") ||
+      (execError.code === 1 && combined.length === 0)
+    );
+  }
+
+  private extractActiveSessionNames(output: string): string[] {
+    return output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .filter((line) => !line.toLowerCase().includes("(exited"))
+      .map((line) => line.split(/\s+/, 1)[0] ?? "")
+      .filter(Boolean);
+  }
+
+  private async listTerminalPanes(sessionName: string): Promise<ZellijPaneInfo[]> {
+    const { stdout } = await execFileAsync("zellij", [
+      "-s",
+      sessionName,
+      "action",
+      "list-panes",
+      "-j",
+      "-a",
+      "-g",
+      "-s",
+      "-t",
+    ]);
+    const parsed = JSON.parse(stdout) as Array<Record<string, unknown>>;
+    return parsed
+      .filter((pane) => !pane.is_plugin)
+      .map((pane) => ({
+        id: `terminal_${pane.id}`,
+        title: typeof pane.title === "string" ? pane.title : `terminal_${pane.id}`,
+        isPlugin: false,
+        exited: Boolean(pane.exited),
+        isFloating: Boolean(pane.is_floating),
+        x: typeof pane.pane_x === "number" ? pane.pane_x : 0,
+        y: typeof pane.pane_y === "number" ? pane.pane_y : 0,
+        rows: typeof pane.pane_rows === "number" ? pane.pane_rows : 0,
+        columns: typeof pane.pane_columns === "number" ? pane.pane_columns : 0,
+      }));
+  }
+
+  private sortVisibleAgents(agents: AgentPaneSpec[]): AgentPaneSpec[] {
+    return agents
+      .filter((agent) => !HIDDEN_PANEL_AGENTS.has(this.normalizeAgentName(agent.name)))
+      .sort((left, right) => this.compareAgentPriority(left, right));
+  }
+
+  private compareAgentPriority(left: AgentPaneSpec, right: AgentPaneSpec): number {
+    const leftRunningBoost = left.status === "running" ? -1 : 0;
+    const rightRunningBoost = right.status === "running" ? -1 : 0;
+    if (leftRunningBoost !== rightRunningBoost) {
+      return leftRunningBoost - rightRunningBoost;
+    }
+
+    return left.name.localeCompare(right.name);
+  }
+
+  private async closePane(sessionName: string, paneId: string): Promise<void> {
+    await execFileAsync("zellij", [
+      "-s",
+      sessionName,
+      "action",
+      "close-pane",
+      "-p",
+      paneId,
+    ]);
+  }
+
+  private async toggleFloating(sessionName: string, paneId: string): Promise<void> {
+    await execFileAsync("zellij", [
+      "-s",
+      sessionName,
+      "action",
+      "toggle-pane-embed-or-floating",
+      "-p",
+      paneId,
+    ]);
+  }
+
+  private async movePane(
+    sessionName: string,
+    paneId: string,
+    direction: "left" | "up" | "right" | "down",
+  ): Promise<void> {
+    await execFileAsync("zellij", [
+      "-s",
+      sessionName,
+      "action",
+      "move-pane",
+      direction,
+      "-p",
+      paneId,
+    ]);
+  }
+
+  private getLeadingPane(panes: ZellijPaneInfo[]): ZellijPaneInfo | null {
+    if (panes.length === 0) {
+      return null;
+    }
+    return panes
+      .slice()
+      .sort((left, right) => left.x - right.x || right.rows - left.rows || left.y - right.y)[0];
+  }
+
+  private getRightStackPanes(panes: ZellijPaneInfo[], leadingPaneId: string | null): ZellijPaneInfo[] {
+    return panes
+      .filter((pane) => pane.id !== leadingPaneId)
+      .sort((left, right) => left.y - right.y || left.x - right.x || left.title.localeCompare(right.title));
+  }
+
+  private async runAgentPane(
+    sessionName: string,
+    cwd: string,
+    agentName: string,
+    opencodeSessionId: string | null,
+  ): Promise<string> {
+    const shellCommand = this.buildOpencodeShellCommand(
+      sessionName,
+      cwd,
+      agentName,
+      opencodeSessionId,
+    );
+    const { stdout } = await execFileAsync("zellij", [
+      "-s",
+      sessionName,
+      "run",
+      "--name",
+      agentName,
+      "--cwd",
+      cwd,
+      "--",
+      "/bin/sh",
+      "-c",
+      shellCommand,
+    ]);
+    return stdout.trim() || `terminal_${agentName}`;
+  }
+
+  private buildOpencodeShellCommand(
+    sessionName: string,
+    cwd: string,
+    agentName: string,
+    opencodeSessionId: string | null,
+  ): string {
+    const escapedCwd = cwd.replace(/'/g, "'\\''");
+    const escapedAgentName = agentName.replace(/'/g, "'\\''");
+    const escapedSessionId = opencodeSessionId?.replace(/'/g, "'\\''");
+    const runtimeDir = this.ensurePaneRuntimeDir(cwd, sessionName, agentName);
+    const escapedRuntimeDir = runtimeDir.replace(/'/g, "'\\''");
+    const dbPath = path.join(runtimeDir, "opencode-pane.db");
+    const escapedDbPath = dbPath.replace(/'/g, "'\\''");
+
+    if (escapedSessionId) {
+      return [
+        `mkdir -p '${escapedRuntimeDir}'`,
+        "&&",
+        `cd '${escapedCwd}'`,
+        "&&",
+        `export OPENCODE_CONFIG_DIR='${escapedRuntimeDir}'`,
+        `OPENCODE_DB='${escapedDbPath}'`,
+        "OPENCODE_CLIENT='agentflow-zellij'",
+        "&&",
+        "exec opencode attach 'http://127.0.0.1:4096'",
+        `--session '${escapedSessionId}'`,
+        `--dir '${escapedCwd}'`,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
+
+    return [
+      `mkdir -p '${escapedRuntimeDir}'`,
+      "&&",
+      `cd '${escapedCwd}'`,
+      "&&",
+      `export OPENCODE_CONFIG_DIR='${escapedRuntimeDir}'`,
+      `OPENCODE_DB='${escapedDbPath}'`,
+      "OPENCODE_CLIENT='agentflow-zellij'",
+      "&&",
+      "exec opencode .",
+      `--agent '${escapedAgentName}'`,
+      escapedSessionId ? `--session '${escapedSessionId}'` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  private ensurePaneRuntimeDir(cwd: string, sessionName: string, agentName: string): string {
+    const runtimeDir = path.join(
+      cwd,
+      ".agentflow",
+      "opencode-pane-runtime",
+      this.sanitizePathSegment(sessionName),
+      this.sanitizePathSegment(agentName),
+    );
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    return runtimeDir;
+  }
+
+  private sanitizePathSegment(value: string): string {
+    return value.replace(/[^a-zA-Z0-9._-]/g, "_");
+  }
+
+  private normalizeAgentName(value: string): string {
+    return value.replace(/-Agent$/i, "");
+  }
+
+  private getLayoutCreationOrder(agents: AgentPaneSpec[]): AgentPaneSpec[] {
+    return agents.slice();
+  }
+
+  private async applyAgentGridLayout(
+    sessionName: string,
+    cwd: string,
+    agents: AgentPaneSpec[],
+  ): Promise<boolean> {
+    const layout = this.buildAgentGridLayout(sessionName, cwd, agents);
+    if (!layout) {
+      return false;
+    }
+
+    await execFileAsync("zellij", [
+      "-s",
+      sessionName,
+      "action",
+      "override-layout",
+      "--layout-string",
+      layout,
+    ]);
+    return true;
+  }
+
+  private buildAgentGridLayout(
+    sessionName: string,
+    cwd: string,
+    agents: AgentPaneSpec[],
+  ): string | null {
+    if (agents.length === 0) {
+      return null;
+    }
+
+    const columns = this.partitionAgentsForGrid(agents);
+    const columnWidths = this.distributePercentages(columns.length);
+    const body = columns
+      .map((column, index) =>
+        this.buildGridColumnKdl(sessionName, cwd, column, columnWidths[index] ?? 100),
+      )
+      .join("\n");
+
+    return [
+      "layout {",
+      `  cwd ${this.toKdlString(cwd)}`,
+      '  tab name="Tab #1" focus=true {',
+      "    pane size=1 borderless=true {",
+      '      plugin location="zellij:tab-bar";',
+      "    }",
+      '    pane split_direction="vertical" {',
+      body,
+      "    }",
+      "    pane size=1 borderless=true {",
+      '      plugin location="zellij:status-bar";',
+      "    }",
+      "  }",
+      "}",
+    ].join("\n");
+  }
+
+  private buildGridColumnKdl(
+    sessionName: string,
+    cwd: string,
+    agents: AgentPaneSpec[],
+    widthPercent: number,
+  ): string {
+    const paneHeights = this.distributePercentages(agents.length);
+    const panes = agents
+      .map((agent, index) =>
+        this.buildAgentPaneKdl(
+          sessionName,
+          cwd,
+          agent,
+          agents.length > 1 ? paneHeights[index] ?? null : null,
+        ),
+      )
+      .join("\n");
+
+    return [
+      `      pane size="${widthPercent}%" split_direction="horizontal" {`,
+      panes,
+      "      }",
+    ].join("\n");
+  }
+
+  private buildAgentPaneKdl(
+    sessionName: string,
+    cwd: string,
+    agent: AgentPaneSpec,
+    heightPercent: number | null,
+  ): string {
+    const shellCommand = this.buildOpencodeShellCommand(
+      sessionName,
+      cwd,
+      agent.name,
+      agent.opencodeSessionId,
+    );
+    const size = heightPercent ? ` size="${heightPercent}%"` : "";
+    return [
+      `      pane command=${this.toKdlString("/bin/sh")} name=${this.toKdlString(agent.name)}${size} {`,
+      `        args ${this.toKdlString("-c")} ${this.toKdlString(shellCommand)};`,
+      "      }",
+    ].join("\n");
+  }
+
+  private partitionAgentsForGrid(agents: AgentPaneSpec[]): AgentPaneSpec[][] {
+    if (agents.length <= 1) {
+      return [agents.slice()];
+    }
+
+    const columnCount = Math.min(3, Math.ceil(Math.sqrt(agents.length)));
+    const columns = Array.from({ length: columnCount }, () => [] as AgentPaneSpec[]);
+
+    for (const [index, agent] of agents.entries()) {
+      columns[index % columnCount]?.push(agent);
+    }
+
+    return columns.filter((column) => column.length > 0);
+  }
+
+  private toKdlString(value: string): string {
+    return JSON.stringify(value);
+  }
+
+  private distributePercentages(count: number): number[] {
+    if (count <= 0) {
+      return [];
+    }
+
+    const base = Math.floor(100 / count);
+    const remainder = 100 % count;
+    return Array.from({ length: count }, (_, index) => base + (index < remainder ? 1 : 0));
+  }
+}

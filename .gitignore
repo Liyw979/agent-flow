@@ -1,0 +1,9 @@
+node_modules/
+dist/
+out/
+.tmp/
+.agentflow/
+.agentpipeline/
+
+# Keep project agent definitions in version control.
+!.opencode/
