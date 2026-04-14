@@ -39,14 +39,6 @@ import { ZellijManager } from "./zellij-manager";
 
 const execFileAsync = promisify(execFile);
 
-function shellQuote(value: string) {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function buildAttachSessionCommand(sessionName: string) {
-  return `zellij attach --create-background ${shellQuote(sessionName)} && zellij attach ${shellQuote(sessionName)} --create`;
-}
-
 interface OrchestratorOptions {
   userDataPath: string;
   autoOpenTaskSession?: boolean;
@@ -418,8 +410,8 @@ export class Orchestrator {
 
     await this.ensureTaskInitialized(project, task, agentFiles);
 
-    const zellijDebugInfo = task.zellijSessionId
-      ? `\nZellij Session: ${task.zellijSessionId}\nDebug Attach: ${buildAttachSessionCommand(task.zellijSessionId)}`
+    const zellijSessionSummary = task.zellijSessionId
+      ? `, Zellij Session: ${task.zellijSessionId}`
       : "";
 
     const taskCreatedMessage: MessageRecord = {
@@ -428,8 +420,8 @@ export class Orchestrator {
       taskId,
       content:
         options.source === "initialize"
-          ? `Task 已初始化。系统已扫描 ${agentFiles.length} 个 Project 级 Agent，并完成当前 Task 的 Zellij / OpenCode 运行时初始化。群聊输入框会优先弹出 Agent 候选，默认选中 build；若直接发送且未显式指定，也会默认投递给 build。${zellijDebugInfo}`
-          : `Task 已创建并完成初始化。系统已扫描 ${agentFiles.length} 个 Project 级 Agent，并已为当前 Task 准备好全部 Agent pane 与会话。群聊输入框会优先弹出 Agent 候选，默认选中 build；若直接发送且未显式指定，也会默认投递给 build。${zellijDebugInfo}`,
+          ? `Task 已初始化${zellijSessionSummary}`
+          : `Task 已创建并完成初始化${zellijSessionSummary}`,
       sender: "system",
       timestamp: new Date().toISOString(),
       meta: {
