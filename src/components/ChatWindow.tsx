@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { MessageRecord, ProjectSnapshot, TaskSnapshot } from "@shared/types";
+import type { ProjectSnapshot, TaskSnapshot } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { getAgentColorToken } from "@/lib/agent-colors";
+import { mergeTaskChatMessages, type ChatMessageItem } from "@/lib/chat-messages";
 
 interface ChatWindowProps {
   project: ProjectSnapshot | undefined;
@@ -15,14 +16,6 @@ interface MentionContext {
   start: number;
   end: number;
   query: string;
-}
-
-interface ChatMessageItem {
-  id: string;
-  sender: string;
-  timestamp: string;
-  content: string;
-  kinds: string[];
 }
 
 const MENTION_MENU_WIDTH = 224;
@@ -154,47 +147,6 @@ function getMessageBadge(kind: string | undefined, sender: string) {
   return null;
 }
 
-function shouldMergeMessages(
-  previousSender: string | undefined,
-  previousKind: string | undefined,
-  current: MessageRecord,
-) {
-  return (
-    previousSender === current.sender &&
-    previousSender !== "user" &&
-    previousSender !== "system" &&
-    previousKind === "agent-final" &&
-    current.meta?.kind === "high-level-trigger"
-  );
-}
-
-function mergeChatMessages(messages: MessageRecord[]): ChatMessageItem[] {
-  const merged: ChatMessageItem[] = [];
-
-  for (const message of messages) {
-    const last = merged.at(-1);
-    const previousKind = last?.kinds.at(-1);
-
-    if (last && shouldMergeMessages(last.sender, previousKind, message)) {
-      last.id = `${last.id}:${message.id}`;
-      last.timestamp = message.timestamp;
-      last.content = [last.content, message.content].filter(Boolean).join("\n\n");
-      last.kinds.push(message.meta?.kind ?? "");
-      continue;
-    }
-
-    merged.push({
-      id: message.id,
-      sender: message.sender,
-      timestamp: message.timestamp,
-      content: message.content,
-      kinds: message.meta?.kind ? [message.meta.kind] : [],
-    });
-  }
-
-  return merged;
-}
-
 function MessageBubble({ message }: { message: ChatMessageItem }) {
   const isUser = message.sender === "user";
   const isSystem = message.sender === "system";
@@ -315,7 +267,7 @@ export function ChatWindow({
   }, [task?.task.id]);
 
   const messages = useMemo(
-    () => mergeChatMessages(
+    () => mergeTaskChatMessages(
       [...(task?.messages ?? [])].sort((left, right) => left.timestamp.localeCompare(right.timestamp)),
     ),
     [task],

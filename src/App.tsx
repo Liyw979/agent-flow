@@ -3,6 +3,7 @@ import { AgentConfigModal } from "./components/AgentConfigModal";
 import { ChatWindow } from "./components/ChatWindow";
 import { SidebarList } from "./components/SidebarList";
 import { TopologyGraph } from "./components/TopologyGraph";
+import { mergeTaskChatMessages } from "./lib/chat-messages";
 import { getAgentColorToken } from "./lib/agent-colors";
 import { useAgentFlowStore } from "./store/useAgentFlowStore";
 import { isBuiltinAgentPath, resolveTopologyAgentOrder } from "@shared/types";
@@ -54,62 +55,33 @@ function getAgentMetricLabel(messageCount: number) {
   return `消息 · ${messageCount}`;
 }
 
-function extractFirstMention(content: string): string | undefined {
-  const match = content.match(/@([^\s]+)/);
-  return match?.[1];
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function normalizeInlineText(content: string) {
   return content.replace(/\s+/g, " ").trim();
 }
 
-function stripLeadingAgentMention(content: string, agentName: string) {
-  const trimmed = content.trim();
-  const withoutMention = trimmed.replace(new RegExp(`^@${escapeRegExp(agentName)}\\s*`, "i"), "").trim();
-  return withoutMention || trimmed;
+function getMessageSenderLabel(sender: string) {
+  if (sender === "user") {
+    return "User";
+  }
+  if (sender === "system") {
+    return "System";
+  }
+  return getAgentDisplayName(sender);
 }
 
-function getLatestAgentReceivedTask(messages: MessageRecord[], agentName: string) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    const targetAgentId = message.meta?.targetAgentId;
-    const targetAgentIds = (message.meta?.targetAgentIds ?? "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
+function getLatestTaskChatMessage(messages: MessageRecord[]) {
+  const latest = mergeTaskChatMessages(
+    [...messages].sort((left, right) => left.timestamp.localeCompare(right.timestamp)),
+  ).at(-1);
 
-    if (message.sender === "user") {
-      const mentionedAgent = targetAgentId || extractFirstMention(message.content);
-      if (mentionedAgent === agentName) {
-        return normalizeInlineText(stripLeadingAgentMention(message.content, agentName));
-      }
-      continue;
-    }
-
-    if (targetAgentId !== agentName && !targetAgentIds.includes(agentName)) {
-      continue;
-    }
-
-    if (message.meta?.kind === "high-level-trigger") {
-      const sourceAgentId = message.meta?.sourceAgentId;
-      if (sourceAgentId) {
-        for (let sourceIndex = index - 1; sourceIndex >= 0; sourceIndex -= 1) {
-          const sourceMessage = messages[sourceIndex];
-          if (sourceMessage.sender === sourceAgentId && sourceMessage.meta?.kind === "agent-final") {
-            return normalizeInlineText(sourceMessage.content);
-          }
-        }
-      }
-    }
-
-    return normalizeInlineText(stripLeadingAgentMention(message.content, agentName));
+  if (!latest) {
+    return null;
   }
 
-  return null;
+  return {
+    senderLabel: getMessageSenderLabel(latest.sender),
+    content: latest.content.trim() || normalizeInlineText(latest.content),
+  };
 }
 
 function App() {
@@ -251,8 +223,8 @@ function App() {
   }, [activeProject?.project.id, activeTaskView?.task.id]);
 
   const panelMappings = activeTaskView?.panels ?? [];
-  const latestBuildTask = useMemo(
-    () => (activeTaskView ? getLatestAgentReceivedTask(activeTaskView.messages, "build") : null),
+  const latestTaskChatMessage = useMemo(
+    () => (activeTaskView ? getLatestTaskChatMessage(activeTaskView.messages) : null),
     [activeTaskView],
   );
   const runtimePollKey = useMemo(
@@ -501,11 +473,20 @@ function App() {
 
                   <div className="px-4 pb-4 pt-3">
                     <div className="mb-3 space-y-2">
-                      <div className="rounded-[8px] border border-border/60 bg-card/80 px-3 py-2.5 text-sm leading-6 text-foreground/85">
+                      <div className="rounded-[8px] border border-border/60 bg-card/80 px-3 py-2.5 text-sm text-foreground/85">
                         {activeTaskView
-                          ? latestBuildTask
-                            ? `Build 最新任务：${latestBuildTask}`
-                            : "Build 暂时还没有接收到任务"
+                          ? latestTaskChatMessage
+                            ? (
+                                <div className="space-y-1.5">
+                                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-foreground/55">
+                                    最后一条群聊消息 · {latestTaskChatMessage.senderLabel}
+                                  </p>
+                                  <div className="max-h-40 overflow-y-auto whitespace-pre-wrap leading-6 text-foreground/90">
+                                    {latestTaskChatMessage.content}
+                                  </div>
+                                </div>
+                              )
+                            : "当前 Task 还没有群聊消息"
                           : "当前还没有选中 Task"}
                       </div>
                       <div className="flex flex-wrap gap-2">
