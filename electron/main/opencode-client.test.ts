@@ -58,3 +58,70 @@ test("消息查询接口空响应体时返回空结果而不是抛错", async ()
   assert.equal(message, null);
   assert.deepEqual(list, []);
 });
+
+test("resolveExecutionResult 在消息已完成时不会额外等待 session idle 超时", async () => {
+  const client = createClient() as OpenCodeClient & {
+    waitForSessionSettled: (sessionId: string, after: number, timeoutMs: number) => Promise<void>;
+    waitForMessageCompletion: (
+      projectPath: string,
+      sessionId: string,
+      messageId: string,
+      fallbackTimestamp: string,
+      timeoutMs: number,
+    ) => Promise<{
+      id: string;
+      content: string;
+      sender: string;
+      timestamp: string;
+      completedAt: string | null;
+      error: string | null;
+      raw: unknown;
+    } | null>;
+    getLatestAssistantMessage: (projectPath: string, sessionId: string) => Promise<unknown>;
+    getSessionRuntime: (projectPath: string, sessionId: string) => Promise<{
+      sessionId: string;
+      messageCount: number;
+      updatedAt: string | null;
+      headline: string | null;
+      activeToolNames: string[];
+      activities: [];
+    }>;
+  };
+  const completedAt = new Date().toISOString();
+  client.waitForSessionSettled = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  };
+  client.waitForMessageCompletion = async () => ({
+    id: "msg-1",
+    content: "已完成",
+    sender: "assistant",
+    timestamp: completedAt,
+    completedAt,
+    error: null,
+    raw: null,
+  });
+  client.getLatestAssistantMessage = async () => null;
+  client.getSessionRuntime = async () => ({
+    sessionId: "session-1",
+    messageCount: 1,
+    updatedAt: completedAt,
+    headline: null,
+    activeToolNames: [],
+    activities: [],
+  });
+
+  const startedAt = Date.now();
+  const result = await client.resolveExecutionResult("/tmp/demo", "session-1", {
+    id: "msg-1",
+    content: "",
+    sender: "assistant",
+    timestamp: completedAt,
+    completedAt: null,
+    error: null,
+    raw: null,
+  });
+  const elapsed = Date.now() - startedAt;
+
+  assert.equal(result.finalMessage, "已完成");
+  assert.ok(elapsed < 120, `resolveExecutionResult 耗时 ${elapsed}ms，说明仍然被 session idle 等待拖住了`);
+});

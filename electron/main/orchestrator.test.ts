@@ -109,3 +109,34 @@ test("zellij 不可用时会追加系统提醒", async () => {
 
   assert.equal(task.messages.some((message) => message.meta?.kind === "zellij-missing"), true);
 });
+
+test("审视通过但没有可展示高层结果时返回简洁兜底文案", () => {
+  const orchestrator = new Orchestrator({
+    userDataPath: createTempDir(),
+    enableEventStream: false,
+  });
+
+  const displayContent = (
+    orchestrator as unknown as {
+      createDisplayContent: (
+        parsedReview: {
+          cleanContent: string;
+          decision: "pass" | "needs_revision" | "unknown";
+          feedback: string | null;
+          rawDecisionBlock: string | null;
+        },
+        fallbackMessage?: string | null,
+      ) => string;
+    }
+  ).createDisplayContent(
+    {
+      cleanContent: "",
+      decision: "pass",
+      feedback: null,
+      rawDecisionBlock: "【DECISION】检查通过",
+    },
+    null,
+  );
+
+  assert.equal(displayContent, "通过");
+});

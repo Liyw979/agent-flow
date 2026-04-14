@@ -242,16 +242,29 @@ export class OpenCodeClient {
     }
 
     const submittedAt = Date.parse(submitted.timestamp) || Date.now();
-    try {
-      await this.waitForSessionSettled(sessionId, submittedAt, 8000);
-    } catch {
-      // 事件流超时或缺失时退回消息轮询
-    }
+    const messageCompletionPromise = this.waitForMessageCompletion(
+      projectPath,
+      sessionId,
+      submitted.id,
+      submitted.timestamp,
+      8000,
+    );
+    let latest = await Promise.race([
+      messageCompletionPromise,
+      this.waitForSessionSettled(sessionId, submittedAt, 8000)
+        .then(async () => {
+          const current = await this.getSessionMessage(projectPath, sessionId, submitted.id);
+          return current && (current.completedAt || current.error) ? current : null;
+        })
+        .catch(() => null),
+    ]);
 
-    const latest =
-      (await this.waitForMessageCompletion(projectPath, sessionId, submitted.id, submitted.timestamp, 8000)) ??
-      (await this.getLatestAssistantMessage(projectPath, sessionId)) ??
-      submitted;
+    if (!latest) {
+      latest =
+        (await messageCompletionPromise) ??
+        (await this.getLatestAssistantMessage(projectPath, sessionId)) ??
+        submitted;
+    }
 
     const runtime = await this.getSessionRuntime(projectPath, sessionId).catch(() => null);
 
@@ -710,9 +723,13 @@ export class OpenCodeClient {
     timeoutMs: number,
   ): Promise<OpenCodeNormalizedMessage | null> {
     const startedAt = Date.now();
+    let latestNonEmptyMessage: OpenCodeNormalizedMessage | null = null;
     while (Date.now() - startedAt < timeoutMs) {
       const message = await this.getSessionMessage(projectPath, sessionId, messageId);
-      if (message && (message.completedAt || message.error || message.content.trim())) {
+      if (message?.content.trim()) {
+        latestNonEmptyMessage = message;
+      }
+      if (message && (message.completedAt || message.error)) {
         return message;
       }
       await new Promise((resolve) => setTimeout(resolve, 400));
@@ -720,7 +737,8 @@ export class OpenCodeClient {
 
     return this.getSessionMessage(projectPath, sessionId, messageId).then(
       (message) =>
-        message ?? {
+        message ??
+        latestNonEmptyMessage ?? {
           id: messageId,
           content: "",
           sender: "assistant",

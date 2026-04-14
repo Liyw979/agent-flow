@@ -1546,7 +1546,7 @@ export class Orchestrator {
       return "（该 Agent 已给出需要修改的结论，但未返回可展示的高层结果。）";
     }
     if (parsedReview.decision === "pass") {
-      return "（该 Agent 已给出通过/完成结论，但未返回可展示的高层结果。）";
+      return "通过";
     }
     return "（该 Agent 未返回可展示的高层结果。）";
   }
