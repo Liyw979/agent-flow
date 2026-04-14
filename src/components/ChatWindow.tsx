@@ -125,6 +125,13 @@ function extractFirstMention(content: string): string | undefined {
   return match?.[1];
 }
 
+function getDefaultAgentName(agents: string[]): string | undefined {
+  if (agents.includes("build")) {
+    return "build";
+  }
+  return agents[0];
+}
+
 function getMessageBadge(kind: string | undefined, sender: string) {
   if (kind === "high-level-trigger") {
     return "Agent -> Agent";
@@ -289,18 +296,20 @@ export function ChatWindow({
   onSubmit,
   onOpenTaskSession,
 }: ChatWindowProps) {
-  const preferredEntryAgent = availableAgents[0] ?? "Agent";
+  const defaultAgentName = getDefaultAgentName(availableAgents);
   const [draft, setDraft] = useState("");
   const [mentionContext, setMentionContext] = useState<MentionContext | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [menuPosition, setMenuPosition] = useState({ left: 24, top: 12 });
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     if (task) {
       setDraft("");
       setMentionContext(null);
+      setSubmitError(null);
       return;
     }
   }, [task?.task.id]);
@@ -316,12 +325,55 @@ export function ChatWindow({
       return [];
     }
     const query = mentionContext.query.toLowerCase();
-    return availableAgents.filter((name) => name.toLowerCase().includes(query));
+    const filtered = availableAgents.filter((name) => name.toLowerCase().includes(query));
+    return [...filtered].sort((left, right) => {
+      if (left === "build") {
+        return -1;
+      }
+      if (right === "build") {
+        return 1;
+      }
+      return left.localeCompare(right);
+    });
   }, [availableAgents, mentionContext]);
 
   useEffect(() => {
-    setActiveIndex(0);
-  }, [mentionContext?.query]);
+    const defaultIndex = defaultAgentName ? mentionOptions.indexOf(defaultAgentName) : -1;
+    setActiveIndex(defaultIndex >= 0 ? defaultIndex : 0);
+  }, [defaultAgentName, mentionContext?.query, mentionOptions]);
+
+  function updateMenuPosition(textarea: HTMLTextAreaElement, caret: number, optionCount: number) {
+    const caretCoordinates = getCaretCoordinates(textarea, caret);
+    const estimatedMenuHeight =
+      MENTION_MENU_VERTICAL_PADDING +
+      MENTION_MENU_HEADER_HEIGHT +
+      Math.max(1, Math.min(optionCount, MENTION_MENU_MAX_VISIBLE_ITEMS)) * MENTION_MENU_ITEM_HEIGHT;
+    const textareaRect = textarea.getBoundingClientRect();
+    const desiredTop = caretCoordinates.top + caretCoordinates.height + MENTION_MENU_GAP;
+    const desiredBottomInViewport = textareaRect.top + desiredTop + estimatedMenuHeight;
+    const canOpenBelow =
+      desiredBottomInViewport <= window.innerHeight - MENTION_MENU_VIEWPORT_MARGIN;
+    const aboveTop =
+      caretCoordinates.top - estimatedMenuHeight - MENTION_MENU_GAP;
+
+    setMenuPosition({
+      left: Math.min(
+        Math.max(caretCoordinates.left + 20, 24),
+        Math.max(24, textarea.clientWidth - MENTION_MENU_WIDTH - 8),
+      ),
+      top: canOpenBelow ? desiredTop : aboveTop,
+    });
+  }
+
+  function openAgentMenuAtCursor(textarea: HTMLTextAreaElement) {
+    const caret = textarea.selectionStart ?? draft.length;
+    setMentionContext({
+      start: caret,
+      end: caret,
+      query: "",
+    });
+    updateMenuPosition(textarea, caret, availableAgents.length);
+  }
 
   function updateMentionState(nextDraft: string, caret: number) {
     const nextContext = getMentionContext(nextDraft, caret);
@@ -329,30 +381,10 @@ export function ChatWindow({
 
     const textarea = textareaRef.current;
     if (nextContext && textarea) {
-      const caretCoordinates = getCaretCoordinates(textarea, caret);
       const matchingOptions = availableAgents.filter((name) =>
         name.toLowerCase().includes(nextContext.query.toLowerCase()),
       );
-      const estimatedMenuHeight =
-        MENTION_MENU_VERTICAL_PADDING +
-        MENTION_MENU_HEADER_HEIGHT +
-        Math.max(1, Math.min(matchingOptions.length, MENTION_MENU_MAX_VISIBLE_ITEMS)) *
-          MENTION_MENU_ITEM_HEIGHT;
-      const textareaRect = textarea.getBoundingClientRect();
-      const desiredTop = caretCoordinates.top + caretCoordinates.height + MENTION_MENU_GAP;
-      const desiredBottomInViewport = textareaRect.top + desiredTop + estimatedMenuHeight;
-      const canOpenBelow =
-        desiredBottomInViewport <= window.innerHeight - MENTION_MENU_VIEWPORT_MARGIN;
-      const aboveTop =
-        caretCoordinates.top - estimatedMenuHeight - MENTION_MENU_GAP;
-
-      setMenuPosition({
-        left: Math.min(
-          Math.max(caretCoordinates.left + 20, 24),
-          Math.max(24, textarea.clientWidth - MENTION_MENU_WIDTH - 8),
-        ),
-        top: canOpenBelow ? desiredTop : aboveTop,
-      });
+      updateMenuPosition(textarea, caret, matchingOptions.length);
     }
   }
 
@@ -380,8 +412,10 @@ export function ChatWindow({
     }
 
     const submitted = draft;
-    const mentionAgent = extractFirstMention(content);
+    const mentionAgent = extractFirstMention(content) ?? defaultAgentName;
+
     setSubmitting(true);
+    setSubmitError(null);
     setDraft("");
     setMentionContext(null);
 
@@ -390,8 +424,9 @@ export function ChatWindow({
         content,
         mentionAgent,
       });
-    } catch {
+    } catch (error) {
       setDraft(submitted);
+      setSubmitError(error instanceof Error ? error.message : "发送失败，请稍后重试。");
     } finally {
       setSubmitting(false);
     }
@@ -445,10 +480,28 @@ export function ChatWindow({
                 const nextDraft = event.target.value;
                 const caret = event.target.selectionStart ?? nextDraft.length;
                 setDraft(nextDraft);
+                if (submitError) {
+                  setSubmitError(null);
+                }
                 updateMentionState(nextDraft, caret);
               }}
               onClick={(event) => {
-                updateMentionState(event.currentTarget.value, event.currentTarget.selectionStart ?? 0);
+                const textarea = event.currentTarget;
+                const nextContext = getMentionContext(textarea.value, textarea.selectionStart ?? 0);
+                if (nextContext) {
+                  updateMentionState(textarea.value, textarea.selectionStart ?? 0);
+                  return;
+                }
+                openAgentMenuAtCursor(textarea);
+              }}
+              onFocus={(event) => {
+                const textarea = event.currentTarget;
+                const nextContext = getMentionContext(textarea.value, textarea.selectionStart ?? 0);
+                if (nextContext) {
+                  updateMentionState(textarea.value, textarea.selectionStart ?? 0);
+                  return;
+                }
+                openAgentMenuAtCursor(textarea);
               }}
               onKeyUp={(event) => {
                 updateMentionState(event.currentTarget.value, event.currentTarget.selectionStart ?? 0);
@@ -466,6 +519,11 @@ export function ChatWindow({
                     return;
                   }
                   if (event.key === "Tab") {
+                    event.preventDefault();
+                    applyMention(mentionOptions[activeIndex] ?? mentionOptions[0]);
+                    return;
+                  }
+                  if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
                     applyMention(mentionOptions[activeIndex] ?? mentionOptions[0]);
                     return;
@@ -488,11 +546,16 @@ export function ChatWindow({
               }}
               placeholder={
                 task
-                  ? "输入消息，按 @ 选择 Agent"
-                  : `例如：@${preferredEntryAgent} 请先分析需求并推动实现。`
+                  ? "输入消息；点击后会先推荐 Agent，默认选中 build"
+                  : "点击输入框后会弹出 Agent 候选，默认选中 build"
               }
               className="no-drag block min-h-[68px] w-full resize-none rounded-[8px] border border-border bg-card px-4 py-2.5 text-sm leading-6 outline-none transition focus:border-primary"
             />
+
+            <div className="mt-2 flex items-center justify-between gap-3 px-1 text-xs">
+              <span className="text-muted-foreground">点击输入框会先弹出候选框；若未显式选择，默认发送给 build。</span>
+              {submitError ? <span className="text-primary">{submitError}</span> : null}
+            </div>
 
             {mentionContext && mentionOptions.length > 0 && (
               <div
