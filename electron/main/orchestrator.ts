@@ -481,9 +481,10 @@ export class Orchestrator {
       payload: message,
     });
 
+    const forwardedContent = this.stripLeadingTargetMention(content, targetAgent.name);
     const runPromise = this.dispatchAgentRun(project, task.id, targetAgent.name, {
       mode: "raw",
-      content,
+      content: forwardedContent,
     }, [message.id]);
     void runPromise.catch((error) => {
       console.error("[orchestrator] 后台发送任务失败", {
@@ -885,25 +886,27 @@ export class Orchestrator {
 
     const triggerTargets = [...readyTargets, ...queuedTargets];
 
-    const triggerMessage: MessageRecord = {
-      id: randomUUID(),
-      projectId: project.id,
-      taskId,
-      sender: sourceAgentId,
-      timestamp: new Date().toISOString(),
-      content: `${triggerTargets.map((targetName) => `@${targetName}`).join(" ")} 请基于我刚刚完成的结果继续处理。`,
-      meta: {
-        kind: "high-level-trigger",
-        sourceAgentId,
-        targetAgentIds: triggerTargets.join(","),
-      },
-    };
-    this.store.insertMessage(triggerMessage);
-    this.emit({
-      type: "message-created",
-      projectId: project.id,
-      payload: triggerMessage,
-    });
+    if (!this.shouldSuppressDuplicateHighLevelTrigger(project.id, taskId, sourceAgentId, triggerTargets)) {
+      const triggerMessage: MessageRecord = {
+        id: randomUUID(),
+        projectId: project.id,
+        taskId,
+        sender: sourceAgentId,
+        timestamp: new Date().toISOString(),
+        content: `${triggerTargets.map((targetName) => `@${targetName}`).join(" ")} 请基于我刚刚完成的结果继续处理。`,
+        meta: {
+          kind: "high-level-trigger",
+          sourceAgentId,
+          targetAgentIds: triggerTargets.join(","),
+        },
+      };
+      this.store.insertMessage(triggerMessage);
+      this.emit({
+        type: "message-created",
+        projectId: project.id,
+        payload: triggerMessage,
+      });
+    }
 
     const currentTask = this.store.getTask(taskId);
     const gitDiffSummary = await this.buildProjectGitDiffSummary(currentTask.cwd);
@@ -939,6 +942,41 @@ export class Orchestrator {
     );
 
     return triggerTargets.length;
+  }
+
+  private shouldSuppressDuplicateHighLevelTrigger(
+    projectId: string,
+    taskId: string,
+    sourceAgentId: string,
+    targetAgentIds: string[],
+  ): boolean {
+    const now = Date.now();
+    const incomingTargets = [...targetAgentIds].sort().join(",");
+    const messages = this.store.listMessages(projectId, taskId);
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      const timestamp = Date.parse(message.timestamp);
+      if (!Number.isFinite(timestamp)) {
+        continue;
+      }
+      if (now - timestamp > 1500) {
+        break;
+      }
+      if (message.sender !== sourceAgentId || message.meta?.kind !== "high-level-trigger") {
+        continue;
+      }
+
+      const historicalTargets = (message.meta.targetAgentIds ?? "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .sort()
+        .join(",");
+      if (historicalTargets === incomingTargets) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private canTriggerTarget(
@@ -1540,6 +1578,26 @@ export class Orchestrator {
     return match?.[1];
   }
 
+  private stripLeadingTargetMention(content: string, targetAgentName: string): string {
+    const trimmed = content.trim();
+    if (!trimmed) {
+      return "";
+    }
+
+    const mentionToken = `@${targetAgentName}`;
+    if (!trimmed.startsWith(mentionToken)) {
+      return trimmed;
+    }
+
+    const nextChar = trimmed.charAt(mentionToken.length);
+    if (nextChar && !/\s/u.test(nextChar)) {
+      return trimmed;
+    }
+
+    const stripped = trimmed.slice(mentionToken.length).trimStart();
+    return stripped || trimmed;
+  }
+
   private findAgentFile(agentFiles: AgentFileRecord[], name: string | undefined): AgentFileRecord | undefined {
     if (!name) {
       return undefined;
@@ -1765,7 +1823,7 @@ export class Orchestrator {
     }
 
     const rendered = contextMessages
-      .map((message) => this.renderContextMessage(message))
+      .map((message) => this.renderContextMessage(message, targetAgentName))
       .filter(Boolean)
       .join("\n\n");
 
@@ -1775,10 +1833,10 @@ export class Orchestrator {
     };
   }
 
-  private renderContextMessage(message: MessageRecord): string {
+  private renderContextMessage(message: MessageRecord, targetAgentName: string): string {
     const time = this.toShortTime(message.timestamp);
     const sender = this.getMessageSenderLabel(message);
-    const content = this.getMessageContextContent(message);
+    const content = this.getMessageContextContent(message, targetAgentName);
     if (!content) {
       return "";
     }
@@ -1811,13 +1869,22 @@ export class Orchestrator {
     return name;
   }
 
-  private getMessageContextContent(message: MessageRecord) {
+  private getMessageContextContent(message: MessageRecord, targetAgentName?: string) {
     if (message.meta?.kind === "agent-final") {
       const finalMessage = message.meta.finalMessage?.trim();
       if (finalMessage) {
         return finalMessage;
       }
     }
+
+    if (
+      message.sender === "user" &&
+      targetAgentName &&
+      message.meta?.targetAgentId === targetAgentName
+    ) {
+      return this.stripLeadingTargetMention(message.content, targetAgentName);
+    }
+
     return message.content.trim();
   }
 

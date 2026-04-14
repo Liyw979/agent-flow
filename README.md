@@ -27,7 +27,7 @@
 - 群聊中同时展示 `user -> agent`、`agent -> agent` 高层协作消息，以及 Agent 最终回复
 - 当一个 Agent 同时触发多个下游 Agent 时，群聊会合并展示为一条批量 `agent -> agent` 派发消息，而不是拆成多条重复消息
 - 这类批量 `agent -> agent` 派发消息仅用于群聊展示给人看，不会作为“尚未收到的群聊历史”再次转发给下游 Agent
-- 用户在 Task 群聊里直接 `@Agent` 时，底层会把原始消息原样发送给目标 Agent，不额外拼接结构化前缀
+- 用户在 Task 群聊里直接 `@Agent` 时，群聊展示仍保留原始 `@Agent` 文本，但底层发送给目标 Agent 的正文会自动去掉开头用于寻址的 `@Agent`，也不额外拼接结构化前缀
 - Agent 派发下游时，只有显式指定下游或返工链路才会封装 `[From]`、`[Message]`、`[Requeirement]`；对于 `success` 的 100% 自动触发，只会保留 `[From]`、`[Message]`，不会额外拼接 `[Requeirement]`
 - 当 Agent 显式派发下游 Agent 时，系统会把当前 Project Git Diff 的精简摘要附加到转发 Prompt 的 `[Requeirement]` 段；返工链路不附带该摘要
 - 每个 Agent 都会按名称自动分配一套稳定配色；聊天记录里会使用对应的浅色底、描边与标签色来区分不同 Agent
@@ -110,7 +110,7 @@ npm run cli -- agent list
 npm run cli -- task init --title "初始化手动测试"
 
 # 3. 给特定 Agent 发送消息；如果当前目录还没有 Project，会自动创建并注册
-npm run cli -- task send BA "@BA 请先分析需求并推进实现。"
+npm run cli -- task send BA "请先分析需求并推进实现。"
 npm run cli -- task send BA "请先分析需求并推进实现。" --task <taskId>
 
 # 4. 查看当前目录下的 Task、消息和 panel 绑定
