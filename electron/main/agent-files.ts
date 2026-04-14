@@ -21,6 +21,8 @@ permission:
   glob: allow
   list: allow
   webfetch: allow
+  patch: deny
+  task: deny
 ---
 你是 BA。
 你的职责：
@@ -37,6 +39,8 @@ permission:
   grep: allow
   glob: allow
   list: allow
+  patch: deny
+  task: deny
 ---
 你是代码审查角色，关注冗余实现、可读性和是否符合 BA 定义的使用旅程。
 
@@ -52,6 +56,8 @@ permission:
   grep: allow
   glob: allow
   list: allow
+  patch: deny
+  task: deny
 ---
 你是文档审查角色，负责检查当前改动是否已经同步反映到 README.md、AGENTS.md 和其他协作文档。
 
@@ -65,6 +71,8 @@ permission:
   grep: allow
   glob: allow
   list: allow
+  patch: deny
+  task: deny
 ---
 你是集成测试审查角色，负责检查实现是否提供了覆盖充分、可直接执行通过的集成测试。
 
@@ -78,6 +86,8 @@ permission:
   grep: allow
   glob: allow
   list: allow
+  patch: deny
+  task: deny
 ---
 你是单元测试审查角色，负责检查单元测试是否遵循四条标准：单功能单测试、每个测试有注释、执行要快、尽量使用纯函数而不是 Mock。
 

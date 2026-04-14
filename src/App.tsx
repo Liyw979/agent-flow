@@ -3,7 +3,6 @@ import { AgentConfigModal } from "./components/AgentConfigModal";
 import { ChatWindow } from "./components/ChatWindow";
 import { SidebarList } from "./components/SidebarList";
 import { TopologyGraph } from "./components/TopologyGraph";
-import { mergeTaskChatMessages } from "./lib/chat-messages";
 import {
   acknowledgeTaskCompletionReminder,
   countVisibleTaskCompletionReminders,
@@ -44,35 +43,6 @@ function moveItemBefore(items: string[], sourceId: string, targetId: string) {
 
 function getAgentMetricLabel(messageCount: number) {
   return `消息 · ${messageCount}`;
-}
-
-function normalizeInlineText(content: string) {
-  return content.replace(/\s+/g, " ").trim();
-}
-
-function getMessageSenderLabel(sender: string) {
-  if (sender === "user") {
-    return "User";
-  }
-  if (sender === "system") {
-    return "System";
-  }
-  return getAgentDisplayName(sender);
-}
-
-function getLatestTaskChatMessage(messages: MessageRecord[]) {
-  const latest = mergeTaskChatMessages(
-    [...messages].sort((left, right) => left.timestamp.localeCompare(right.timestamp)),
-  ).at(-1);
-
-  if (!latest) {
-    return null;
-  }
-
-  return {
-    senderLabel: getMessageSenderLabel(latest.sender),
-    content: latest.content.trim() || normalizeInlineText(latest.content),
-  };
 }
 
 function App() {
@@ -247,10 +217,6 @@ function App() {
   }, [activeProject?.project.id, activeTaskView?.task.id]);
 
   const panelMappings = activeTaskView?.panels ?? [];
-  const latestTaskChatMessage = useMemo(
-    () => (activeTaskView ? getLatestTaskChatMessage(activeTaskView.messages) : null),
-    [activeTaskView],
-  );
   const runtimePollKey = useMemo(
     () =>
       activeTaskView?.agents
@@ -524,22 +490,6 @@ function App() {
 
                   <div className="px-4 pb-4 pt-3">
                     <div className="mb-3 space-y-2">
-                      <div className="rounded-[8px] border border-border/60 bg-card/80 px-3 py-2.5 text-sm text-foreground/85">
-                        {activeTaskView
-                          ? latestTaskChatMessage
-                            ? (
-                                <div className="space-y-1.5">
-                                  <p className="text-xs font-semibold uppercase tracking-[0.08em] text-foreground/55">
-                                    最后一条群聊消息 · {latestTaskChatMessage.senderLabel}
-                                  </p>
-                                  <div className="max-h-40 overflow-y-auto whitespace-pre-wrap leading-6 text-foreground/90">
-                                    {latestTaskChatMessage.content}
-                                  </div>
-                                </div>
-                              )
-                            : "当前 Task 还没有群聊消息"
-                          : "当前还没有选中 Task"}
-                      </div>
                       <div className="flex flex-wrap gap-2">
                         <span className="rounded-[6px] bg-card px-3 py-1 text-[11px] text-foreground/80">
                           {panelMappings.length > 0
