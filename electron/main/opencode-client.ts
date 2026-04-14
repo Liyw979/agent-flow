@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { toOpenCodeAgentName } from "./opencode-agent-name";
 
 interface ServeHandle {
   process: ChildProcessWithoutNullStreams;
@@ -174,13 +175,17 @@ export class OpenCodeClient {
     payload: SubmitMessagePayload,
   ): Promise<OpenCodeNormalizedMessage> {
     const server = await this.ensureServer();
+    const opencodeAgent = toOpenCodeAgentName(payload.agent);
 
     if (server.mock) {
-      return this.createMockMessage(projectPath, sessionId, payload);
+      return this.createMockMessage(projectPath, sessionId, {
+        ...payload,
+        agent: opencodeAgent,
+      });
     }
 
     const body: Record<string, unknown> = {
-      agent: payload.agent,
+      agent: opencodeAgent,
       system: payload.system,
       parts: [
         {
@@ -203,7 +208,7 @@ export class OpenCodeClient {
     }
 
     const raw = await response.text();
-    return this.normalizeMessageEnvelope(JSON.parse(raw) as Record<string, unknown>, payload.agent);
+    return this.normalizeMessageEnvelope(JSON.parse(raw) as Record<string, unknown>, opencodeAgent);
   }
 
   async resolveExecutionResult(
@@ -1047,6 +1052,7 @@ export class OpenCodeClient {
         }
         return withDecision("我已整理当前 Task 的目标、范围与交付标准，并给出可执行的实现方案。");
       case "Code":
+      case "build":
       case "Build":
         return withDecision(
           "我已完成主要实现与本地自检，当前代码、验证步骤和交付说明已经整理完成。",

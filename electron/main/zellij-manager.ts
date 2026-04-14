@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile, spawn, type SpawnOptions } from "node:child_process";
 import { promisify } from "node:util";
 import type { TaskPanelRecord } from "@shared/types";
+import { toOpenCodeAgentName } from "./opencode-agent-name";
 
 const execFileAsync = promisify(execFile);
 
@@ -346,13 +347,6 @@ export class ZellijManager {
     return agents.filter((agent) => !HIDDEN_PANEL_AGENTS.has(agent.name));
   }
 
-  private getOpencodeAgentName(agentName: string): string {
-    if (agentName === "Build") {
-      return "build";
-    }
-    return agentName;
-  }
-
   private async closePane(sessionName: string, paneId: string): Promise<void> {
     await execFileAsync("zellij", [
       "-s",
@@ -399,7 +393,7 @@ export class ZellijManager {
     opencodeSessionId: string | null,
   ): string {
     const escapedCwd = cwd.replace(/'/g, "'\\''");
-    const escapedAgentName = this.getOpencodeAgentName(agentName).replace(/'/g, "'\\''");
+    const escapedAgentName = toOpenCodeAgentName(agentName).replace(/'/g, "'\\''");
     const escapedSessionId = opencodeSessionId?.replace(/'/g, "'\\''");
     const runtimeDir = this.ensurePaneRuntimeDir(cwd, sessionName, agentName);
     const escapedRuntimeDir = runtimeDir.replace(/'/g, "'\\''");
