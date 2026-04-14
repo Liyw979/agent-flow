@@ -736,7 +736,11 @@ export class Orchestrator {
         id: response.messageId,
         projectId: project.id,
         taskId: task.id,
-        content: this.createDisplayContent(latestAgentFile, parsedReview, response.fallbackMessage),
+        content: this.createDisplayContent(
+          parsedReview,
+          response.finalMessage,
+          response.fallbackMessage,
+        ),
         sender: agentName,
         timestamp: response.timestamp,
         meta: {
@@ -820,7 +824,8 @@ export class Orchestrator {
                 task.id,
                 latestAgentFile,
                 parsedReview,
-                taskMessage.content,
+                response.finalMessage,
+                response.fallbackMessage,
               )
             : 0;
         const triggered = associationTriggered + reviewTriggered;
@@ -1076,7 +1081,8 @@ export class Orchestrator {
     taskId: string,
     sourceAgent: Pick<AgentFileRecord, "name">,
     parsedReview: ParsedReview,
-    visibleContent: string,
+    rawFinalMessage: string,
+    fallbackMessage?: string | null,
   ): Promise<number> {
     const topology = this.store.getTopology(project.id);
     const reviewTargets = [...new Set(
@@ -1089,10 +1095,11 @@ export class Orchestrator {
     }
 
     const feedback = parsedReview.feedback?.trim() || "请根据当前审视意见修复问题，并重新提交本轮结果。";
-    const contextSummary = visibleContent.trim()
-      ? `当前阶段高层结果：\n${visibleContent.trim()}\n\n`
-      : "";
-    const reviewContent = `${contextSummary}具体修改意见：\n${feedback}`.trim();
+    const reviewContent = this.resolveReviewForwardedAgentMessage(
+      parsedReview,
+      rawFinalMessage,
+      fallbackMessage,
+    );
     const latestUserContent = this.getLatestUserMessageContent(taskId);
     const userMessage = latestUserContent && !this.contentContainsNormalized(reviewContent, latestUserContent)
       ? latestUserContent
@@ -1105,7 +1112,7 @@ export class Orchestrator {
     );
 
     for (const targetName of reviewTargets) {
-      const remediationBody = `审视不通过，请根据以下意见继续处理。\n\n${contextSummary}具体修改意见：\n${feedback}`;
+      const remediationBody = `审视不通过，请根据以下意见继续处理。\n\n具体修改意见：\n${feedback}`;
       const remediationMessage: MessageRecord = {
         id: randomUUID(),
         projectId: project.id,
@@ -1406,20 +1413,6 @@ export class Orchestrator {
       .trim();
   }
 
-  private resolveAgentContextContent(
-    parsedReview: ParsedReview,
-    rawFinalMessage: string,
-    fallbackMessage?: string | null,
-  ): string {
-    const candidates = [
-      parsedReview.cleanContent.trim(),
-      this.stripStructuredSignals(rawFinalMessage).trim(),
-      fallbackMessage?.trim() ?? "",
-    ];
-
-    return candidates.find((item) => item.length > 0) ?? "";
-  }
-
   private buildDownstreamForwardedContext(
     taskId: string,
     sourceContent: string,
@@ -1437,6 +1430,38 @@ export class Orchestrator {
 
   private buildHighLevelTriggerMessageContent(targetAgentIds: string[], content: string): string {
     return formatHighLevelTriggerContent(content, targetAgentIds);
+  }
+
+  private resolveAgentContextContent(
+    parsedReview: ParsedReview,
+    rawFinalMessage: string,
+    fallbackMessage?: string | null,
+  ): string {
+    const candidates = [
+      parsedReview.cleanContent.trim(),
+      this.stripStructuredSignals(rawFinalMessage).trim(),
+      fallbackMessage?.trim() ?? "",
+    ];
+
+    return candidates.find((item) => item.length > 0) ?? "";
+  }
+
+  private resolveReviewForwardedAgentMessage(
+    parsedReview: ParsedReview,
+    rawFinalMessage: string,
+    fallbackMessage?: string | null,
+  ): string {
+    const rawContent = rawFinalMessage.trim();
+    if (rawContent) {
+      return rawContent;
+    }
+
+    const contextContent = this.resolveAgentContextContent(parsedReview, rawFinalMessage, fallbackMessage);
+    if (contextContent) {
+      return contextContent;
+    }
+
+    return "（该上游 Agent 未返回可继续流转的正文。）";
   }
 
   private extractAgentDisplayContent(content: string): string {
@@ -1469,8 +1494,8 @@ export class Orchestrator {
   }
 
   private createDisplayContent(
-    agent: Pick<AgentFileRecord, "name" | "role">,
     parsedReview: ParsedReview,
+    rawFinalMessage: string,
     fallbackMessage?: string | null,
   ): string {
     const cleanContent = this.extractAgentDisplayContent(parsedReview.cleanContent);
@@ -1478,22 +1503,17 @@ export class Orchestrator {
       return cleanContent;
     }
 
+    const rawContent = this.extractAgentDisplayContent(this.stripStructuredSignals(rawFinalMessage));
+    if (rawContent) {
+      return rawContent;
+    }
+
     const fallbackContent = this.extractAgentDisplayContent(fallbackMessage?.trim() ?? "");
     if (fallbackContent) {
       return fallbackContent;
     }
 
-    if (parsedReview.decision === "needs_revision") {
-      return this.isReviewAgent(agent)
-        ? "（该 Agent 已给出“审查不通过”的结论，Orchestrator 已触发 Build 并将当前 Task 收口为“不通过”。）"
-        : "（该 Agent 已给出“需要修改”的决策，当前 Task 已结束。）";
-    }
-    if (parsedReview.decision === "pass") {
-      return this.isReviewAgent(agent)
-        ? "（该 Agent 已完成本轮审查并给出通过结论，未额外返回高层说明。）"
-        : "（该 Agent 已完成本轮工作，未额外返回高层说明。）";
-    }
-    return "（该 Agent 未返回可展示的高层结果。）";
+    return "（该 Agent 未返回可展示的正文。）";
   }
 
   private async ensureAgentSession(
