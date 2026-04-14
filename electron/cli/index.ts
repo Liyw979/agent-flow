@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { buildZellijMissingMessage, buildZellijMissingReminder } from "@shared/zellij";
 import { Orchestrator } from "../main/orchestrator";
 import { resolveCliUserDataPath } from "../main/user-data-path";
 import type {
@@ -112,6 +113,26 @@ function buildAttachSessionCommand(sessionName: string) {
   return `zellij attach --create-background ${shellQuote(sessionName)} && zellij attach ${shellQuote(sessionName)} --create`;
 }
 
+let cliZellijAvailableCache: boolean | null = null;
+
+function isCliZellijAvailable() {
+  if (cliZellijAvailableCache !== null) {
+    return cliZellijAvailableCache;
+  }
+
+  const result = spawnSync("zellij", ["--version"], {
+    stdio: "ignore",
+  });
+  cliZellijAvailableCache = !result.error && result.status === 0;
+  return cliZellijAvailableCache;
+}
+
+function assertCliZellijAvailable(action: string) {
+  if (!isCliZellijAvailable()) {
+    fail(buildZellijMissingMessage(action));
+  }
+}
+
 function printJson(payload: unknown) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -159,6 +180,9 @@ function printTaskSummary(taskSnapshot: TaskSnapshot) {
   printKeyValue("Title", taskSnapshot.task.title);
   printKeyValue("Status", taskSnapshot.task.status);
   printKeyValue("Zellij Session", taskSnapshot.task.zellijSessionId);
+  if (!isCliZellijAvailable()) {
+    printKeyValue("Zellij 提醒", buildZellijMissingReminder());
+  }
   printKeyValue("Initialized At", formatTimestamp(taskSnapshot.task.initializedAt));
   printKeyValue("Created At", formatTimestamp(taskSnapshot.task.createdAt));
   printKeyValue("Completed At", formatTimestamp(taskSnapshot.task.completedAt));
@@ -328,6 +352,8 @@ async function attachTaskSession(taskSnapshot: TaskSnapshot) {
   if (!sessionName) {
     fail(`Task ${taskSnapshot.task.id} 没有可进入的 Zellij session。`);
   }
+
+  assertCliZellijAvailable("无法进入 Zellij Session");
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn("zellij", ["attach", sessionName, "--create"], {

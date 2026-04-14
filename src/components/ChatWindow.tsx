@@ -402,6 +402,19 @@ export function ChatWindow({
     }
   }
 
+  async function handleOpenTaskSession() {
+    if (!onOpenTaskSession) {
+      return;
+    }
+
+    setSubmitError(null);
+    try {
+      await onOpenTaskSession();
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "打开 Zellij 失败，请稍后重试。");
+    }
+  }
+
   return (
     <section className="PANEL-surface flex h-full min-h-0 flex-col rounded-[10px]">
       <header className="flex min-h-[34px] items-center justify-between gap-3 border-b border-border/60 px-5 py-2">
@@ -415,7 +428,7 @@ export function ChatWindow({
           <button
             type="button"
             onClick={() => {
-              void onOpenTaskSession?.();
+              void handleOpenTaskSession();
             }}
             className="no-drag rounded-[8px] border border-border bg-card px-3.5 py-1.5 text-xs font-semibold text-foreground transition hover:border-primary"
           >

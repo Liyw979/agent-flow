@@ -23,6 +23,7 @@
 - 全新 Task 初始化 Zellij pane 时，会优先按最多三列的 tiled grid 摆放，避免默认布局过宽过扁；pane 顺序直接使用当前前端拖拽后保存的 Agent 排序
 - Zellij pane 不再按运行态动态重排，后续顺序只跟随前端拓扑/团队成员区里用户保存的 Agent 排序
 - GUI 聊天区标题栏支持直接打开当前 Task 对应的 Zellij session；打开前会先补齐当前 Task 的全部 Agent pane；macOS 和 Windows 下都会尽量把新拉起的终端窗口自动切到全屏
+- 若当前电脑未安装 `zellij`，Task 创建后会追加系统提醒；GUI 点击“打开 Zellij”和 CLI 进入 session 时也会直接提示先安装 `zellij`
 - Task 群聊支持 `@AgentName` 提交任务，输入 `@` 会弹出候选 Agent 列表，支持方向键、鼠标和 `Tab` 自动补全
 - 群聊中同时展示 `user -> agent`、`agent -> agent` 高层协作消息，以及 Agent 最终回复
 - 当一个 Agent 同时触发多个下游 Agent 时，群聊会合并展示为一条批量 `agent -> agent` 派发消息，而不是拆成多条重复消息
@@ -153,6 +154,7 @@ CLI 能力分组：
 - `task init` 会先创建 Task，并完成该 Task 下全部 Agent 的 OpenCode session 与 Zellij pane 初始化；GUI 群聊会优先推荐并默认选中 `Build`，若用户直接发送且未显式指定目标，也会默认投递给 `Build`
 - GUI 聊天区里的 `Task Started` 系统消息会附带当前 Task 的 `Zellij Session` 名称与可直接执行的 attach 调试命令，方便排查会话问题
 - 点击 GUI 聊天区标题栏里的打开按钮时，macOS 会额外尝试把 Terminal 前台窗口切到全屏；Windows 会优先使用 Windows Terminal 全屏打开，回退到 `cmd.exe` 时也会尽量自动触发 `F11`
+- 如果当前电脑未安装 `zellij`，GUI 和 CLI 都会给出显式提醒；Task 群聊里也会追加一条系统消息说明当前不会创建真实 Zellij pane
 - 对于首次初始化、尚无托管 pane 的 Task，Zellij 会优先生成最多三列的 tiled grid 初始布局，并直接使用当前保存的 Agent 排序来决定 pane 顺序
 - Session 创建对齐官方 `POST /session`
 - 消息发送对齐官方 `POST /session/:id/message`，body 使用 `parts` 数组

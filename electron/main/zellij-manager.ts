@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFile, spawn, type SpawnOptions } from "node:child_process";
 import { promisify } from "node:util";
 import type { TaskPanelRecord } from "@shared/types";
+import { buildZellijMissingMessage } from "@shared/zellij";
 import { toOpenCodeAgentName } from "./opencode-agent-name";
 
 const execFileAsync = promisify(execFile);
@@ -28,10 +29,35 @@ interface AgentPaneSpec {
 const HIDDEN_PANEL_AGENTS = new Set<string>();
 
 export class ZellijManager {
+  private zellijAvailable: boolean | null = null;
+
+  async isAvailable(): Promise<boolean> {
+    if (this.zellijAvailable !== null) {
+      return this.zellijAvailable;
+    }
+
+    try {
+      await execFileAsync("zellij", ["--version"], {
+        timeout: 2000,
+      });
+      this.zellijAvailable = true;
+    } catch {
+      this.zellijAvailable = false;
+    }
+
+    return this.zellijAvailable;
+  }
+
+  async assertAvailable(action: string): Promise<void> {
+    if (!(await this.isAvailable())) {
+      throw new Error(buildZellijMissingMessage(action));
+    }
+  }
+
   async createTaskSession(projectId: string, taskId: string): Promise<string> {
     const sessionName = `oap-${projectId.slice(0, 6)}-${taskId.slice(0, 6)}`;
 
-    if (!(await this.hasZellij())) {
+    if (!(await this.isAvailable())) {
       return sessionName;
     }
 
@@ -47,12 +73,13 @@ export class ZellijManager {
   }
 
   async openTaskSession(sessionName: string, cwd: string): Promise<void> {
+    await this.assertAvailable("无法打开 Zellij Session");
     await this.ensureSessionActive(sessionName);
     await this.openSessionInTerminal(sessionName, cwd);
   }
 
   async deleteTaskSession(sessionName: string | null | undefined): Promise<void> {
-    if (!sessionName || !(await this.hasZellij())) {
+    if (!sessionName || !(await this.isAvailable())) {
       return;
     }
 
@@ -62,7 +89,7 @@ export class ZellijManager {
   }
 
   async listSessionNames(): Promise<Set<string> | null> {
-    if (!(await this.hasZellij())) {
+    if (!(await this.isAvailable())) {
       return null;
     }
 
@@ -106,7 +133,7 @@ export class ZellijManager {
     agents: AgentPaneSpec[];
     forceRebuild?: boolean;
   }): Promise<TaskPanelRecord[]> {
-    if (!(await this.hasZellij())) {
+    if (!(await this.isAvailable())) {
       return this.createPanelBindings(options);
     }
 
@@ -215,7 +242,7 @@ export class ZellijManager {
   }
 
   async dispatchTaskToPane(panel: TaskPanelRecord, content: string): Promise<void> {
-    if (!(await this.hasZellij())) {
+    if (!(await this.isAvailable())) {
       return;
     }
 
@@ -240,10 +267,7 @@ export class ZellijManager {
   }
 
   async focusAgentPANEL(panel: TaskPanelRecord): Promise<void> {
-    if (!(await this.hasZellij())) {
-      return;
-    }
-
+    await this.assertAvailable(`无法打开 Agent ${panel.agentName} 对应的 Zellij pane`);
     await this.ensureSessionActive(panel.sessionName);
 
     await execFileAsync("zellij", [
@@ -254,17 +278,6 @@ export class ZellijManager {
       panel.paneId,
     ]).catch(() => undefined);
     await this.openSessionInTerminal(panel.sessionName, panel.cwd);
-  }
-
-  private async hasZellij(): Promise<boolean> {
-    try {
-      await execFileAsync("zellij", ["--version"], {
-        timeout: 2000,
-      });
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   private isEmptySessionListError(error: unknown): boolean {
@@ -301,7 +314,7 @@ export class ZellijManager {
   }
 
   private async ensureSessionActive(sessionName: string): Promise<void> {
-    if (!(await this.hasZellij())) {
+    if (!(await this.isAvailable())) {
       return;
     }
 
