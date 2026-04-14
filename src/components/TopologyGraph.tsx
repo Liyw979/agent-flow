@@ -105,6 +105,14 @@ const HISTORY_PANEL_PADDING_X = "0.375rem";
 const HISTORY_PANEL_PADDING_Y = "0.25rem";
 const EMPTY_HISTORY_PANEL_PADDING_X = "0.5rem";
 const EMPTY_HISTORY_PANEL_PADDING_Y = "0.375rem";
+const APPROVAL_BADGE_CLASS_NAME = "border border-[#7dae92]/45 bg-[#edf7f1] text-[#24543b]";
+const APPROVAL_HISTORY_CLASS_NAME = "border-[#7dae92]/45 bg-[#edf7f1] text-[#24543b]";
+const APPROVAL_CARD_BORDER = "#7DAE92";
+const APPROVAL_CARD_SHADOW = "0 10px 26px rgba(125,174,146,0.2)";
+const REJECTION_BADGE_CLASS_NAME = "border border-[#d66b63]/45 bg-[#fff1ef] text-[#a33f38]";
+const REJECTION_HISTORY_CLASS_NAME = "border-[#df766e]/45 bg-[#fff1ef] text-[#a33f38]";
+const REJECTION_CARD_BORDER = "#D66B63";
+const REJECTION_CARD_SHADOW = "0 12px 28px rgba(214,107,99,0.2)";
 
 const preferredRoleRank: Partial<Record<AgentRole, number>> = {
   business_analyst: 0,
@@ -232,24 +240,24 @@ function getAgentCardAppearance(
       };
     case "needs_revision":
       return {
-        borderColor: "#E8A24D",
+        borderColor: REJECTION_CARD_BORDER,
         background: agentColor.soft,
         color: agentColor.text,
-        shadow: "0 10px 26px rgba(226,178,111,0.22)",
+        shadow: REJECTION_CARD_SHADOW,
       };
     case "success":
       return {
-        borderColor: agentColor.border,
+        borderColor: APPROVAL_CARD_BORDER,
         background: agentColor.soft,
         color: agentColor.text,
-        shadow: `0 10px 26px ${agentColor.solid}22`,
+        shadow: APPROVAL_CARD_SHADOW,
       };
     case "failed":
       return {
-        borderColor: "rgba(44, 74, 63, 0.95)",
+        borderColor: REJECTION_CARD_BORDER,
         background: agentColor.soft,
         color: agentColor.text,
-        shadow: "0 12px 28px rgba(44,74,63,0.22)",
+        shadow: REJECTION_CARD_SHADOW,
       };
     default:
       return {
@@ -337,21 +345,21 @@ function getAgentStatusBadge(agentName: string, agentState: string) {
     case "success":
       return {
         label: reviewAgent ? "审查通过" : "已完成",
-        className: "border border-[#2c4a3f]/18 bg-[#edf5f0] text-[#2c4a3f]",
+        className: APPROVAL_BADGE_CLASS_NAME,
         effectClassName: "",
         indicatorClassName: "",
       };
     case "failed":
       return {
         label: reviewAgent ? "审查不通过" : "执行失败",
-        className: "border border-[#a95c42]/20 bg-[#fff0ea] text-[#8f4a34]",
+        className: REJECTION_BADGE_CLASS_NAME,
         effectClassName: "",
         indicatorClassName: "",
       };
     case "needs_revision":
       return {
         label: "审查不通过",
-        className: "border border-[#a95c42]/20 bg-[#fff0ea] text-[#8f4a34]",
+        className: REJECTION_BADGE_CLASS_NAME,
         effectClassName: "",
         indicatorClassName: "",
       };
@@ -676,17 +684,17 @@ function getHistoryAppearance(status: string) {
     case "needs_revision":
       return {
         label: "不通过",
-        className: "border-[#e2b26f] bg-[#fff1da] text-[#8a5a19]",
+        className: REJECTION_HISTORY_CLASS_NAME,
       };
     case "failed":
       return {
         label: "不通过",
-        className: "border-primary/35 bg-primary/10 text-primary",
+        className: REJECTION_HISTORY_CLASS_NAME,
       };
     default:
       return {
         label: "通过",
-        className: "border-accent/55 bg-accent/18 text-foreground",
+        className: APPROVAL_HISTORY_CLASS_NAME,
       };
   }
 }
