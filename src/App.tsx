@@ -608,31 +608,6 @@ function App() {
                                     >
                                       {agent.displayName}
                                     </p>
-                                    <button
-                                      type="button"
-                                      draggable={false}
-                                      disabled={!canOpenPane || isOpeningPane}
-                                      title={
-                                        canOpenPane
-                                          ? `打开 ${agent.displayName} 对应的 Zellij pane`
-                                          : "请先选择一个 Task"
-                                      }
-                                      onPointerDown={(event) => {
-                                        event.stopPropagation();
-                                      }}
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        void handleOpenAgentPane(agent.name);
-                                      }}
-                                      className="no-drag rounded-[6px] border px-2 py-1 text-[11px] font-semibold transition hover:brightness-[0.98] disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:opacity-45"
-                                      style={{
-                                        borderColor: agentColor.border,
-                                        color: agentColor.text,
-                                        background: "rgba(255,255,255,0.7)",
-                                      }}
-                                    >
-                                      {isOpeningPane ? "打开中..." : "打开 Pane"}
-                                    </button>
                                   </div>
                                   {mappedPanel && (
                                     <div
@@ -644,12 +619,33 @@ function App() {
                                   )}
                                 </div>
 
-                                <div className="flex shrink-0 flex-col items-end gap-2">
+                                <div className="flex shrink-0 items-center gap-2">
                                   <span
-                                    className="rounded-[6px] border border-border/70 bg-card/90 px-2.5 py-1 text-[11px] text-foreground/75 shadow-sm"
+                                    className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#c96f3b] px-1.5 text-[10px] font-semibold leading-none text-white"
+                                    title={getAgentMetricLabel(agent.messageCount)}
                                   >
-                                    {getAgentMetricLabel(agent.messageCount)}
+                                    {agent.messageCount}
                                   </span>
+                                  <button
+                                    type="button"
+                                    draggable={false}
+                                    disabled={!canOpenPane || isOpeningPane}
+                                    title={
+                                      canOpenPane
+                                        ? `打开 ${agent.displayName} 对应的 Zellij pane`
+                                        : "请先选择一个 Task"
+                                    }
+                                    onPointerDown={(event) => {
+                                      event.stopPropagation();
+                                    }}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void handleOpenAgentPane(agent.name);
+                                    }}
+                                    className="no-drag inline-flex items-center justify-center rounded-[6px] border border-border/70 bg-card/90 px-2.5 py-1 text-[11px] font-medium text-foreground/75 shadow-sm transition hover:border-primary disabled:cursor-not-allowed disabled:hover:border-border/70 disabled:opacity-45"
+                                  >
+                                    {isOpeningPane ? "打开中..." : "打开 Pane"}
+                                  </button>
                                 </div>
                               </div>
                             </div>

@@ -228,9 +228,10 @@ function getAgentStatusBadge(agentName: string, agentState: string) {
     case "running":
       return {
         label: "运行中",
-        className: "border border-[#d4a62c] bg-[linear-gradient(180deg,#fff5c9_0%,#ffe79a_100%)] text-[#5f4300]",
+        className:
+          "border border-[#d8b14a]/70 bg-[linear-gradient(180deg,#fff7d8_0%,#ffedb8_100%)] text-[#6b5208]",
         effectClassName: "topology-status-badge-running",
-        indicatorClassName: "topology-status-badge-running-indicator",
+        indicatorClassName: "",
       };
     case "success":
       return {

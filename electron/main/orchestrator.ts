@@ -313,14 +313,17 @@ export class Orchestrator {
       payload: snapshot,
     });
 
-    const panel = this.store
-      .listTaskPanels(task.id)
-      .find((item) => item.agentName === payload.agentName);
-    if (!panel) {
-      throw new Error(`未找到 Agent ${payload.agentName} 对应的 Zellij pane。`);
+    const panel = this.store.listTaskPanels(task.id).find((item) => item.agentName === payload.agentName);
+    const taskAgent = this.store.listTaskAgents(task.id).find((item) => item.name === payload.agentName);
+    if (!panel || !taskAgent) {
+      throw new Error(`未找到 Agent ${payload.agentName} 对应的运行信息。`);
     }
-    await this.zellijManager.assertAvailable(`无法打开 Agent ${payload.agentName} 对应的 Zellij pane`);
-    await this.zellijManager.focusAgentPANEL(panel);
+    await this.zellijManager.openAgentTerminal({
+      sessionName: panel.sessionName,
+      cwd: panel.cwd,
+      agentName: payload.agentName,
+      opencodeSessionId: taskAgent.opencodeSessionId,
+    });
   }
 
   async openTaskSession(payload: OpenTaskSessionPayload): Promise<void> {
