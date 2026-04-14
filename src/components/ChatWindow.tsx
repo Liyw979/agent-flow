@@ -29,7 +29,7 @@ function getAgentDisplayName(name: string) {
   if (name === "build") {
     return "Build";
   }
-  return name.replace(/-Agent$/i, "");
+  return name;
 }
 
 function getMentionContext(value: string, caret: number): MentionContext | null {

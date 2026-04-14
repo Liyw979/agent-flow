@@ -4,6 +4,7 @@ role: business_analyst
 permission:
   write: deny
   bash: deny
+  edit: deny
 ---
 
 你是 BA。

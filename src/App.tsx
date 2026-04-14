@@ -19,7 +19,7 @@ function getAgentDisplayName(name: string) {
   if (name === "build") {
     return "Build";
   }
-  return name.replace(/-Agent$/i, "");
+  return name;
 }
 
 function moveItemBefore(items: string[], sourceId: string, targetId: string) {

@@ -10,6 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "cli": "node electron/cli/launcher.cjs",
+    "test:ba-permission": "tsx --tsconfig tsconfig.node.json scripts/ba-permission-integration.ts",
     "electron:dev": "electron-vite dev",
     "electron:build": "electron-vite build",
     "lint": "tsc --noEmit"

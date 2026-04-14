@@ -19,7 +19,6 @@ export interface SubmitMessagePayload {
   content: string;
   agent: string;
   system: string;
-  tools: string[];
 }
 
 export interface OpenCodeNormalizedMessage {
@@ -190,10 +189,8 @@ export class OpenCodeClient {
         },
       ],
     };
-
-    if (payload.tools.length > 0) {
-      body.tools = Object.fromEntries(payload.tools.map((tool) => [tool, true]));
-    }
+    // Do not send deprecated `tools` here. OpenCode copies that field into session-level
+    // permissions, which can accidentally reopen write/edit/bash access for restricted agents.
 
     const response = await this.request(`/session/${sessionId}/message`, {
       method: "POST",
