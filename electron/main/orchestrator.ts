@@ -2125,7 +2125,7 @@ export class Orchestrator {
       content:
         status === "finished"
           ? `Task「${snapshot.task.title}」已结束，状态已切换为 finished，群聊中保留的是高层阶段消息与最终回复。`
-          : `Task「${snapshot.task.title}」已收口为“不通过”或执行失败，请根据当前群聊消息和对应 Agent 状态继续排查。`,
+          : `Task「${snapshot.task.title}」已结束，本轮结果未通过检查，或执行过程已中断。请直接查看群聊中最近一条失败消息，并继续处理状态为“审视不通过”或“执行失败”的 Agent。`,
       meta: {
         kind: "task-completed",
         status,
