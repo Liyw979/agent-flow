@@ -124,10 +124,8 @@ function getDefaultAgentName(agents: string[]): string | undefined {
 
 function MessageBubble({
   message,
-  senderBadgeWidth,
 }: {
   message: ChatMessageItem;
-  senderBadgeWidth: string;
 }) {
   const isUser = message.sender === "user";
   const isSystem = message.sender === "system";
@@ -188,27 +186,24 @@ function MessageBubble({
       )}
       style={bubbleStyle}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-baseline gap-2">
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           {senderLabel ? (
             <span
               className={cn(
-                "shrink-0 rounded-[8px] px-2 py-0.5 text-center text-xs font-semibold leading-5 tracking-[0.02em]",
+                "inline-flex max-w-full shrink-0 rounded-[8px] px-2 py-0.5 text-center text-xs font-semibold leading-5 tracking-[0.02em]",
                 !isAgent && !isUser && "bg-black/8 text-current",
               )}
-              style={{
-                width: senderBadgeWidth,
-                ...senderBadgeStyle,
-              }}
+              style={senderBadgeStyle}
             >
               {senderLabel}
             </span>
           ) : null}
-          <div className="min-w-0 text-sm leading-5 break-words">{message.content}</div>
+          <span className="shrink-0 text-xs leading-5 opacity-80" style={metaTextStyle}>
+            {new Date(message.timestamp).toLocaleString()}
+          </span>
         </div>
-        <span className="shrink-0 text-[11px] leading-5 opacity-80" style={metaTextStyle}>
-          {new Date(message.timestamp).toLocaleString()}
-        </span>
+        <div className="min-w-0 text-sm leading-5 break-words">{message.content}</div>
       </div>
     </article>
   );
@@ -246,15 +241,6 @@ export function ChatWindow({
     ),
     [task],
   );
-  const senderBadgeWidth = useMemo(() => {
-    const candidateNames = new Set(["System", ...availableAgents]);
-    for (const message of messages) {
-      candidateNames.add(message.sender === "system" ? "System" : getAgentDisplayName(message.sender));
-    }
-
-    const longestLength = Math.max(...Array.from(candidateNames).map((name) => name.length), 4);
-    return `${Math.min(Math.max(longestLength + 2, 6), 14)}ch`;
-  }, [availableAgents, messages]);
   const mentionOptions = useMemo(() => {
     if (!mentionContext) {
       return [];
@@ -425,7 +411,7 @@ export function ChatWindow({
       <div className="flex-1 min-h-0 space-y-3 overflow-y-auto px-5 py-4">
         {messages.length > 0 ? (
           messages.map((message) => (
-            <MessageBubble key={message.id} message={message} senderBadgeWidth={senderBadgeWidth} />
+            <MessageBubble key={message.id} message={message} />
           ))
         ) : (
           <div className="rounded-[8px] border border-dashed border-border/70 bg-card/60 px-4 py-4 text-sm text-muted-foreground">
