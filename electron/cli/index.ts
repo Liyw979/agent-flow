@@ -503,8 +503,8 @@ function buildHelp() {
 
   topology show [--cwd <path>]
   topology set-downstream <sourceAgent> [targetAgent... ] [--cwd <path>]
-  topology allow <sourceAgent> <targetAgent> [--relation <association|review>] [--cwd <path>]
-  topology deny <sourceAgent> <targetAgent> [--relation <association|review>] [--cwd <path>]
+  topology allow <sourceAgent> <targetAgent> [--relation <association|review_pass|review_fail>] [--cwd <path>]
+  topology deny <sourceAgent> <targetAgent> [--relation <association|review_pass|review_fail>] [--cwd <path>]
 
   panel focus <taskId> <agentName> [--cwd <path>]
 
@@ -514,8 +514,9 @@ function buildHelp() {
   --json          输出 JSON
 
 关系语义：
-  association     当前 Agent 只要完成本轮任务就自动触发下游
-  review          当前 Agent 本轮失败、给出“需要修改 / 审视不通过”时才触发下游
+  association     当前 Agent 正常完成本轮任务后，直接传递到下游
+  review_pass     当前 Agent 输出“【DECISION】检查通过”后，才传递到下游
+  review_fail     当前 Agent 输出“【DECISION】需要修改”后，才传递到下游
 
 说明：
   - CLI 会直接复用 Orchestrator、文件存储、OpenCode client、Zellij manager 这套主逻辑。
@@ -779,10 +780,13 @@ function parseTopologyRelation(parsed: ParsedArgv): TopologyEdge["triggerOn"] {
   if (!relation) {
     return "association";
   }
-  if (relation === "association" || relation === "review") {
+  if (relation === "association" || relation === "review_pass" || relation === "review_fail") {
     return relation;
   }
-  fail(`未知关系类型：${relation}。可选值：association / review`);
+  if (relation === "review") {
+    return "review_fail";
+  }
+  fail(`未知关系类型：${relation}。可选值：association / review_pass / review_fail`);
 }
 
 async function saveTopology(
@@ -814,7 +818,7 @@ async function handleTopology(context: CliContext, parsed: ParsedArgv) {
 
     printSection("Edges");
     if (project.topology.edges.length === 0) {
-      process.stdout.write("当前没有任何触发边。\n");
+      process.stdout.write("当前没有任何传递边。\n");
       return;
     }
     for (const edge of project.topology.edges) {
@@ -834,7 +838,7 @@ async function handleTopology(context: CliContext, parsed: ParsedArgv) {
       printJson(updated.topology);
       return;
     }
-    process.stdout.write(`已更新 ${sourceAgent} 的关联下游集合。\n`);
+    process.stdout.write(`已更新 ${sourceAgent} 的传递下游集合。\n`);
     return;
   }
 
@@ -842,7 +846,7 @@ async function handleTopology(context: CliContext, parsed: ParsedArgv) {
     assertPositionals(
       parsed,
       4,
-      `topology ${action} <sourceAgent> <targetAgent> [--relation <association|review>] [--cwd <path>]`,
+      `topology ${action} <sourceAgent> <targetAgent> [--relation <association|review_pass|review_fail>] [--cwd <path>]`,
     );
     const sourceAgent = parsed.positionals[2] ?? "";
     const targetAgent = parsed.positionals[3] ?? "";
@@ -857,7 +861,9 @@ async function handleTopology(context: CliContext, parsed: ParsedArgv) {
       nextTopology = {
         ...project.topology,
         edges: [
-          ...project.topology.edges,
+          ...project.topology.edges.filter(
+            (edge) => !(edge.source === sourceAgent && edge.target === targetAgent),
+          ),
           {
             id: edgeId,
             source: sourceAgent,
@@ -882,7 +888,7 @@ async function handleTopology(context: CliContext, parsed: ParsedArgv) {
     }
     process.stdout.write(
       action === "allow"
-        ? `已允许 ${sourceAgent} -> ${targetAgent} (${trigger})`
+        ? `已设置 ${sourceAgent} -> ${targetAgent} (${trigger})`
         : `已移除 ${sourceAgent} -> ${targetAgent} (${trigger})`,
     );
     process.stdout.write("\n");

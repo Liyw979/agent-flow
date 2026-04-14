@@ -14,7 +14,7 @@ import {
   type Node,
 } from "@xyflow/react";
 import { getAgentColorToken } from "@/lib/agent-colors";
-import { isBuiltinAgentPath, isReviewAgentName, resolveTopologyAgentOrder } from "@shared/types";
+import { isBuiltinAgentPath, isReviewAgentInTopology, resolveTopologyAgentOrder } from "@shared/types";
 import type {
   AgentRole,
   AgentRuntimeSnapshot,
@@ -105,17 +105,17 @@ const REJECTION_CARD_SHADOW = "0 12px 28px rgba(214,107,99,0.2)";
 const preferredRoleRank: Partial<Record<AgentRole, number>> = {
   business_analyst: 0,
   implementation: 1,
-  docs_review: 2,
-  code_review: 2,
   unit_test: 2,
   integration_test: 2,
+  code_review: 2,
+  task_review: 2,
 };
 
 const preferredRoleRowOrder: Partial<Record<AgentRole, number>> = {
-  docs_review: 0,
-  unit_test: 1,
-  integration_test: 2,
-  code_review: 3,
+  unit_test: 0,
+  integration_test: 1,
+  code_review: 2,
+  task_review: 3,
 };
 
 function getAgentDisplayName(name: string) {
@@ -182,35 +182,74 @@ function createEdgeId(source: string, target: string, triggerOn: TopologyEdge["t
 }
 
 function getEdgeTriggerLabel(triggerOn: TopologyEdge["triggerOn"]) {
-  return triggerOn === "association" ? "关联" : "审视";
+  switch (triggerOn) {
+    case "association":
+      return "传递";
+    case "review_pass":
+      return "审视通过";
+    case "review_fail":
+      return "审视不通过";
+    default:
+      return triggerOn;
+  }
 }
 
 function getEdgeTriggerDescription(triggerOn: TopologyEdge["triggerOn"]) {
-  return triggerOn === "association"
-    ? "当前 Agent 只要完成本轮任务，就会 100% 自动派发到这个下游 Agent。"
-    : "当前 Agent 本轮失败、给出“需要修改 / 审视不通过”时，才会派发到这个下游 Agent。";
+  switch (triggerOn) {
+    case "association":
+      return "当前 Agent 正常完成本轮任务后，会自动传递到这个下游 Agent。";
+    case "review_pass":
+      return "当前 Agent 输出“【DECISION】检查通过”时，才会传递到这个下游 Agent。";
+    case "review_fail":
+      return "当前 Agent 输出“【DECISION】需要修改”时，才会传递到这个下游 Agent。";
+    default:
+      return "";
+  }
 }
 
 function getEdgeTriggerAppearance(triggerOn: TopologyEdge["triggerOn"]) {
-  return triggerOn === "association"
-    ? {
+  switch (triggerOn) {
+    case "association":
+      return {
         color: "#2C4A3F",
         strokeWidth: 2,
         strokeDasharray: undefined,
         zIndex: 1,
         animated: false,
-      }
-    : {
+      };
+    case "review_pass":
+      return {
+        color: "#2F5E9E",
+        strokeWidth: 2,
+        strokeDasharray: "6 4",
+        zIndex: 1,
+        animated: false,
+      };
+    case "review_fail":
+      return {
         color: "#A95C42",
         strokeWidth: 2,
         strokeDasharray: "6 4",
         zIndex: 1,
         animated: false,
       };
+    default:
+      return {
+        color: "#2C4A3F",
+        strokeWidth: 2,
+        strokeDasharray: undefined,
+        zIndex: 1,
+        animated: false,
+      };
+  }
 }
 
-function getAgentStatusBadge(agentName: string, agentState: string) {
-  const reviewAgent = isReviewAgentName(agentName);
+function getAgentStatusBadge(
+  topology: Pick<TopologyRecord, "edges">,
+  agentName: string,
+  agentState: string,
+) {
+  const reviewAgent = isReviewAgentInTopology(topology, agentName);
 
   switch (agentState) {
     case "idle":
@@ -230,21 +269,21 @@ function getAgentStatusBadge(agentName: string, agentState: string) {
       };
     case "success":
       return {
-        label: reviewAgent ? "审查通过" : "已完成",
+        label: reviewAgent ? "审视通过" : "已完成",
         className: "border border-[#2c4a3f]/18 bg-[#edf5f0] text-[#2c4a3f]",
         effectClassName: "",
         icon: "success",
       };
     case "failed":
       return {
-        label: reviewAgent ? "审查不通过" : "执行失败",
+        label: reviewAgent ? "审视不通过" : "执行失败",
         className: REJECTION_BADGE_CLASS_NAME,
         effectClassName: "",
         icon: "failed",
       };
     case "needs_revision":
       return {
-        label: "审查不通过",
+        label: "审视不通过",
         className: REJECTION_BADGE_CLASS_NAME,
         effectClassName: "",
         icon: "needs_revision",
@@ -336,8 +375,12 @@ function renderAgentStatusIcon(statusBadge: ReturnType<typeof getAgentStatusBadg
   );
 }
 
-export function getTopologyAgentStatusLabel(agentName: string, agentState: string) {
-  return getAgentStatusBadge(agentName, agentState).label;
+export function getTopologyAgentStatusLabel(
+  topology: Pick<TopologyRecord, "edges">,
+  agentName: string,
+  agentState: string,
+) {
+  return getAgentStatusBadge(topology, agentName, agentState).label;
 }
 
 export function getTopologyEdgeTriggerAppearance(triggerOn: TopologyEdge["triggerOn"]) {
@@ -1173,7 +1216,8 @@ export function TopologyGraph({
     nodeColumnHeight: number,
     nodeCardWidth: number,
   ): Node[] {
-    if (!draft) {
+    const topologyForStatus = draft ?? project?.topology;
+    if (!draft || !topologyForStatus) {
       return [];
     }
 
@@ -1191,7 +1235,7 @@ export function TopologyGraph({
         targetPosition: Position.Left,
       };
       const runtime = agentState === "running" ? runtimeSnapshots[node.id] : undefined;
-      const statusBadge = getAgentStatusBadge(node.id, agentState);
+      const statusBadge = getAgentStatusBadge(topologyForStatus, node.id, agentState);
       const agentBlockHeight = getAgentBlockHeight(agentState);
       const historyItems = agentHistories.get(node.id) ?? [];
       const appearance = getAgentCardAppearance(agentState, agentColor);
@@ -1552,12 +1596,7 @@ export function TopologyGraph({
     }
 
     const retained = draft.edges.filter(
-      (edge) =>
-        !(
-          edge.source === editingAgentId &&
-          edge.target === target &&
-          edge.triggerOn === triggerOn
-        ),
+      (edge) => !(edge.source === editingAgentId && edge.target === target),
     );
     const nextEdges = enabled
       ? [
@@ -1664,7 +1703,7 @@ export function TopologyGraph({
         {compact || !showEdgeList ? null : (
           <div className="min-h-0 rounded-[8px] border border-border/70 bg-card/80 p-4">
             <div className="mb-3">
-              <p className="font-semibold text-primary">触发关系</p>
+              <p className="font-semibold text-primary">传递关系</p>
             </div>
             <div className="max-h-full space-y-2 overflow-y-auto">
               {(draft?.edges ?? []).map((edge) => (
@@ -1776,8 +1815,9 @@ export function TopologyGraph({
 
             <div className="mt-5 rounded-[8px] border border-border/70 bg-[#f8f4ea] px-4 py-3 text-xs text-muted-foreground">
               <p className="font-semibold text-primary">关系类型</p>
-              <p className="mt-1">关联：上游 Agent 只要完成本轮任务，100% 自动派发到下游。</p>
-              <p className="mt-1">审视：上游 Agent 本轮失败、给出“需要修改 / 审视不通过”时才派发到下游；审视通过则停在当前节点显示已完成。</p>
+              <p className="mt-1">传递：上游 Agent 正常完成本轮任务后，直接传递到下游。</p>
+              <p className="mt-1">审视通过：上游 Agent 输出“【DECISION】检查通过”后，才传递到下游。</p>
+              <p className="mt-1">审视不通过：上游 Agent 输出“【DECISION】需要修改”后，才传递到下游。</p>
             </div>
 
             <div className="mt-5 space-y-2">
@@ -1812,7 +1852,7 @@ export function TopologyGraph({
                         ) : null}
                       </div>
                       <div className="flex min-w-[220px] flex-wrap justify-end gap-2">
-                        {(["association", "review"] as TopologyEdge["triggerOn"][]).map((trigger) => {
+                        {(["association", "review_pass", "review_fail"] as TopologyEdge["triggerOn"][]).map((trigger) => {
                           const selected = selectedTriggers.has(trigger);
                           return (
                             <button

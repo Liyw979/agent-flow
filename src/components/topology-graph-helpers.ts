@@ -1,15 +1,19 @@
-import type { TopologyEdge, TopologyRecord } from "@shared/types";
+import { isReviewAgentInTopology, type TopologyEdge, type TopologyRecord } from "@shared/types";
 
-export function getTopologyAgentStatusLabel(agentName: string, agentState: string) {
-  const reviewAgent = !agentName.trim().toLowerCase().startsWith("build");
+export function getTopologyAgentStatusLabel(
+  topology: Pick<TopologyRecord, "edges">,
+  agentName: string,
+  agentState: string,
+) {
+  const reviewAgent = isReviewAgentInTopology(topology, agentName);
 
   switch (agentState) {
     case "success":
-      return reviewAgent ? "审查通过" : "已完成";
+      return reviewAgent ? "审视通过" : "已完成";
     case "failed":
-      return reviewAgent ? "审查不通过" : "执行失败";
+      return reviewAgent ? "审视不通过" : "执行失败";
     case "needs_revision":
-      return "审查不通过";
+      return "审视不通过";
     case "running":
       return "运行中";
     default:
@@ -18,21 +22,40 @@ export function getTopologyAgentStatusLabel(agentName: string, agentState: strin
 }
 
 export function getTopologyEdgeTriggerAppearance(triggerOn: TopologyEdge["triggerOn"]) {
-  return triggerOn === "association"
-    ? {
+  switch (triggerOn) {
+    case "association":
+      return {
         color: "#2C4A3F",
         strokeWidth: 2,
         strokeDasharray: undefined,
         zIndex: 1,
         animated: false,
-      }
-    : {
+      };
+    case "review_pass":
+      return {
+        color: "#2F5E9E",
+        strokeWidth: 2,
+        strokeDasharray: "6 4",
+        zIndex: 1,
+        animated: false,
+      };
+    case "review_fail":
+      return {
         color: "#A95C42",
         strokeWidth: 2,
         strokeDasharray: "6 4",
         zIndex: 1,
         animated: false,
       };
+    default:
+      return {
+        color: "#2C4A3F",
+        strokeWidth: 2,
+        strokeDasharray: undefined,
+        zIndex: 1,
+        animated: false,
+      };
+  }
 }
 
 export function getTopologyNodeOrder(

@@ -149,18 +149,18 @@ Task 群聊中至少要出现三类消息：
 1. 用户：
    `@Build 请实现登录流程并补测试。`
 2. Build：
-   `@DocsReview 请检查 README.md 与 AGENTS.md 是否需要同步更新。`
+   `@TaskReview 请检查交付结果是否完整。`
 3. Build：
    `@UnitTest 请开始单元测试。`
 4. Build：
    `@IntegrationTest 请开始集成测试。`
-5. DocsReview：
+5. TaskReview：
    `已完成文档审查，README.md 和 AGENTS.md 已同步核对。`
 
 这里要注意：
 
 - 前端看到的是一种群聊表达
-- “Build @ DocsReview” 这类消息是协作可视化
+- “Build @ TaskReview” 这类消息是协作可视化
 - 底层真正的调度动作由 Orchestrator 统一完成
 - Agent 在执行中产生的大量工具调用、搜索、grep、编辑等 low-level 过程，不默认进入 Task 群聊
 - Task 群聊默认只展示对用户有意义的高层消息，尤其是该 Agent 本轮任务的最终回复
@@ -219,7 +219,7 @@ Task 群聊中至少要出现三类消息：
 也就是说，前端看到的可能是：
 
 - `Build: @UnitTest 请开始单元测试。`
-- `Build: @DocsReview 请检查 README.md 与 AGENTS.md。`
+- `Build: @TaskReview 请检查当前交付是否达标。`
 - `Build: @IntegrationTest 请开始集成测试。`
 - `BA: @Build 请继续推进实现。`
 
@@ -298,11 +298,11 @@ Task 群聊中至少要出现三类消息：
 
 - 点中 `Build`
 - 弹框里勾选 `UnitTest`
-- 再勾选 `DocsReview`
+- 再勾选 `TaskReview`
 - 再勾选 `IntegrationTest`
 - 保存后，拓扑图更新为：
   `Build -> UnitTest`
-  `Build -> DocsReview`
+  `Build -> TaskReview`
   `Build -> IntegrationTest`
 
 也就是说，拓扑图本身就是配置结果的可视化：

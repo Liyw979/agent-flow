@@ -27,13 +27,13 @@ function createProjectSnapshot(topology: TopologyRecord): ProjectSnapshot {
         content: "",
       },
       {
-        id: `${topology.projectId}:DocsReview`,
+        id: `${topology.projectId}:TaskReview`,
         projectId: topology.projectId,
-        name: "DocsReview",
-        relativePath: "DocsReview.md",
-        absolutePath: "/tmp/demo/.opencode/agents/DocsReview.md",
+        name: "TaskReview",
+        relativePath: "TaskReview.md",
+        absolutePath: "/tmp/demo/.opencode/agents/TaskReview.md",
         mode: "subagent",
-        role: "docs_review",
+        role: "task_review",
         tools: [],
         prompt: "",
         content: "",
@@ -74,8 +74,8 @@ function createTaskSnapshot(topology: TopologyRecord): TaskSnapshot {
     },
     agents: [
       { id: "task-1:BA", taskId: "task-1", projectId: topology.projectId, name: "BA", opencodeSessionId: null, status: "success", runCount: 1 },
-      { id: "task-1:DocsReview", taskId: "task-1", projectId: topology.projectId, name: "DocsReview", opencodeSessionId: null, status: "failed", runCount: 1 },
-      { id: "task-1:Build", taskId: "task-1", projectId: topology.projectId, name: "Build", opencodeSessionId: null, status: "needs_revision", runCount: 1 },
+      { id: "task-1:TaskReview", taskId: "task-1", projectId: topology.projectId, name: "TaskReview", opencodeSessionId: null, status: "success", runCount: 1 },
+      { id: "task-1:Build", taskId: "task-1", projectId: topology.projectId, name: "Build", opencodeSessionId: null, status: "failed", runCount: 1 },
     ],
     panels: [],
     messages: [],
@@ -87,15 +87,17 @@ function getTopologyHtml() {
   const topology: TopologyRecord = {
     projectId: "project-1",
     startAgentId: "BA",
-    agentOrderIds: ["DocsReview", "BA", "Build"],
+    agentOrderIds: ["TaskReview", "BA", "Build"],
     nodes: [
       { id: "BA", label: "BA", kind: "agent" },
-      { id: "DocsReview", label: "DocsReview", kind: "agent" },
+      { id: "TaskReview", label: "TaskReview", kind: "agent" },
       { id: "Build", label: "Build", kind: "agent" },
     ],
     edges: [
-      { id: "BA__DocsReview__association", source: "BA", target: "DocsReview", triggerOn: "association" },
-      { id: "DocsReview__Build__review", source: "DocsReview", target: "Build", triggerOn: "review" },
+      { id: "BA__Build__association", source: "BA", target: "Build", triggerOn: "association" },
+      { id: "Build__TaskReview__association", source: "Build", target: "TaskReview", triggerOn: "association" },
+      { id: "TaskReview__BA__review_pass", source: "TaskReview", target: "BA", triggerOn: "review_pass" },
+      { id: "TaskReview__Build__review_fail", source: "TaskReview", target: "Build", triggerOn: "review_fail" },
     ],
   };
 
@@ -116,12 +118,11 @@ function getTopologyHtml() {
 test("TopologyGraph 真实渲染包含状态徽标和边关系", () => {
   const html = getTopologyHtml();
 
-  assert.match(html, /审查通过/);
-  assert.match(html, /审查不通过/);
+  assert.match(html, /审视通过/);
   assert.match(html, /已完成/);
   assert.match(html, /执行失败/);
-  assert.match(html, /needs_revision/);
-  assert.match(html, /关联/);
-  assert.match(html, /审视/);
-  assert.ok(html.indexOf("DocsReview") < html.indexOf("BA") && html.indexOf("BA") < html.indexOf("Build"));
+  assert.match(html, /传递/);
+  assert.match(html, /审视通过/);
+  assert.match(html, /审视不通过/);
+  assert.ok(html.indexOf("TaskReview") < html.indexOf("BA") && html.indexOf("BA") < html.indexOf("Build"));
 });

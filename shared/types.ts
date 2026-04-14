@@ -9,8 +9,8 @@ export type AgentMode = "primary" | "subagent";
 export type AgentRole =
   | "business_analyst"
   | "implementation"
+  | "task_review"
   | "code_review"
-  | "docs_review"
   | "unit_test"
   | "integration_test"
   | string;
@@ -98,7 +98,7 @@ export interface TopologyNode {
   kind: "agent" | "checkpoint";
 }
 
-export type TopologyEdgeTrigger = "association" | "review";
+export type TopologyEdgeTrigger = "association" | "review_pass" | "review_fail";
 
 export interface TopologyEdge {
   id: string;
@@ -255,8 +255,15 @@ export function isBuildAgentName(agentName: string): boolean {
   return agentName === BUILD_AGENT_NAME;
 }
 
-export function isReviewAgentName(agentName: string): boolean {
-  return !isBuildAgentName(agentName);
+export function isReviewAgentInTopology(
+  topology: Pick<TopologyRecord, "edges">,
+  agentName: string,
+): boolean {
+  return topology.edges.some(
+    (edge) =>
+      edge.source === agentName &&
+      (edge.triggerOn === "review_pass" || edge.triggerOn === "review_fail"),
+  );
 }
 
 function findAgentByRole(agents: TopologyAgentSeed[], role: AgentRole): TopologyAgentSeed | null {
@@ -318,10 +325,10 @@ export function resolveTopologyAgentOrder(
 
   push(startAgentName);
   push(implementationAgent?.name);
-  push(findAgentByRole(agents as TopologyAgentSeed[], "docs_review")?.name);
   push(findAgentByRole(agents as TopologyAgentSeed[], "unit_test")?.name);
   push(findAgentByRole(agents as TopologyAgentSeed[], "integration_test")?.name);
   push(findAgentByRole(agents as TopologyAgentSeed[], "code_review")?.name);
+  push(findAgentByRole(agents as TopologyAgentSeed[], "task_review")?.name);
 
   for (const agent of primaryAgents) {
     push(agent.name);
@@ -348,7 +355,7 @@ export function createDefaultTopology(projectId: string, agents: TopologyAgentSe
     builtinPrimaryAgents[0] ??
     primaryAgents.find((agent) => agent.name !== startAgent?.name) ??
     null;
-  const docsReviewAgent = findAgentByRole(agents, "docs_review");
+  const taskReviewAgent = findAgentByRole(agents, "task_review");
   const unitTestAgent = findAgentByRole(agents, "unit_test");
   const integrationTestAgent = findAgentByRole(agents, "integration_test");
   const codeReviewAgent = findAgentByRole(agents, "code_review");
@@ -369,17 +376,25 @@ export function createDefaultTopology(projectId: string, agents: TopologyAgentSe
 
   if (startAgent && implementationAgent && startAgent.name !== implementationAgent.name) {
     push(startAgent.name, implementationAgent.name, "association");
-    push(startAgent.name, implementationAgent.name, "review");
   }
-  push(implementationAgent?.name, docsReviewAgent?.name, "association");
   push(implementationAgent?.name, unitTestAgent?.name, "association");
   push(implementationAgent?.name, integrationTestAgent?.name, "association");
-  push(implementationAgent?.name, codeReviewAgent?.name, "association");
-  push(docsReviewAgent?.name, implementationAgent?.name, "review");
-  push(unitTestAgent?.name, implementationAgent?.name, "review");
-  push(integrationTestAgent?.name, implementationAgent?.name, "review");
-  push(codeReviewAgent?.name, implementationAgent?.name, "review");
-  push(integrationTestAgent?.name, startAgent?.name, "association");
+
+  const taskReviewUpstreams = [unitTestAgent?.name, integrationTestAgent?.name].filter(
+    (name): name is string => Boolean(name),
+  );
+  if (taskReviewUpstreams.length > 0) {
+    for (const upstream of taskReviewUpstreams) {
+      push(upstream, taskReviewAgent?.name, "review_pass");
+    }
+  } else {
+    push(implementationAgent?.name, taskReviewAgent?.name, "association");
+  }
+
+  push(taskReviewAgent?.name, implementationAgent?.name, "review_fail");
+  push(unitTestAgent?.name, implementationAgent?.name, "review_fail");
+  push(integrationTestAgent?.name, implementationAgent?.name, "review_fail");
+  push(codeReviewAgent?.name, implementationAgent?.name, "review_fail");
 
   return {
     projectId,

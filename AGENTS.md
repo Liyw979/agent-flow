@@ -6,7 +6,7 @@
 
 - `BA`
 - `CodeReview`
-- `DocsReview`
+- `TaskReview`
 - `IntegrationTest`
 - `UnitTest`
 
@@ -20,11 +20,12 @@
 - Agent frontmatter 使用最新的 `permission:` 配置字段，值使用 `allow / ask / deny`
 - 对只读 Agent，`write / edit / bash` 设为 `deny` 时，`patch / task` 也必须一起限制；运行时会对这类缺省项自动补成 `deny`，避免借子代理绕过只读约束
 - `Build` 是项目内部名称，底层对应 OpenCode 自带内置 `build` agent，不对应本地 Markdown 文件
-- 除 `Build` 外，其余本地 Agent、非本地 Agent、公共 Agent 一律按“审查类 Agent”处理；只有 OpenCode 内置 `Build` 是实际执行实现的 Agent
-- 审查类 Agent 通过 OpenCode HTTP 配置接口会被默认强制注入 `write/edit/bash: deny`，不依赖它们各自 Markdown 里是否手写了权限
+- 只有存在出去的 `review_pass / review_fail` 边的 Agent，才按“审视 Agent”处理；只有这类 Agent 会被注入审视用的 DECISION system prompt
+- 审视 Agent 会通过 OpenCode HTTP 配置接口被默认强制注入 `write/edit/bash: deny`，不依赖它们各自 Markdown 里是否手写了权限
 - 当前处于项目开发初期，不要求兼容历史数据；如果现有 Project 状态、拓扑或运行数据与当前实现不一致，优先直接修正当前数据与实现，不额外为旧数据添加兼容分支
 - 默认拓扑只在 Project 首次初始化、且当前还没有拓扑数据时按 `role / mode / 是否内置` 自动推断
-- 当前默认工作流里，`BA -> Build`、`Build -> (DocsReview / UnitTest / IntegrationTest)`、`IntegrationTest -> BA` 使用 `association`；`BA / DocsReview / UnitTest / IntegrationTest -> Build` 使用 `review`
+- `TaskReview` 现在承担“任务交付审视”角色
+- 当前默认工作流里，`BA -> Build`、`Build -> (UnitTest / IntegrationTest)` 使用 `association`；`UnitTest / IntegrationTest -> TaskReview` 使用 `review_pass`；`TaskReview / UnitTest / IntegrationTest / CodeReview -> Build` 使用 `review_fail`
 - `CodeReview` 目前保留为可选 Agent，不会自动加入默认链路，只有用户手动改拓扑时才会接入
 - Project 一旦已有拓扑，后续运行时只认当前拓扑，不会再根据固定名字做调度判断
 - Task 不再快照 Agent 的 prompt / permission 定义；运行时始终读取当前 Project 下 `.opencode/agents/**/*.md` 的最新内容，`.agentflow/state.json` 里的 `taskAgents` 只保留运行态字段
@@ -32,18 +33,18 @@
 - CLI 不再在 `<project>/.agentflow/projects.json` 静默回退创建本地 Project registry；若默认全局目录不可写，必须显式设置 `AGENTFLOW_USER_DATA_DIR`
 - GUI 主布局为：左侧 `Project + Task` 列表，右侧上方大拓扑图，右侧下方左聊天、右 Agent 列表
 - 右下角团队成员面板顶部仅展示当前 Task 的 panel 绑定摘要，不再额外显示最后一条群聊消息预览
-- 当一个 Agent 同时触发多个下游 Agent 时，聊天区会合并展示为一条批量 `Agent -> Agent` 派发消息，而不是拆成多条重复消息
-- 同一个 Agent 的最终回复后若紧接着自动触发下游，聊天区会把“最终回复 + 下游派发提示”合并展示成同一条消息；合并后只追加 `@目标Agent` 标记，避免连续出现两条重复的同名 Agent 卡片
-- 审查类 Agent 给出“需要修改 / 审查不通过”后，聊天区会把该 Agent 的高层结论与发给下游整改 Agent 的请求合并展示成同一条消息；默认先展示高层结论与整改细节，再在消息末尾统一追加 `@目标Agent` 标记
+- 当一个 Agent 同时向多个下游 Agent 传递时，聊天区会合并展示为一条批量 `Agent -> Agent` 派发消息，而不是拆成多条重复消息
+- 同一个 Agent 的最终回复后若紧接着自动向下游传递，聊天区会把“最终回复 + 下游派发提示”合并展示成同一条消息；合并后只追加 `@目标Agent` 标记，避免连续出现两条重复的同名 Agent 卡片
+- 审视 Agent 给出“需要修改 / 审视不通过”后，聊天区会把该 Agent 的高层结论与发给下游整改 Agent 的请求合并展示成同一条消息；默认先展示高层结论与整改细节，再在消息末尾统一追加 `@目标Agent` 标记
 - Agent 最终回复写入聊天区时，会优先提取其最终交付的尾部章节展示；像 BA 这类先分析再给正式结果的回复，聊天区默认只展示最后的正式交付内容，不展示前面的自我分析过程
-- 拓扑边分为两种关系：`association` 表示当前 Agent 只要完成本轮任务就 100% 自动触发下游；`review` 表示当前 Agent 本轮失败、给出“需要修改 / 审视不通过”时才触发下游
-- 审查类 Agent 不再固定硬编码回流到 `Build`；是否在审视不通过时继续派发、以及派发给谁，完全由当前拓扑里的 `review` 边决定
+- 拓扑边分为三种关系：`association` 表示当前 Agent 正常完成本轮任务后直接传递下游；`review_pass` 表示当前 Agent 输出“【DECISION】检查通过”后才传递下游；`review_fail` 表示当前 Agent 输出“【DECISION】需要修改”后才传递下游；同一对上下游只允许三选一
+- 审视 Agent 不再固定硬编码回流到 `Build`；审视通过后传给谁、审视不通过后传给谁，完全由当前拓扑里的 `review_pass / review_fail` 边决定
 - 若当前节点执行完成后，拓扑里不存在可自动继续推进的下游节点，Task 会进入 `waiting` 状态；左侧 Task 列表与群聊系统消息都必须同步反映这个状态
 - 每个 Agent 都会按名称自动分配一套稳定配色；聊天记录里会使用对应的浅色底、描边与标签色来区分不同 Agent
 - 左侧 Task 列表支持右键删除 Task；删除时会同时清理该 Task 对应的 Zellij session
 - 左侧 Task 列表会定期与 Zellij session 状态同步；如果对应 session 已被外部删除，或只剩 `EXITED - attach to resurrect` 这类非活跃残留，关联 Task 会从列表中自动移除
 - 后台 Task 整体完成后，左侧 Task 列表会为未查看的已完成项显示提醒，并在对应 Project 卡片上汇总提醒数量；点开该 Task 后提醒会自动消除
-- 拓扑节点会在标题栏最右侧展示一个最小化状态 icon，对应 `未启动 / 运行中 / 已完成 / 执行失败`，审查类 Agent 则对应 `审查通过 / 审查不通过`；完整状态文案仅在鼠标悬停 icon 时显示，标题栏主体优先留给 Agent 名称
+- 拓扑节点会在标题栏最右侧展示一个最小化状态 icon，对应 `未启动 / 运行中 / 已完成 / 执行失败`；只有存在出去 `review_pass / review_fail` 边的 Agent 才会显示 `审视通过 / 审视不通过` 这组状态文案；完整状态文案仅在鼠标悬停 icon 时显示，标题栏主体优先留给 Agent 名称
 - 右上角拓扑图支持整块面板放大查看；放大视图会直接把当前拓扑图放大，Agent 卡片会随视口横向和纵向一起拉伸铺满面板，连线固定走在 Agent 顶部上方的通道内，不会越出拓扑 panel；节点下游关系仍可通过点击节点编辑
 - 团队成员列表支持直接调整 Agent 顺序；该顺序会持久化到拓扑配置，并直接决定拓扑图从左到右的节点排列
 - 拓扑图中的 Agent 节点顺序是稳定的：未显式保存顺序时默认优先取 `BA` 作为最左侧起点
@@ -62,7 +63,7 @@
 - 用户在 Task 群聊里直接 `@Agent` 时，群聊展示仍保留原始 `@Agent` 文本；底层以 `raw` 方式转发给目标 Agent 的消息会统一封装成单行 `[发送者] <正文>`，并自动去掉仅用于寻址的开头或结尾 `@Agent`
 - 这类批量 `Agent -> Agent` 派发消息仅用于聊天区展示给人看；Agent 自动派发下游时，不再补充任何群聊历史，但会携带完整用户消息与当前这一次的上游结果；若上游结果已完整包含用户消息，会自动去重
 - 群聊落库与 Agent 间转发只使用 OpenCode 返回消息里的公开 `text` part；`reasoning`、步骤和工具调用不会混入群聊正文或下游 Prompt
-- Agent 自动触发下游 Agent 时，会拆成结构化段落：用户原始需求放入 `[User Message]`，上游结果放入动态的 `[@来源 Agent Message]` 段；对非 `Build` 下游，同时会在 `[Requeirement]` 段附带当前 Project Git Diff 的精简摘要，帮助下游 Agent 快速感知最新改动；发给 `Build` 时不再附带 `[Requeirement]`
+- Agent 自动向下游传递时，会拆成结构化段落：用户原始需求放入 `[User Message]`，上游结果放入动态的 `[@来源 Agent Message]` 段；对非 `Build` 下游，同时会在 `[Requeirement]` 段附带当前 Project Git Diff 的精简摘要，帮助下游 Agent 快速感知最新改动；发给 `Build` 时不再附带 `[Requeirement]`
 - CLI 默认使用当前目录作为 project cwd
 - CLI 只支持当前 Agent 名称
 - CLI 支持单独的 `task init` 初始化步骤：先创建 Task，并把全部 Agent 的 OpenCode session / Zellij pane 启动完成；GUI 输入框会优先弹出候选 Agent 并默认选中 `Build`，CLI 仍通过 `task send <agent> <message...>` 指定目标

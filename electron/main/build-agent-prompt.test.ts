@@ -9,19 +9,28 @@ test("Build agent 完全不注入 system prompt", () => {
   const prompt = buildAgentSystemPrompt({
     name: "Build",
     role: "implementation",
-  });
+  }, false);
 
   assert.equal(prompt, "");
 });
 
-test("审查类 agent 继续保留 DECISION 协议", () => {
+test("存在审视边的 agent 才注入 DECISION 协议", () => {
   const prompt = buildAgentSystemPrompt({
-    name: "DocsReview",
-    role: "docs_review",
-  });
+    name: "TaskReview",
+    role: "task_review",
+  }, true);
 
   assert.match(prompt, /【DECISION】检查通过/);
   assert.match(prompt, /【DECISION】需要修改/);
+});
+
+test("没有审视边的 agent 不注入 system prompt", () => {
+  const prompt = buildAgentSystemPrompt({
+    name: "BA",
+    role: "business_analyst",
+  }, false);
+
+  assert.equal(prompt, "");
 });
 
 test("mock 模式下 Build agent 回复不再伪造已完成决策块", () => {
@@ -31,6 +40,13 @@ test("mock 模式下 Build agent 回复不再伪造已完成决策块", () => {
   assert.match(reply, /我已完成主要实现与本地自检/);
 });
 
+test("mock 模式下 BA 回复不再伪造审视决策块", () => {
+  const reply = buildMockAgentReply("BA", "请整理需求");
+
+  assert.doesNotMatch(reply, /【DECISION】/);
+  assert.match(reply, /目标、范围、约束与验收标准/);
+});
+
 test("Build agent 的请求体不会携带 system 字段", () => {
   const body = buildSubmitMessageBody({
     agent: "Build",
@@ -38,21 +54,21 @@ test("Build agent 的请求体不会携带 system 字段", () => {
     system: buildAgentSystemPrompt({
       name: "Build",
       role: "implementation",
-    }),
+    }, false),
   });
 
   assert.equal("system" in body, false);
   assert.equal(body.agent, "build");
 });
 
-test("审查类 agent 的请求体继续携带 system 字段", () => {
+test("存在审视边的 agent 请求体继续携带 system 字段", () => {
   const body = buildSubmitMessageBody({
-    agent: "DocsReview",
-    content: "请审查文档",
+    agent: "TaskReview",
+    content: "请审视交付结果",
     system: buildAgentSystemPrompt({
-      name: "DocsReview",
-      role: "docs_review",
-    }),
+      name: "TaskReview",
+      role: "task_review",
+    }, true),
   });
 
   assert.equal(typeof body.system, "string");

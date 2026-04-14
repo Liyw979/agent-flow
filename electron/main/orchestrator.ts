@@ -32,7 +32,7 @@ import {
   type TaskSnapshot,
   type TopologyRecord,
   type UpdateTopologyPayload,
-  isReviewAgentName,
+  isReviewAgentInTopology,
 } from "@shared/types";
 import {
   formatHighLevelTriggerContent,
@@ -710,17 +710,19 @@ export class Orchestrator {
         payload: this.hydrateTask(task.id),
       });
 
+      const topology = this.store.getTopology(project.id);
       const dispatchedContent = this.buildAgentExecutionPrompt(prompt);
       await this.opencodeClient.reloadConfig(
         project.path,
         this.agentFiles.listAgentFiles(project.id, project.path),
+        topology,
       );
       const response = await this.opencodeRunner.run({
         projectPath: project.path,
         sessionId: agentSessionId,
         content: dispatchedContent,
         agent: agentName,
-        system: this.createSystemPrompt(latestAgentFile),
+        system: this.createSystemPrompt(latestAgentFile, topology),
       });
 
       if (response.status === "error") {
@@ -754,12 +756,12 @@ export class Orchestrator {
       };
       this.store.insertMessage(taskMessage);
 
-      const topology = this.store.getTopology(project.id);
-      const associationTargets = this.getOutgoingEdges(topology, agentName, "association");
+      const directTargets = this.getOutgoingEdges(topology, agentName, "association");
       const reviewFailureTargets =
         parsedReview.decision === "needs_revision"
-          ? this.getOutgoingEdges(topology, agentName, "review")
+          ? this.getOutgoingEdges(topology, agentName, "review_fail")
           : [];
+      const reviewAgent = this.isReviewAgent(latestAgentFile, topology);
       const agentStatus = parsedReview.decision === "needs_revision" ? "failed" : "success";
       this.store.updateTaskAgentStatus(task.id, agentName, agentStatus);
       if (behavior.updateTaskStatusOnStart ?? true) {
@@ -767,9 +769,9 @@ export class Orchestrator {
           task.id,
           agentStatus === "failed" && reviewFailureTargets.length > 0
             ? "needs_revision"
-            : agentStatus === "failed" && associationTargets.length > 0
+            : agentStatus === "failed" && directTargets.length > 0 && !reviewAgent
               ? "running"
-            : agentStatus === "failed"
+              : agentStatus === "failed"
               ? "failed"
               : "running",
           null,
@@ -805,17 +807,6 @@ export class Orchestrator {
 
       const signal = this.parseSignal(response.finalMessage);
       if (parsedReview.decision === "needs_revision") {
-        const reviewTargetNames = new Set(reviewFailureTargets.map((edge) => edge.target));
-        const associationTriggered = associationTargets.length > 0
-          ? await this.triggerAssociationDownstream(
-              project,
-              task.id,
-              agentName,
-              agentContextContent,
-              signal,
-              reviewTargetNames,
-            )
-          : 0;
         const reviewTriggered =
           reviewFailureTargets.length > 0
             ? await this.triggerReviewDownstream(
@@ -825,8 +816,7 @@ export class Orchestrator {
                 parsedReview,
               )
             : 0;
-        const triggered = associationTriggered + reviewTriggered;
-        if (triggered === 0 && (behavior.completeTaskOnFinish ?? true)) {
+        if (reviewTriggered === 0 && (behavior.completeTaskOnFinish ?? true)) {
           await this.completeTask(task.id, "failed");
         }
         this.emit({
@@ -839,7 +829,9 @@ export class Orchestrator {
 
       const triggered =
         behavior.followTopology ?? true
-          ? await this.triggerAssociationDownstream(project, task.id, agentName, agentContextContent, signal)
+          ? reviewAgent
+            ? await this.triggerReviewPassDownstream(project, task.id, agentName, agentContextContent)
+            : await this.triggerAssociationDownstream(project, task.id, agentName, agentContextContent, signal)
           : 0;
       const hasOtherRunningAgents = [...runtime.runningAgents].some((runningAgent) => runningAgent !== agentName);
       const hasQueuedAgents = runtime.queuedAgents.size > 0;
@@ -878,13 +870,14 @@ export class Orchestrator {
 
       const topology = this.store.getTopology(project.id);
       const associationTargets = this.getOutgoingEdges(topology, agentName, "association");
-      const reviewTargets = this.getOutgoingEdges(topology, agentName, "review");
+      const reviewTargets = this.getOutgoingEdges(topology, agentName, "review_fail");
+      const reviewAgent = this.isReviewAgent({ name: agentName }, topology);
       if (behavior.updateTaskStatusOnStart ?? true) {
         this.store.updateTaskStatus(
           task.id,
           reviewTargets.length > 0
             ? "needs_revision"
-            : associationTargets.length > 0
+            : associationTargets.length > 0 && !reviewAgent
               ? "running"
               : "failed",
           null,
@@ -912,18 +905,6 @@ export class Orchestrator {
         payload: this.hydrateTask(task.id),
       });
 
-      const reviewTargetNames = new Set(reviewTargets.map((edge) => edge.target));
-      const associationTriggered =
-        behavior.followTopology ?? true
-          ? await this.triggerAssociationDownstream(
-              project,
-              task.id,
-              agentName,
-              failedMessage.content,
-              { done: false },
-              reviewTargetNames,
-            )
-          : 0;
       const reviewTriggered = reviewTargets.length > 0
         ? await this.triggerReviewDownstream(
             project,
@@ -939,7 +920,7 @@ export class Orchestrator {
           )
         : 0;
 
-      if (associationTriggered + reviewTriggered === 0 && (behavior.completeTaskOnFinish ?? true)) {
+      if (reviewTriggered === 0 && (behavior.completeTaskOnFinish ?? true)) {
         await this.completeTask(task.id, "failed");
       }
     } finally {
@@ -1073,6 +1054,82 @@ export class Orchestrator {
     return triggerTargets.length;
   }
 
+  private async triggerReviewPassDownstream(
+    project: ProjectRecord,
+    taskId: string,
+    sourceAgentId: string,
+    sourceContent: string,
+  ): Promise<number> {
+    const runtime = this.getRuntime(taskId);
+    const topology = this.store.getTopology(project.id);
+    const outgoing = this.getOutgoingEdges(topology, sourceAgentId, "review_pass");
+    const completed = new Set(runtime.completedEdges);
+
+    for (const edge of outgoing) {
+      completed.add(edge.id);
+      runtime.completedEdges.add(edge.id);
+    }
+
+    const readyTargets: string[] = [];
+    for (const edge of outgoing) {
+      if (this.canTriggerTarget(taskId, topology, completed, edge.target, runtime)) {
+        readyTargets.push(edge.target);
+      }
+    }
+
+    if (readyTargets.length === 0) {
+      return 0;
+    }
+
+    const uniqueTargets = [...new Set(readyTargets)];
+    if (!this.shouldSuppressDuplicateHighLevelTrigger(project.id, taskId, sourceAgentId, uniqueTargets)) {
+      const triggerMessage: MessageRecord = {
+        id: randomUUID(),
+        projectId: project.id,
+        taskId,
+        sender: sourceAgentId,
+        timestamp: new Date().toISOString(),
+        content: this.buildHighLevelTriggerMessageContent(uniqueTargets, sourceContent),
+        meta: {
+          kind: "high-level-trigger",
+          sourceAgentId,
+          targetAgentIds: uniqueTargets.join(","),
+        },
+      };
+      this.store.insertMessage(triggerMessage);
+      this.emit({
+        type: "message-created",
+        projectId: project.id,
+        payload: triggerMessage,
+      });
+    }
+
+    const currentTask = this.store.getTask(taskId);
+    const gitDiffSummary = await this.buildProjectGitDiffSummary(currentTask.cwd);
+    const forwardedContext = this.buildDownstreamForwardedContext(taskId, sourceContent);
+
+    await Promise.all(
+      uniqueTargets.map(async (targetName) => {
+        const signature = this.buildTriggerSignature(topology, completed, targetName);
+        runtime.lastSignatureByAgent.set(targetName, signature);
+        await this.dispatchAgentRun(project, taskId, targetName, {
+          mode: "structured",
+          from: sourceAgentId,
+          userMessage: forwardedContext.userMessage,
+          agentMessage: forwardedContext.agentMessage,
+          requirement: targetName === BUILD_AGENT_NAME
+            ? undefined
+            : this.buildAgentHandoffRequirement(
+                "请结合 [User Message] 与上游 Agent Message 中的上下文继续推进当前任务，并只关注你当前负责的部分。",
+                gitDiffSummary,
+              ),
+        });
+      }),
+    );
+
+    return uniqueTargets.length;
+  }
+
   private async triggerReviewDownstream(
     project: ProjectRecord,
     taskId: string,
@@ -1081,7 +1138,7 @@ export class Orchestrator {
   ): Promise<number> {
     const topology = this.store.getTopology(project.id);
     const reviewTargets = [...new Set(
-      this.getOutgoingEdges(topology, sourceAgent.name, "review")
+      this.getOutgoingEdges(topology, sourceAgent.name, "review_fail")
         .map((edge) => edge.target)
         .filter((targetName) => targetName !== sourceAgent.name),
     )];
@@ -1211,8 +1268,9 @@ export class Orchestrator {
       return false;
     }
 
-    const incomingAssociationEdges = this.getIncomingEdges(topology, targetName, "association");
-    if (incomingAssociationEdges.some((edge) => !completedEdges.has(edge.id))) {
+    const incomingSuccessEdges = this.getIncomingEdges(topology, targetName, "association")
+      .concat(this.getIncomingEdges(topology, targetName, "review_pass"));
+    if (incomingSuccessEdges.some((edge) => !completedEdges.has(edge.id))) {
       return false;
     }
 
@@ -1237,7 +1295,7 @@ export class Orchestrator {
       .filter(
         (edge) =>
           edge.target === targetName &&
-          edge.triggerOn === "association" &&
+          (edge.triggerOn === "association" || edge.triggerOn === "review_pass") &&
           completedEdges.has(edge.id),
       )
       .map((edge) => edge.id)
@@ -1250,7 +1308,8 @@ export class Orchestrator {
     completedEdges: Set<string>,
     agentName: string,
   ): boolean {
-    const incomingEdges = this.getIncomingEdges(topology, agentName, "association");
+    const incomingEdges = this.getIncomingEdges(topology, agentName, "association")
+      .concat(this.getIncomingEdges(topology, agentName, "review_pass"));
     return incomingEdges.every((edge) => completedEdges.has(edge.id));
   }
 
@@ -1259,7 +1318,8 @@ export class Orchestrator {
     completedEdges: Set<string>,
     agentName: string,
   ): boolean {
-    const outgoingEdges = this.getOutgoingEdges(topology, agentName, "association");
+    const outgoingEdges = this.getOutgoingEdges(topology, agentName, "association")
+      .concat(this.getOutgoingEdges(topology, agentName, "review_pass"));
     return outgoingEdges.every((edge) => completedEdges.has(edge.id));
   }
 
@@ -1650,16 +1710,23 @@ export class Orchestrator {
     }
   }
 
-  private isReviewAgent(agent: Pick<AgentFileRecord, "name">): boolean {
-    return isReviewAgentName(agent.name);
+  private isReviewAgent(
+    agent: Pick<AgentFileRecord, "name">,
+    topology: Pick<TopologyRecord, "edges">,
+  ): boolean {
+    return isReviewAgentInTopology(topology, agent.name);
   }
 
-  private createSystemPrompt(agent: AgentFileRecord): string {
-    if (!this.isReviewAgent(agent)) {
+  private createSystemPrompt(
+    agent: AgentFileRecord,
+    topology: Pick<TopologyRecord, "edges">,
+  ): string {
+    const reviewAgent = this.isReviewAgent(agent, topology);
+    if (!reviewAgent) {
       return "";
     }
 
-    return buildAgentSystemPrompt(agent);
+    return buildAgentSystemPrompt(agent, reviewAgent);
   }
 
   private createTaskTitle(content: string): string {
@@ -1780,8 +1847,18 @@ export class Orchestrator {
   ): TopologyRecord {
     const validNames = new Set(agentFiles.map((item) => item.name));
     const seenEdges = new Set<string>();
+    const seenPairs = new Set<string>();
     const edges = topology.edges
-      .filter((edge) => edge.triggerOn === "association" || edge.triggerOn === "review")
+      .map((edge) => ({
+        ...edge,
+        triggerOn: edge.triggerOn === "review" ? "review_fail" : edge.triggerOn,
+      }))
+      .filter(
+        (edge) =>
+          edge.triggerOn === "association" ||
+          edge.triggerOn === "review_pass" ||
+          edge.triggerOn === "review_fail",
+      )
       .filter((edge) => validNames.has(edge.source) && validNames.has(edge.target))
       .filter((edge) => {
         const key = `${edge.source}__${edge.target}__${edge.triggerOn}`;
@@ -1789,6 +1866,14 @@ export class Orchestrator {
           return false;
         }
         seenEdges.add(key);
+        return true;
+      })
+      .filter((edge) => {
+        const pairKey = `${edge.source}__${edge.target}`;
+        if (seenPairs.has(pairKey)) {
+          return false;
+        }
+        seenPairs.add(pairKey);
         return true;
       })
       .map((edge) => ({
@@ -1907,7 +1992,7 @@ export class Orchestrator {
   private getOutgoingEdges(
     topology: TopologyRecord,
     sourceAgentId: string,
-    triggerOn: "association" | "review",
+    triggerOn: "association" | "review_pass" | "review_fail",
   ) {
     return topology.edges.filter(
       (edge) => edge.source === sourceAgentId && edge.triggerOn === triggerOn,
@@ -1917,7 +2002,7 @@ export class Orchestrator {
   private getIncomingEdges(
     topology: TopologyRecord,
     targetAgentId: string,
-    triggerOn: "association" | "review",
+    triggerOn: "association" | "review_pass" | "review_fail",
   ) {
     return topology.edges.filter(
       (edge) => edge.target === targetAgentId && edge.triggerOn === triggerOn,
