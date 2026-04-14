@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type MouseEvent } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { createPortal } from "react-dom";
 import {
   BaseEdge,
   Background,
@@ -466,17 +467,6 @@ function computeNodeLayout(
     nodeCardWidth: resolvedNodeCardWidth,
     nodeColumnHeight: resolvedNodeColumnHeight,
   };
-}
-
-function buildRuntimeTooltip(snapshot: AgentRuntimeSnapshot | undefined) {
-  if (!snapshot || snapshot.activities.length === 0) {
-    return undefined;
-  }
-
-  return snapshot.activities
-    .slice(0, 4)
-    .map((activity) => `${activity.label}${activity.detail ? ` · ${activity.detail}` : ""}`)
-    .join("\n");
 }
 
 function getAgentKindMeta(isBuiltin: boolean) {
@@ -1099,7 +1089,6 @@ export function TopologyGraph({
         targetPosition: Position.Left,
       };
       const runtime = agentState === "running" ? runtimeSnapshots[node.id] : undefined;
-      const runtimeTooltip = buildRuntimeTooltip(runtime);
       const agentBlockHeight = getAgentBlockHeight(agentState);
       const statusBadge = getAgentStatusBadge(node.id, agentState);
       const historyItems = agentHistories.get(node.id) ?? [];
@@ -1141,19 +1130,21 @@ export function TopologyGraph({
           return;
         }
 
-        const cardRect = event.currentTarget.getBoundingClientRect();
         const previewWidth = 420;
         const previewHeight = 320;
-        const gap = 14;
-        const horizontalSpaceOnRight = window.innerWidth - cardRect.right;
-        const left =
-          horizontalSpaceOnRight >= previewWidth + gap
-            ? cardRect.right + gap
-            : Math.max(16, cardRect.left - previewWidth - gap);
-        const top = Math.min(
-          Math.max(16, cardRect.top - 8),
-          Math.max(16, window.innerHeight - previewHeight - 16),
-        );
+        const gap = 16;
+        const maxLeft = Math.max(16, window.innerWidth - previewWidth - 16);
+        const maxTop = Math.max(16, window.innerHeight - previewHeight - 16);
+        const nextLeft =
+          event.clientX + gap + previewWidth <= window.innerWidth - 16
+            ? event.clientX + gap
+            : event.clientX - previewWidth - gap;
+        const nextTop =
+          event.clientY + gap + previewHeight <= window.innerHeight - 16
+            ? event.clientY + gap
+            : event.clientY - previewHeight - gap;
+        const left = Math.max(16, Math.min(nextLeft, maxLeft));
+        const top = Math.max(16, Math.min(nextTop, maxTop));
 
         setHoveredHistoryPreview({
           ...record,
@@ -1186,7 +1177,7 @@ export function TopologyGraph({
         height: nodeColumnHeight,
         data: {
           label: (
-            <div className="relative h-full w-full" title={runtimeTooltip}>
+            <div className="relative h-full w-full">
               <div
                 className="absolute inset-x-0 top-0 flex flex-col justify-center px-2.5 py-0.5 text-center"
                 style={{
@@ -1759,35 +1750,46 @@ export function TopologyGraph({
         </Dialog.Portal>
       </Dialog.Root>
 
-      {hoveredHistoryPreview && !selectedHistoryRecord ? (
-        <div
-          className="pointer-events-none fixed z-50 flex max-h-[min(320px,72vh)] w-[min(420px,calc(100vw-32px))] flex-col rounded-[10px] border border-border/80 bg-[#fffaf2]/95 p-4 shadow-[0_22px_54px_rgba(44,74,63,0.2)] backdrop-blur-sm"
-          style={{
-            left: hoveredHistoryPreview.x,
-            top: hoveredHistoryPreview.y,
-          }}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="font-display text-[1.1rem] font-bold text-primary">历史消息</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {`${hoveredHistoryPreview.agentName} · ${hoveredHistoryPreview.label}${
-                  hoveredHistoryPreview.timestamp ? ` · ${hoveredHistoryPreview.timestamp}` : ""
-                }`}
-              </p>
-            </div>
-            <span className="rounded-full bg-card/90 px-2.5 py-1 text-[10px] font-semibold tracking-[0.08em] text-foreground/70">
-              悬停预览
-            </span>
-          </div>
+      {hoveredHistoryPreview && !selectedHistoryRecord && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="pointer-events-none fixed inset-0"
+              style={{
+                zIndex: 2147483647,
+                isolation: "isolate",
+              }}
+            >
+              <div
+                className="pointer-events-none absolute flex max-h-[min(320px,72vh)] w-[min(420px,calc(100vw-32px))] flex-col rounded-[10px] border border-border/80 bg-[#fffaf2]/95 p-4 shadow-[0_22px_54px_rgba(44,74,63,0.2)]"
+                style={{
+                  left: hoveredHistoryPreview.x,
+                  top: hoveredHistoryPreview.y,
+                }}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="font-display text-[1.1rem] font-bold text-primary">历史消息</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {`${hoveredHistoryPreview.agentName} · ${hoveredHistoryPreview.label}${
+                        hoveredHistoryPreview.timestamp ? ` · ${hoveredHistoryPreview.timestamp}` : ""
+                      }`}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-card/90 px-2.5 py-1 text-[10px] font-semibold tracking-[0.08em] text-foreground/70">
+                    悬停预览
+                  </span>
+                </div>
 
-          <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-[8px] border border-border/60 bg-card/75 px-4 py-3">
-            <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">
-              {hoveredHistoryPreview.content}
-            </p>
-          </div>
-        </div>
-      ) : null}
+                <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-[8px] border border-border/60 bg-card/75 px-4 py-3">
+                  <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">
+                    {hoveredHistoryPreview.content}
+                  </p>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </section>
   );
 }
