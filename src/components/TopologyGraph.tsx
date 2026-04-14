@@ -195,34 +195,21 @@ function getAgentHeaderLayout(
   const defaultGap = statusBadge ? AGENT_HEADER_BADGE_GAP : 0;
   const compactGap = statusBadge ? AGENT_HEADER_BADGE_COMPACT_GAP : 0;
   const headerContentWidth = Math.max(0, nodeCardWidth - AGENT_HEADER_SIDE_PADDING * 2);
-  const rawCenteredNameMaxWidth =
-    headerContentWidth - (defaultBadgeWidth + defaultGap) * 2;
-  const centeredFontSize = getAgentNameFontSize(
-    displayName,
-    Math.max(0, rawCenteredNameMaxWidth),
-    nodeCardWidth,
-  );
+  const defaultReservedWidth = (defaultBadgeWidth + defaultGap) * 2;
+  const defaultTitleMaxWidth = headerContentWidth - defaultReservedWidth;
+  const centeredFontSize = getAgentNameFontSize(displayName, Math.max(0, defaultTitleMaxWidth), nodeCardWidth);
   const useCompactBadge = Boolean(statusBadge) && centeredFontSize < 12;
   const badgeWidth = useCompactBadge ? compactBadgeWidth : defaultBadgeWidth;
   const badgeGap = useCompactBadge ? compactGap : defaultGap;
-  const rawCenteredWidth = headerContentWidth - (badgeWidth + badgeGap) * 2;
-  const rawCompactWidth = headerContentWidth - badgeWidth - badgeGap;
-  const centeredInset = badgeWidth + badgeGap;
-  const compactRightInset = badgeWidth + badgeGap;
-  const canUseCenteredLayout =
-    !statusBadge ||
-    (rawCenteredWidth > 0 &&
-      estimateAgentNameWidth(displayName, nodeCardWidth >= 270 ? 17 : 15) <= rawCenteredWidth);
+  const badgeSlotWidth = badgeWidth + badgeGap;
+  const titleMaxWidth = headerContentWidth - badgeSlotWidth * 2;
+  const titleFontSize = getAgentNameFontSize(displayName, Math.max(0, titleMaxWidth), nodeCardWidth);
 
   return {
     blockHeight: 44,
-    mode: canUseCenteredLayout ? "centered" : "compact",
-    centeredInset,
-    compactRightInset,
-    centeredNameMaxWidth: Math.max(0, rawCenteredWidth),
-    compactNameMaxWidth: Math.max(0, rawCompactWidth),
-    centeredFontSize: getAgentNameFontSize(displayName, Math.max(0, rawCenteredWidth), nodeCardWidth),
-    compactFontSize: getAgentNameFontSize(displayName, Math.max(0, rawCompactWidth), nodeCardWidth),
+    badgeSlotWidth,
+    titleMaxWidth: Math.max(0, titleMaxWidth),
+    titleFontSize,
     badgeGap,
     badgePaddingX: useCompactBadge
       ? AGENT_STATUS_BADGE_COMPACT_PADDING_X
@@ -1323,88 +1310,50 @@ export function TopologyGraph({
                     paddingRight: `${AGENT_HEADER_SIDE_PADDING}px`,
                   }}
                 >
-                  {headerLayout.mode === "centered" ? (
-                    <div className="relative h-7 w-full">
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <p
-                          className="block whitespace-nowrap text-center font-semibold leading-none"
-                          style={{
-                            ...getAgentNameStyle(headerLayout.centeredFontSize),
-                            width: `calc(100% - ${headerLayout.centeredInset * 2}px)`,
-                          }}
-                        >
-                          {displayName}
-                        </p>
-                      </div>
-                      {statusBadge ? (
-                        <span
-                          className={`absolute right-0 top-1/2 inline-flex -translate-y-1/2 shrink-0 items-center justify-center rounded-full py-1 text-[12px] font-semibold leading-none tracking-[0.01em] shadow-[0_1px_0_rgba(255,255,255,0.45)] ${statusBadge.className} ${statusBadge.effectClassName}`}
-                          style={{
-                            minHeight: AGENT_STATUS_BADGE_HEIGHT,
-                            minWidth: `${headerLayout.badgeMinWidth}px`,
-                            paddingLeft: `${headerLayout.badgePaddingX}px`,
-                            paddingRight: `${headerLayout.badgePaddingX}px`,
-                          }}
-                        >
-                          {statusBadge.indicatorClassName ? (
-                            <span
-                              className={`shrink-0 rounded-full ${statusBadge.indicatorClassName}`}
-                              style={{
-                                width: `${AGENT_STATUS_BADGE_INDICATOR_SIZE}px`,
-                                height: `${AGENT_STATUS_BADGE_INDICATOR_SIZE}px`,
-                                marginRight: `${AGENT_STATUS_BADGE_INDICATOR_GAP}px`,
-                              }}
-                            />
-                          ) : null}
-                          <span className="relative z-[1]">{statusBadge.label}</span>
-                        </span>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="relative h-7 w-full">
-                      <div
-                        className="absolute inset-y-0 flex items-center justify-center overflow-hidden"
+                  <div
+                    className="grid h-7 w-full items-center"
+                    style={{
+                      gridTemplateColumns: statusBadge
+                        ? `${headerLayout.badgeSlotWidth}px minmax(0, 1fr) ${headerLayout.badgeSlotWidth}px`
+                        : "minmax(0, 1fr)",
+                    }}
+                  >
+                    {statusBadge ? <div aria-hidden="true" className="h-full" /> : null}
+                    <div className="min-w-0 overflow-hidden">
+                      <p
+                        className="block truncate text-center font-semibold leading-none"
                         style={{
-                          left: `${AGENT_HEADER_SIDE_PADDING}px`,
-                          right: `${headerLayout.compactRightInset}px`,
+                          ...getAgentNameStyle(headerLayout.titleFontSize),
+                          maxWidth: `${headerLayout.titleMaxWidth}px`,
                         }}
                       >
-                        <p
-                          className="block whitespace-nowrap text-center font-semibold leading-none"
-                          style={{
-                            ...getAgentNameStyle(headerLayout.compactFontSize),
-                            width: `${headerLayout.compactNameMaxWidth}px`,
-                            maxWidth: "100%",
-                          }}
-                        >
-                          {displayName}
-                        </p>
-                      </div>
-                      {statusBadge ? (
-                        <span
-                          className={`absolute right-0 top-1/2 inline-flex -translate-y-1/2 shrink-0 items-center justify-center rounded-full py-1 text-[12px] font-semibold leading-none tracking-[0.01em] shadow-[0_1px_0_rgba(255,255,255,0.45)] ${statusBadge.className} ${statusBadge.effectClassName}`}
-                          style={{
-                            minHeight: AGENT_STATUS_BADGE_HEIGHT,
-                            minWidth: `${headerLayout.badgeMinWidth}px`,
-                            paddingLeft: `${headerLayout.badgePaddingX}px`,
-                            paddingRight: `${headerLayout.badgePaddingX}px`,
-                          }}
-                        >
-                          {statusBadge.indicatorClassName ? (
-                            <span
-                              className={`shrink-0 rounded-full ${statusBadge.indicatorClassName}`}
-                              style={{
-                                width: `${AGENT_STATUS_BADGE_INDICATOR_SIZE}px`,
-                                height: `${AGENT_STATUS_BADGE_INDICATOR_SIZE}px`,
-                                marginRight: `${AGENT_STATUS_BADGE_INDICATOR_GAP}px`,
-                              }}
-                            />
-                          ) : null}
-                          <span className="relative z-[1]">{statusBadge.label}</span>
-                        </span>
-                      ) : null}
+                        {displayName}
+                      </p>
                     </div>
-                  )}
+                    {statusBadge ? (
+                      <span
+                        className={`inline-flex justify-self-end shrink-0 items-center justify-center rounded-full py-1 text-[12px] font-semibold leading-none tracking-[0.01em] shadow-[0_1px_0_rgba(255,255,255,0.45)] ${statusBadge.className} ${statusBadge.effectClassName}`}
+                        style={{
+                          minHeight: AGENT_STATUS_BADGE_HEIGHT,
+                          minWidth: `${headerLayout.badgeMinWidth}px`,
+                          paddingLeft: `${headerLayout.badgePaddingX}px`,
+                          paddingRight: `${headerLayout.badgePaddingX}px`,
+                        }}
+                      >
+                        {statusBadge.indicatorClassName ? (
+                          <span
+                            className={`shrink-0 rounded-full ${statusBadge.indicatorClassName}`}
+                            style={{
+                              width: `${AGENT_STATUS_BADGE_INDICATOR_SIZE}px`,
+                              height: `${AGENT_STATUS_BADGE_INDICATOR_SIZE}px`,
+                              marginRight: `${AGENT_STATUS_BADGE_INDICATOR_GAP}px`,
+                            }}
+                          />
+                        ) : null}
+                        <span className="relative z-[1]">{statusBadge.label}</span>
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
               </div>
 
