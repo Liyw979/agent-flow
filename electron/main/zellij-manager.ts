@@ -461,10 +461,15 @@ export class ZellijManager {
     if (process.platform === "win32") {
       const openedWithWindowsTerminal = await this.spawnDetachedProcess(
         "wt",
-        ["new-window", "--startingDirectory", cwd, "zellij", ...attachArgs],
+        ["--fullscreen", "new-window", "--startingDirectory", cwd, "zellij", ...attachArgs],
         { cwd, windowsHide: false },
       );
       if (openedWithWindowsTerminal) {
+        return;
+      }
+
+      const openedWithPowerShell = await this.openWindowsCmdSession(cwd, attachArgs);
+      if (openedWithPowerShell) {
         return;
       }
 
@@ -504,6 +509,7 @@ export class ZellijManager {
 
   private async openMacTerminalSession(_sessionName: string, cwd: string, attachArgs: string[]) {
     const terminalCommand = ["zellij", ...attachArgs].map((part) => this.shellQuote(part)).join(" ");
+    const startupCommand = `cd ${this.shellQuote(cwd)}; exec ${terminalCommand}`;
     const appleScript = [
       'set terminalWasRunning to application "Terminal" is running',
       'tell application "Terminal"',
@@ -511,15 +517,61 @@ export class ZellijManager {
       "if (count of windows) = 0 then",
       "reopen",
       "end if",
-      `do script ${JSON.stringify(`cd ${this.shellQuote(cwd)}; exec ${terminalCommand}`)} in front window`,
+      `do script ${JSON.stringify(startupCommand)} in front window`,
       "else",
       "reopen",
-      `do script ${JSON.stringify(`cd ${this.shellQuote(cwd)}; exec ${terminalCommand}`)} in window 1`,
+      `do script ${JSON.stringify(startupCommand)} in window 1`,
       "end if",
       "activate",
       "end tell",
+      "delay 0.25",
+      'tell application "System Events"',
+      'tell process "Terminal"',
+      "if not (exists front window) then",
+      "return",
+      "end if",
+      "try",
+      'set isFullscreen to value of attribute "AXFullScreen" of front window',
+      "on error",
+      "set isFullscreen to false",
+      "end try",
+      "if isFullscreen is false then",
+      'keystroke "f" using {command down, control down}',
+      "end if",
+      "end tell",
+      "end tell",
     ];
     await this.spawnDetachedProcess("osascript", appleScript.flatMap((line) => ["-e", line]));
+  }
+
+  private async openWindowsCmdSession(cwd: string, attachArgs: string[]): Promise<boolean> {
+    const argumentList = ["/k", "zellij", ...attachArgs]
+      .map((part) => `'${this.escapePowerShellSingleQuotedString(part)}'`)
+      .join(", ");
+    const powerShellScript = [
+      "Add-Type -AssemblyName Microsoft.VisualBasic",
+      "Add-Type -AssemblyName System.Windows.Forms",
+      `$proc = Start-Process -FilePath 'cmd.exe' -WorkingDirectory '${this.escapePowerShellSingleQuotedString(cwd)}' -ArgumentList @(${argumentList}) -PassThru`,
+      "Start-Sleep -Milliseconds 450",
+      "try { [Microsoft.VisualBasic.Interaction]::AppActivate($proc.Id) } catch { }",
+      "Start-Sleep -Milliseconds 120",
+      "try { [System.Windows.Forms.SendKeys]::SendWait('{F11}') } catch { }",
+    ].join("; ");
+
+    return this.spawnDetachedProcess(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        powerShellScript,
+      ],
+      { cwd, windowsHide: true },
+    );
   }
 
   private spawnDetachedProcess(
@@ -554,6 +606,11 @@ export class ZellijManager {
   private shellQuote(value: string): string {
     return `'${value.replace(/'/g, `'\\''`)}'`;
   }
+
+  private escapePowerShellSingleQuotedString(value: string): string {
+    return value.replace(/'/g, "''");
+  }
+
   private getLayoutCreationOrder(agents: AgentPaneSpec[]): AgentPaneSpec[] {
     return agents.slice();
   }
