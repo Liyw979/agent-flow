@@ -156,7 +156,6 @@ function App() {
         relativePath: agentFile.relativePath,
       })),
       activeProject.topology.agentOrderIds,
-      activeProject.topology.rootAgentId,
     );
     const orderIndex = new Map(orderedAgentNames.map((agentName, index) => [agentName, index]));
 
@@ -270,7 +269,6 @@ function App() {
         relativePath: agent.relativePath,
       })),
       activeProject.topology.agentOrderIds,
-      activeProject.topology.rootAgentId,
     );
     if (normalizedOrderIds.join("|") === currentOrderIds.join("|")) {
       return;

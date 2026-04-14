@@ -1148,7 +1148,7 @@ export class Orchestrator {
     topologyOverride?: TopologyRecord,
   ): string[] {
     const topology = topologyOverride ?? this.store.getTopology(projectId);
-    return resolveTopologyAgentOrder(agentFiles, topology.agentOrderIds, topology.rootAgentId);
+    return resolveTopologyAgentOrder(agentFiles, topology.agentOrderIds);
   }
 
   private orderAgentFiles(
@@ -1415,7 +1415,6 @@ export class Orchestrator {
         relativePath: agent.relativePath,
       })),
       topology.agentOrderIds,
-      topology.rootAgentId,
     );
 
     return this.findAgentFile(agentFiles, orderedAgentNames[0]) ?? agentFiles[0];
@@ -1509,10 +1508,6 @@ export class Orchestrator {
       label: file.name,
       kind: "agent" as const,
     }));
-    const normalizedRootAgentId =
-      typeof topology.rootAgentId === "string" && validNames.has(topology.rootAgentId)
-        ? topology.rootAgentId
-        : null;
     const agentOrderIds = resolveTopologyAgentOrder(
       agentFiles.map((file) => ({
         name: file.name,
@@ -1524,7 +1519,6 @@ export class Orchestrator {
         ? topology.agentOrderIds
             .filter((item): item is string => typeof item === "string" && validNames.has(item))
         : null,
-      normalizedRootAgentId,
     );
     const orderedNodes = agentOrderIds.map((agentName) => {
       const node = nodes.find((item) => item.id === agentName);
@@ -1540,7 +1534,6 @@ export class Orchestrator {
           role: file.role,
           relativePath: file.relativePath,
         })),
-        normalizedRootAgentId,
       ),
       agentOrderIds,
       nodes: orderedNodes,

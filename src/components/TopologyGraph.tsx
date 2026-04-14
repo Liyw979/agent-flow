@@ -14,7 +14,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { getAgentColorToken } from "@/lib/agent-colors";
-import { isBuiltinAgentPath, resolveTopologyAgentOrder, resolveTopologyRootAgent } from "@shared/types";
+import { isBuiltinAgentPath, resolveTopologyAgentOrder } from "@shared/types";
 import type {
   AgentRole,
   AgentRuntimeSnapshot,
@@ -949,18 +949,6 @@ export function TopologyGraph({
     () => new Map(project?.agentFiles.map((agent) => [agent.name, agent.role]) ?? []),
     [project],
   );
-  const defaultRootAgentId = useMemo(
-    () =>
-      resolveTopologyRootAgent(
-        project?.agentFiles.map((agent) => ({
-          name: agent.name,
-          mode: agent.mode,
-          role: agent.role,
-          relativePath: agent.relativePath,
-        })) ?? [],
-      ),
-    [project],
-  );
   const defaultAgentOrderIds = useMemo(
     () =>
       resolveTopologyAgentOrder(
@@ -971,7 +959,6 @@ export function TopologyGraph({
           relativePath: agent.relativePath,
         })) ?? [],
         project?.topology.agentOrderIds ?? null,
-        project?.topology.rootAgentId ?? null,
       ),
     [project],
   );
@@ -987,7 +974,6 @@ export function TopologyGraph({
       {
         ...draft,
         agentOrderIds: draft.agentOrderIds.length > 0 ? draft.agentOrderIds : defaultAgentOrderIds,
-        rootAgentId: draft.rootAgentId ?? defaultRootAgentId,
       },
       agentRoles,
       {
@@ -1005,7 +991,7 @@ export function TopologyGraph({
         minNodeGap: NODE_COLUMN_MIN_GAP,
       },
     );
-  }, [agentRoles, defaultAgentOrderIds, defaultRootAgentId, draft, mainViewportSize.height, mainViewportSize.width]);
+  }, [agentRoles, defaultAgentOrderIds, draft, mainViewportSize.height, mainViewportSize.width]);
   const expandedAutoLayout = useMemo(() => {
     if (!draft) {
       return {
@@ -1018,7 +1004,6 @@ export function TopologyGraph({
       {
         ...draft,
         agentOrderIds: draft.agentOrderIds.length > 0 ? draft.agentOrderIds : defaultAgentOrderIds,
-        rootAgentId: draft.rootAgentId ?? defaultRootAgentId,
       },
       agentRoles,
       {
@@ -1036,7 +1021,7 @@ export function TopologyGraph({
         stretchCards: true,
       },
     );
-  }, [agentRoles, defaultAgentOrderIds, defaultRootAgentId, draft, expandedViewportSize.height, expandedViewportSize.width]);
+  }, [agentRoles, defaultAgentOrderIds, draft, expandedViewportSize.height, expandedViewportSize.width]);
   const agentHistories = useMemo(() => {
     const taskMessages = task?.messages ?? [];
     const histories = new Map<string, ReturnType<typeof getAgentHistoryFromMessages>>();
@@ -1453,27 +1438,6 @@ export function TopologyGraph({
     });
   }
 
-  async function toggleRootAgent(agentId: string, checked: boolean) {
-    if (!draft) {
-      return;
-    }
-
-    await saveDraft({
-      ...draft,
-      agentOrderIds: checked
-        ? [
-            agentId,
-            ...(draft.agentOrderIds.length > 0 ? draft.agentOrderIds : defaultAgentOrderIds).filter(
-              (item) => item !== agentId,
-            ),
-          ]
-        : draft.agentOrderIds.length > 0
-          ? draft.agentOrderIds
-          : defaultAgentOrderIds,
-      rootAgentId: checked ? agentId : defaultRootAgentId,
-    });
-  }
-
   return (
     <section className="PANEL-surface relative flex h-full min-h-0 flex-col overflow-hidden rounded-[10px]">
       <div className="min-h-[34px] border-b border-border/60 px-4 py-2">
@@ -1671,25 +1635,6 @@ export function TopologyGraph({
                 ) : null}
               </div>
               <p className="mt-1 text-xs text-muted-foreground">{editingAgent?.mode ?? "未读取到模式信息"}</p>
-              <label className="mt-3 flex items-center justify-between rounded-[8px] border border-border/70 bg-[#fff8f0] px-3 py-2">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">设为最左起点</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    勾选后，这个 Agent 会固定作为拓扑图最左侧起点，其余节点按累计上游依赖层级向右排列。
-                  </p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={(draft?.rootAgentId ?? defaultRootAgentId) === editingAgentId}
-                  onChange={(event) => {
-                    if (!editingAgentId) {
-                      return;
-                    }
-                    void toggleRootAgent(editingAgentId, event.target.checked);
-                  }}
-                  className="h-4 w-4 accent-[#2C4A3F]"
-                />
-              </label>
             </div>
 
             <div className="mt-5 rounded-[8px] border border-border/70 bg-[#f8f4ea] px-4 py-3 text-xs text-muted-foreground">

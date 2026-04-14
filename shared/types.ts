@@ -271,7 +271,6 @@ export function resolveTopologyRootAgent(
 export function resolveTopologyAgentOrder(
   agents: Array<Pick<TopologyAgentSeed, "name" | "mode" | "role" | "relativePath">>,
   preferredOrderIds?: string[] | null,
-  preferredRootAgentId?: string | null,
 ): string[] {
   const availableAgentNames = agents.map((agent) => agent.name);
   const availableAgentSet = new Set(availableAgentNames);
@@ -291,7 +290,7 @@ export function resolveTopologyAgentOrder(
     return order;
   }
 
-  const rootAgentName = resolveTopologyRootAgent(agents, preferredRootAgentId);
+  const rootAgentName = resolveTopologyRootAgent(agents);
   const primaryAgents = agents.filter((agent) => agent.mode === "primary");
   const builtinPrimaryAgents = primaryAgents.filter((agent) => isBuiltinAgentPath(agent.relativePath));
   const implementationAgent =
