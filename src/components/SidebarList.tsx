@@ -7,6 +7,8 @@ interface SidebarListProps {
   projects: ProjectSnapshot[];
   selectedProjectId: string | null;
   selectedTaskId: string | null;
+  taskCompletionReminderIds: ReadonlySet<string>;
+  projectCompletionReminderCounts: ReadonlyMap<string, number>;
   onSelectProject: (projectId: string) => void;
   onSelectTask: (projectId: string, taskId: string | null) => void;
   onDeleteTask: (projectId: string, taskId: string) => Promise<void>;
@@ -37,6 +39,8 @@ export function SidebarList({
   projects,
   selectedProjectId,
   selectedTaskId,
+  taskCompletionReminderIds,
+  projectCompletionReminderCounts,
   onSelectProject,
   onSelectTask,
   onDeleteTask,
@@ -84,6 +88,8 @@ export function SidebarList({
       <div className="space-y-4 overflow-y-auto pr-1">
         {projects.map((snapshot) => {
           const activeProject = snapshot.project.id === selectedProjectId;
+          const completionReminderCount =
+            projectCompletionReminderCounts.get(snapshot.project.id) ?? 0;
           return (
             <section
               key={snapshot.project.id}
@@ -106,9 +112,16 @@ export function SidebarList({
                       {snapshot.project.path}
                     </p>
                   </div>
-                  <span className="rounded-[6px] bg-primary/10 px-2.5 py-1 text-[11px] text-primary">
-                    {snapshot.tasks.length} Tasks
-                  </span>
+                  <div className="flex shrink-0 flex-col items-end gap-1.5">
+                    <span className="rounded-[6px] bg-primary/10 px-2.5 py-1 text-[11px] text-primary">
+                      {snapshot.tasks.length} Tasks
+                    </span>
+                    {completionReminderCount > 0 ? (
+                      <span className="rounded-[6px] bg-[#fff1e4] px-2.5 py-1 text-[11px] font-semibold text-[#a44b1d]">
+                        {completionReminderCount} 个完成提醒
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
               </button>
 
@@ -129,6 +142,7 @@ export function SidebarList({
                 {snapshot.tasks.map((task) => {
                   const activeTask =
                     activeProject && selectedTaskId !== null && task.task.id === selectedTaskId;
+                  const hasCompletionReminder = taskCompletionReminderIds.has(task.task.id);
                   return (
                     <button
                       key={task.task.id}
@@ -165,16 +179,31 @@ export function SidebarList({
                             {task.task.agentCount} Agents
                           </p>
                         </div>
-                        <span
-                          className={cn(
-                            "rounded-[6px] px-2.5 py-1 text-[11px] font-medium",
-                            activeTask
-                              ? "bg-white/15 text-primary-foreground"
-                              : taskStatusStyles[task.task.status] ?? taskStatusStyles.pending,
-                          )}
-                        >
-                          {task.task.status}
-                        </span>
+                        <div className="flex shrink-0 flex-col items-end gap-1.5">
+                          {hasCompletionReminder ? (
+                            <span
+                              className={cn(
+                                "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                                activeTask
+                                  ? "bg-white/18 text-primary-foreground"
+                                  : "bg-[#fff1e4] text-[#a44b1d]",
+                              )}
+                            >
+                              <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" />
+                              已完成
+                            </span>
+                          ) : null}
+                          <span
+                            className={cn(
+                              "rounded-[6px] px-2.5 py-1 text-[11px] font-medium",
+                              activeTask
+                                ? "bg-white/15 text-primary-foreground"
+                                : taskStatusStyles[task.task.status] ?? taskStatusStyles.pending,
+                            )}
+                          >
+                            {task.task.status}
+                          </span>
+                        </div>
                       </div>
                     </button>
                   );

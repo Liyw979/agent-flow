@@ -4,6 +4,15 @@ import { ChatWindow } from "./components/ChatWindow";
 import { SidebarList } from "./components/SidebarList";
 import { TopologyGraph } from "./components/TopologyGraph";
 import { mergeTaskChatMessages } from "./lib/chat-messages";
+import {
+  acknowledgeTaskCompletionReminder,
+  countVisibleTaskCompletionReminders,
+  loadTaskCompletionReminderAcks,
+  persistTaskCompletionReminderAcks,
+  pruneTaskCompletionReminderAcks,
+  shouldShowTaskCompletionReminder,
+  type TaskCompletionReminderAcks,
+} from "./lib/task-completion-reminders";
 import { getAgentColorToken } from "./lib/agent-colors";
 import { useAgentFlowStore } from "./store/useAgentFlowStore";
 import { isBuiltinAgentPath, resolveTopologyAgentOrder } from "@shared/types";
@@ -84,6 +93,12 @@ function App() {
   const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, AgentRuntimeSnapshot>>(
     {},
   );
+  const [taskCompletionReminderAcks, setTaskCompletionReminderAcks] =
+    useState<TaskCompletionReminderAcks>(() =>
+      loadTaskCompletionReminderAcks(
+        typeof window === "undefined" ? null : window.localStorage,
+      ),
+    );
   const [draggingAgentId, setDraggingAgentId] = useState<string | null>(null);
   const [dragOverAgentId, setDragOverAgentId] = useState<string | null>(null);
   const suppressNextAgentCardClickRef = useRef(false);
@@ -123,6 +138,33 @@ function App() {
     () => activeProject?.tasks.find((task) => task.task.id === selectedTaskId),
     [activeProject, selectedTaskId],
   );
+
+  useEffect(() => {
+    const allTasks = projects.flatMap((project) => project.tasks.map((task) => task.task));
+    setTaskCompletionReminderAcks((current) => {
+      const next = pruneTaskCompletionReminderAcks(current, allTasks);
+      if (next === current) {
+        return current;
+      }
+      persistTaskCompletionReminderAcks(window.localStorage, next);
+      return next;
+    });
+  }, [projects]);
+
+  useEffect(() => {
+    if (!activeTask) {
+      return;
+    }
+
+    setTaskCompletionReminderAcks((current) => {
+      const next = acknowledgeTaskCompletionReminder(current, activeTask.task);
+      if (next === current) {
+        return current;
+      }
+      persistTaskCompletionReminderAcks(window.localStorage, next);
+      return next;
+    });
+  }, [activeTask]);
 
   const activeTaskView = useMemo<TaskSnapshot | undefined>(() => {
     if (!activeTask) {
@@ -215,6 +257,31 @@ function App() {
         .map((agent) => `${agent.name}:${agent.status}:${agent.opencodeSessionId ?? ""}`)
         .join("|") ?? "",
     [activeTaskView],
+  );
+
+  const taskCompletionReminderIds = useMemo(
+    () =>
+      new Set(
+        projects
+          .flatMap((project) => project.tasks)
+          .filter((task) => shouldShowTaskCompletionReminder(task.task, taskCompletionReminderAcks))
+          .map((task) => task.task.id),
+      ),
+    [projects, taskCompletionReminderAcks],
+  );
+
+  const projectCompletionReminderCounts = useMemo(
+    () =>
+      new Map(
+        projects.map((project) => [
+          project.project.id,
+          countVisibleTaskCompletionReminders(
+            project.tasks.map((task) => task.task),
+            taskCompletionReminderAcks,
+          ),
+        ]),
+      ),
+    [projects, taskCompletionReminderAcks],
   );
 
   useEffect(() => {
@@ -339,6 +406,8 @@ function App() {
               projects={projects}
               selectedProjectId={selectedProjectId}
               selectedTaskId={selectedTaskId}
+              taskCompletionReminderIds={taskCompletionReminderIds}
+              projectCompletionReminderCounts={projectCompletionReminderCounts}
               onSelectProject={selectProject}
               onSelectTask={selectTask}
               onDeleteTask={async (projectId, taskId) => {
