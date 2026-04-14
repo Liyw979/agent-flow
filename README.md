@@ -28,16 +28,20 @@
 - Task 群聊支持 `@AgentName` 提交任务，输入 `@` 会弹出候选 Agent 列表，支持方向键、鼠标和 `Tab` 自动补全
 - 群聊中同时展示 `user -> agent`、`agent -> agent` 高层协作消息，以及 Agent 最终回复
 - 当一个 Agent 同时触发多个下游 Agent 时，群聊会合并展示为一条批量 `agent -> agent` 派发消息，而不是拆成多条重复消息
-- 这类批量 `agent -> agent` 派发消息仅用于群聊展示给人看，不会作为“尚未收到的群聊历史”再次转发给下游 Agent
-- 用户在 Task 群聊里直接 `@Agent` 时，群聊展示仍保留原始 `@Agent` 文本，但底层发送给目标 Agent 的正文会自动去掉开头用于寻址的 `@Agent`，也不额外拼接结构化前缀
-- Agent 自动派发下游时会封装 `[From]`、`[Message]`；系统会把当前 Project Git Diff 的精简摘要附加到转发 Prompt 的 `[Requeirement]` 段
+- 同一个 Agent 的最终回复后若紧接着自动触发下游，群聊会把“最终回复 + 下游派发提示”合并成同一条消息；合并后只追加 `@目标Agent` 标记，避免连续出现两条重复的同名 Agent 卡片
+- 审查类 Agent 给出“需要修改 / 审查不通过”后，群聊会把该 Agent 的高层结论与发给下游整改 Agent 的请求合并展示成同一条消息；默认首行直接显示为 `@目标Agent <高层结论>`，只有存在额外整改细节时才会在同一气泡里继续展开
+- Agent 最终回复写入群聊时，会优先提取其最终交付的尾部章节展示；像 BA 这类先分析再给正式结果的回复，群聊默认只展示最后的正式交付内容，不展示前面的自我分析过程
+- 群聊落库与 Agent 间转发只使用 OpenCode 返回消息里的公开 `text` part；`reasoning`、步骤和工具调用不会混入群聊正文或下游 Prompt
+- 这类批量 `agent -> agent` 派发消息仅用于群聊展示给人看；Agent 自动派发下游时，不再补充任何群聊历史，但会携带完整用户消息与当前这一次的上游结果；若上游结果已完整包含用户消息，会自动去重
+- 用户在 Task 群聊里直接 `@Agent` 时，群聊展示仍保留原始 `@Agent` 文本；底层以 `raw` 方式转发给目标 Agent 的消息会统一封装成单行 `[发送者] <正文>`，并自动去掉仅用于寻址的开头或结尾 `@Agent`
+- Agent 自动派发下游时会拆成结构化段落：用户原始需求放入 `[User Message]`，上游结果放入动态的 `[@来源 Agent Message]` 段；对非 `Build` 下游，系统会把当前 Project Git Diff 的精简摘要附加到转发 Prompt 的 `[Requeirement]` 段；发给 `Build` 时不再附带 `[Requeirement]`
 - 每个 Agent 都会按名称自动分配一套稳定配色；聊天记录里会使用对应的浅色底、描边与标签色来区分不同 Agent
 - 右下角团队成员列表支持直接调整 Agent 顺序；该顺序会持久化到拓扑配置，并直接决定右上角拓扑图从左到右的节点排列
 - 团队成员面板顶部仅展示当前 Task 的 panel 绑定摘要，不再额外显示最后一条群聊消息预览
 - 右上角为 Project 级真实拓扑图，点击节点即可编辑“这个 Agent 会去跟哪些 Agent”，也支持整块面板放大查看；放大视图会直接把当前拓扑图放大，Agent 卡片会随视口横向和纵向一起拉伸铺满面板，连线固定走在 Agent 顶部的上方通道内，不会越出拓扑 panel；节点顺序稳定，未显式保存顺序时默认优先取 `BA` 作为最左侧起点
-- 拓扑边只保留 `success` 一种触发语义，表示当前 Agent 审查通过或执行完成后自动触发下游
+- 拓扑边现在分为两种关系：`association` 表示当前 Agent 只要完成本轮任务就 100% 自动触发下游；`review` 表示当前 Agent 本轮失败、给出“需要修改 / 审视不通过”时才触发下游
 - 拓扑图里的 Agent 节点颜色用于表达当前运行状态，不再用颜色区分 built-in / custom；内置与本地类型信息仅在编辑面板等辅助信息里展示
-- 审查类 Agent 的“审查通过 / 审查不通过”状态会直接展示在拓扑节点顶部；审查不通过时系统会固定触发 `Build`，并把当前 Task 直接收口为“不通过”
+- 审查类 Agent 的“审查通过 / 审查不通过”状态会直接展示在拓扑节点顶部；若存在 `review` 下游边，审视不通过时会自动派发到这些下游继续修复；审视通过则停在当前节点显示已完成，不再继续触发 `review`
 - 当某个 Task 已运行到当前节点、但拓扑里不存在可自动继续推进的下游节点时，Task 状态会切换为 `waiting`，与群聊中的“保持等待状态”系统消息保持一致
 - 拓扑图在面板尺寸变化时会保持“Agent 在上、历史区在下、首尾节点贴近左右边界但保留少量留白、顶部预留连线通道”的布局约束，而不是把整张图简单等比缩放后居中
 - 拓扑图历史区会优先展示 Agent 最近的运行活动，并明确区分思考、普通消息、步骤与 Tool Call 参数摘要，而不只是单行运行状态
@@ -50,7 +54,7 @@
 - 除 `Build` 外，其余 Agent 一律按审查类 Agent 处理；只有 `Build` 是实际执行实现的 Agent
 - 审查类 Agent 通过 OpenCode HTTP 配置接口会被默认强制注入 `write / edit / bash: deny`
 - 当前处于项目开发初期，不要求兼容历史数据；如果现有 Project 状态、拓扑或运行数据与当前实现不一致，优先直接修正当前数据与实现，不额外为旧数据添加兼容分支
-- 默认工作流是 `BA -> Build -> (DocsReview / UnitTest / IntegrationTest)`，随后 `IntegrationTest -> BA`
+- 默认工作流里，`BA -> Build`、`Build -> (DocsReview / UnitTest / IntegrationTest)`、`IntegrationTest -> BA` 使用 `association`；`BA / DocsReview / UnitTest / IntegrationTest -> Build` 使用 `review`
 - `CodeReview` 默认保留为可选 Agent，不会自动接入默认链路，只有用户手动修改拓扑时才会加入
 - Project 是全局注册信息；拓扑、Task、消息、panel 绑定等运行数据都保存在各自 Project 目录下的 `.agentflow/`
 - Project 拓扑是唯一真源；Task 后续执行始终读取当前 Project 生效中的拓扑，而不是依赖固定 Agent 名称
@@ -128,6 +132,7 @@ npm run cli -- task panels <taskId>
 npm run cli -- topology show
 npm run cli -- topology set-downstream Build DocsReview UnitTest IntegrationTest
 npm run cli -- topology allow BA Build
+npm run cli -- topology allow BA Build --relation review
 npm run cli -- topology allow CodeReview BA
 
 # 6. 查看 Agent 原始配置文件
@@ -156,7 +161,7 @@ CLI 能力分组：
 - 若当前 Project 为空目录，应用会补齐默认 Agent 模板：`BA / CodeReview / DocsReview / IntegrationTest / UnitTest`，并自动附带内置 `Build`
 - 默认拓扑只在首次初始化且当前还没有拓扑数据时按 Agent `role / mode / 是否内置` 自动推断；后续运行时不依赖固定名字
 - 每次创建 Task 或 Agent 间消息转发前，都会先尝试触发配置 Reload，并通过 HTTP `global/config` 强制把所有审查类 Agent 的 `write / edit / bash` 权限置为 `deny`
-- `task init` 会先创建 Task，并完成该 Task 下全部 Agent 的 OpenCode session 与 Zellij pane 初始化；GUI 群聊会优先推荐并默认选中 `Build`，若用户直接发送且未显式指定目标，也会默认投递给 `Build`
+- `task init` 会先创建 Task，并完成该 Task 下全部 Agent 的 OpenCode session 与 Zellij pane 初始化；GUI 群聊会优先推荐并默认选中 `Build`，若用户直接发送且未显式指定目标，也会默认投递给 `Build`，并在群聊历史里自动补上 `@Build`；这类默认首跳转发给 Agent 时，底层格式仍是单行 `[发送者] <正文>`
 - GUI 聊天区里的 `Task Started` 系统消息会附带当前 Task 的 `Zellij Session` 名称与可直接执行的 attach 调试命令，方便排查会话问题
 - 点击 GUI 聊天区标题栏里的打开按钮时，macOS 会额外尝试把 Terminal 前台窗口切到全屏；Windows 会优先使用 Windows Terminal 全屏打开，回退到 `cmd.exe` 时也会尽量自动触发 `F11`
 - 如果当前电脑未安装 `zellij`，GUI 和 CLI 都会给出显式提醒；Task 群聊里也会追加一条系统消息说明当前不会创建真实 Zellij pane

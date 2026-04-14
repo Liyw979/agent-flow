@@ -728,7 +728,7 @@ export class OpenCodeClient {
           : fallbackSender;
     const content =
       parts.length > 0
-        ? this.partsToText(parts)
+        ? this.extractVisibleMessageText(parts)
         : typeof envelope.content === "string"
           ? envelope.content
           : typeof envelope.text === "string"
@@ -954,11 +954,15 @@ export class OpenCodeClient {
   }
 
   private extractReasoningDetail(part: Record<string, unknown>): string {
-    if (typeof part.reasoning !== "string") {
-      return "";
+    const type = typeof part.type === "string" ? part.type.toLowerCase() : "";
+    if (type === "reasoning" && typeof part.text === "string") {
+      return part.text.trim();
+    }
+    if (typeof part.reasoning === "string") {
+      return part.reasoning.trim();
     }
 
-    return part.reasoning.trim();
+    return "";
   }
 
   private extractToolCallDetail(part: Record<string, unknown>): string {
@@ -1225,27 +1229,18 @@ export class OpenCodeClient {
     return false;
   }
 
-  private partsToText(parts: Array<Record<string, unknown>>): string {
+  private extractVisibleMessageText(parts: Array<Record<string, unknown>>): string {
     const text = parts
       .map((part) => {
-        if (typeof part.text === "string") {
+        if (part.type === "text" && typeof part.text === "string") {
           return part.text;
-        }
-        if (typeof part.summary === "string") {
-          return part.summary;
-        }
-        if (typeof part.title === "string") {
-          return part.title;
-        }
-        if (part.type === "step-start" && typeof part.name === "string") {
-          return `执行步骤: ${part.name}`;
         }
         return "";
       })
       .filter(Boolean)
       .join("\n");
 
-    return text || "[OpenCode 返回了非文本 parts，请查看原始消息结构]";
+    return text;
   }
 
   private shortenText(value: string, limit: number): string {

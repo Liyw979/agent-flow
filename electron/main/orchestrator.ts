@@ -66,18 +66,20 @@ interface TaskRuntimeState {
   lastSignatureByAgent: Map<string, string>;
   runningAgents: Set<string>;
   queuedAgents: Set<string>;
-  deliveredMessageIdsByAgent: Map<string, Set<string>>;
+  queuedPromptsByAgent: Map<string, AgentExecutionPrompt>;
 }
 
 type AgentExecutionPrompt =
   | {
       mode: "raw";
       content: string;
+      from?: string;
     }
   | {
       mode: "structured";
       from: string;
-      message: string;
+      userMessage?: string;
+      agentMessage?: string;
       requirement?: string;
     };
 
@@ -454,7 +456,7 @@ export class Orchestrator {
       lastSignatureByAgent: new Map(),
       runningAgents: new Set(),
       queuedAgents: new Set(),
-      deliveredMessageIdsByAgent: new Map(),
+      queuedPromptsByAgent: new Map(),
     });
 
     const snapshot = this.hydrateTask(taskId);
@@ -500,9 +502,10 @@ export class Orchestrator {
       payload: message,
     });
 
-    const forwardedContent = this.stripLeadingTargetMention(content, targetAgent.name);
+    const forwardedContent = this.stripTargetMention(content, targetAgent.name);
     const runPromise = this.dispatchAgentRun(project, task.id, targetAgent.name, {
       mode: "raw",
+      from: "User",
       content: forwardedContent,
     }, [message.id]);
     void runPromise.catch((error) => {
@@ -520,45 +523,16 @@ export class Orchestrator {
     taskId: string,
     agentName: string,
     prompt: AgentExecutionPrompt,
-    deliveredMessageIds: string[] = [],
     behavior: AgentRunBehaviorOptions = {},
   ) {
     const runtime = this.getRuntime(taskId);
     if (runtime.runningAgents.has(agentName)) {
       runtime.queuedAgents.add(agentName);
+      runtime.queuedPromptsByAgent.set(agentName, prompt);
       return;
     }
 
-    if (deliveredMessageIds.length > 0) {
-      this.markMessagesDelivered(taskId, agentName, deliveredMessageIds);
-    }
-
     await this.runAgent(project, this.store.getTask(taskId), agentName, prompt, behavior);
-  }
-
-  private buildQueuedAgentPrompt(
-    taskId: string,
-    agentName: string,
-  ): { prompt: AgentExecutionPrompt; deliveredMessageIds: string[] } | null {
-    const incrementalContext = this.buildIncrementalAgentContext(taskId, agentName);
-    if (incrementalContext.messageIds.length === 0) {
-      return null;
-    }
-
-    const forwardedMessage =
-      incrementalContext.content.trim().length > 0
-        ? `${incrementalContext.content}\n\n请基于以上新增历史继续处理当前任务。`
-        : "请继续处理当前任务，并优先处理当前 Task 中最新新增的消息。";
-
-    return {
-      prompt: {
-        mode: "structured",
-        from: "Orchestrator",
-        message: forwardedMessage,
-        requirement: "请结合 [Message] 中新增的上下文继续推进你当前负责的工作，并避免遗漏后到达的新消息。",
-      },
-      deliveredMessageIds: incrementalContext.messageIds,
-    };
   }
 
   private createUserMessage(
@@ -568,11 +542,12 @@ export class Orchestrator {
     content: string,
     targetAgentId: string,
   ): MessageRecord {
+    const normalizedContent = this.buildUserHistoryContent(content, targetAgentId);
     return {
       id: randomUUID(),
       projectId,
       taskId,
-      content,
+      content: normalizedContent,
       sender: "user",
       timestamp: new Date().toISOString(),
       meta: {
@@ -581,6 +556,42 @@ export class Orchestrator {
         targetAgentId,
       },
     };
+  }
+
+  private buildUserHistoryContent(content: string, targetAgentId: string): string {
+    const trimmed = content.trim();
+    if (!trimmed) {
+      return `@${targetAgentId}`;
+    }
+    if (this.extractMention(trimmed)) {
+      return content;
+    }
+    return `@${targetAgentId} ${trimmed}`;
+  }
+
+  private getLatestUserMessageContent(taskId: string): string {
+    const task = this.store.getTask(taskId);
+    const messages = this.store.listMessages(task.projectId, taskId);
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.sender === "user") {
+        return message.content.trim();
+      }
+    }
+    return "";
+  }
+
+  private contentContainsNormalized(content: string, candidate: string): boolean {
+    const normalizedContent = this.normalizeContentForDedup(content);
+    const normalizedCandidate = this.normalizeContentForDedup(candidate);
+    if (!normalizedContent || !normalizedCandidate) {
+      return false;
+    }
+    return normalizedContent.includes(normalizedCandidate);
+  }
+
+  private normalizeContentForDedup(value: string): string {
+    return value.replace(/\s+/g, " ").trim().toLowerCase();
   }
 
   private syncTaskAgents(task: TaskRecord, agentFiles: AgentFileRecord[]) {
@@ -713,10 +724,26 @@ export class Orchestrator {
       };
       this.store.insertMessage(taskMessage);
 
+      const topology = this.store.getTopology(project.id);
+      const associationTargets = this.getOutgoingEdges(topology, agentName, "association");
+      const reviewFailureTargets =
+        parsedReview.decision === "needs_revision"
+          ? this.getOutgoingEdges(topology, agentName, "review")
+          : [];
       const agentStatus = parsedReview.decision === "needs_revision" ? "failed" : "success";
       this.store.updateTaskAgentStatus(task.id, agentName, agentStatus);
       if (behavior.updateTaskStatusOnStart ?? true) {
-        this.store.updateTaskStatus(task.id, agentStatus === "failed" ? "failed" : "running", null);
+        this.store.updateTaskStatus(
+          task.id,
+          agentStatus === "failed" && reviewFailureTargets.length > 0
+            ? "needs_revision"
+            : agentStatus === "failed" && associationTargets.length > 0
+              ? "running"
+            : agentStatus === "failed"
+              ? "failed"
+              : "running",
+          null,
+        );
       }
 
       this.emit({
@@ -748,15 +775,29 @@ export class Orchestrator {
 
       const signal = this.parseSignal(response.finalMessage);
       if (parsedReview.decision === "needs_revision") {
-        if (this.isReviewAgent(latestAgentFile)) {
-          await this.handleReviewFailure(
-            project,
-            task.id,
-            latestAgentFile,
-            parsedReview,
-            taskMessage.content,
-          );
-        } else if (behavior.completeTaskOnFinish ?? true) {
+        const reviewTargetNames = new Set(reviewFailureTargets.map((edge) => edge.target));
+        const associationTriggered = associationTargets.length > 0
+          ? await this.triggerAssociationDownstream(
+              project,
+              task.id,
+              agentName,
+              agentContextContent,
+              signal,
+              reviewTargetNames,
+            )
+          : 0;
+        const reviewTriggered =
+          reviewFailureTargets.length > 0
+            ? await this.triggerReviewDownstream(
+                project,
+                task.id,
+                latestAgentFile,
+                parsedReview,
+                taskMessage.content,
+              )
+            : 0;
+        const triggered = associationTriggered + reviewTriggered;
+        if (triggered === 0 && (behavior.completeTaskOnFinish ?? true)) {
           await this.completeTask(task.id, "failed");
         }
         this.emit({
@@ -769,9 +810,8 @@ export class Orchestrator {
 
       const triggered =
         behavior.followTopology ?? true
-          ? await this.triggerDownstream(project, task.id, agentName, agentContextContent, signal)
+          ? await this.triggerAssociationDownstream(project, task.id, agentName, agentContextContent, signal)
           : 0;
-      const topology = this.store.getTopology(project.id);
       const hasOtherRunningAgents = [...runtime.runningAgents].some((runningAgent) => runningAgent !== agentName);
       const hasQueuedAgents = runtime.queuedAgents.size > 0;
 
@@ -782,18 +822,21 @@ export class Orchestrator {
           (!hasOtherRunningAgents &&
             !hasQueuedAgents &&
             triggered === 0 &&
-            this.hasCompletedIncomingSuccess(topology, runtime.completedEdges, agentName) &&
-            this.hasCompletedOutgoingSuccess(topology, runtime.completedEdges, agentName))
+            this.hasSatisfiedIncomingAssociation(topology, runtime.completedEdges, agentName) &&
+            this.hasSatisfiedOutgoingAssociation(topology, runtime.completedEdges, agentName))
         )
       ) {
         await this.completeTask(task.id, "success");
+      } else if (
+        (behavior.completeTaskOnFinish ?? true) &&
+        !hasOtherRunningAgents &&
+        !hasQueuedAgents &&
+        triggered === 0
+      ) {
+        this.moveTaskToWaiting(project.id, task.id, agentName);
       }
     } catch (error) {
       this.store.updateTaskAgentStatus(task.id, agentName, "failed");
-      if (behavior.completeTaskOnFinish ?? true) {
-        await this.completeTask(task.id, "failed");
-      }
-
       const failedMessage: MessageRecord = {
         id: randomUUID(),
         projectId: project.id,
@@ -803,6 +846,21 @@ export class Orchestrator {
         timestamp: new Date().toISOString(),
       };
       this.store.insertMessage(failedMessage);
+
+      const topology = this.store.getTopology(project.id);
+      const associationTargets = this.getOutgoingEdges(topology, agentName, "association");
+      const reviewTargets = this.getOutgoingEdges(topology, agentName, "review");
+      if (behavior.updateTaskStatusOnStart ?? true) {
+        this.store.updateTaskStatus(
+          task.id,
+          reviewTargets.length > 0
+            ? "needs_revision"
+            : associationTargets.length > 0
+              ? "running"
+              : "failed",
+          null,
+        );
+      }
 
       this.emit({
         type: "message-created",
@@ -824,6 +882,37 @@ export class Orchestrator {
         projectId: project.id,
         payload: this.hydrateTask(task.id),
       });
+
+      const reviewTargetNames = new Set(reviewTargets.map((edge) => edge.target));
+      const associationTriggered =
+        behavior.followTopology ?? true
+          ? await this.triggerAssociationDownstream(
+              project,
+              task.id,
+              agentName,
+              failedMessage.content,
+              { done: false },
+              reviewTargetNames,
+            )
+          : 0;
+      const reviewTriggered = reviewTargets.length > 0
+        ? await this.triggerReviewDownstream(
+            project,
+            task.id,
+            { name: agentName },
+            {
+              cleanContent: "",
+              decision: "needs_revision",
+              feedback: error instanceof Error ? error.message : "未知错误",
+              rawDecisionBlock: null,
+            },
+            failedMessage.content,
+          )
+        : 0;
+
+      if (associationTriggered + reviewTriggered === 0 && (behavior.completeTaskOnFinish ?? true)) {
+        await this.completeTask(task.id, "failed");
+      }
     } finally {
       runtime.runningAgents.delete(agentName);
 
@@ -836,7 +925,8 @@ export class Orchestrator {
         return;
       }
 
-      const queuedPrompt = this.buildQueuedAgentPrompt(task.id, agentName);
+      const queuedPrompt = runtime.queuedPromptsByAgent.get(agentName);
+      runtime.queuedPromptsByAgent.delete(agentName);
       if (!queuedPrompt) {
         return;
       }
@@ -845,8 +935,7 @@ export class Orchestrator {
         project,
         task.id,
         agentName,
-        queuedPrompt.prompt,
-        queuedPrompt.deliveredMessageIds,
+        queuedPrompt,
       ).catch((queuedError) => {
         console.error("[orchestrator] 排队 Agent 重跑失败", {
           taskId: task.id,
@@ -857,17 +946,18 @@ export class Orchestrator {
     }
   }
 
-  private async triggerDownstream(
+  private async triggerAssociationDownstream(
     project: ProjectRecord,
     taskId: string,
     sourceAgentId: string,
     sourceContent: string,
     _signal: ParsedSignal,
+    excludeTargets = new Set<string>(),
   ): Promise<number> {
     const runtime = this.getRuntime(taskId);
     const topology = this.store.getTopology(project.id);
     const agents = this.store.listTaskAgents(taskId);
-    const outgoing = topology.edges.filter((edge) => edge.source === sourceAgentId && edge.triggerOn === "success");
+    const outgoing = this.getOutgoingEdges(topology, sourceAgentId, "association");
     const completed = new Set(runtime.completedEdges);
 
     for (const edge of outgoing) {
@@ -877,6 +967,9 @@ export class Orchestrator {
 
     const targetNames = new Set<string>();
     for (const edge of outgoing) {
+      if (excludeTargets.has(edge.target)) {
+        continue;
+      }
       targetNames.add(edge.target);
     }
 
@@ -894,32 +987,6 @@ export class Orchestrator {
     }
 
     if (readyTargets.length === 0 && queuedTargets.size === 0) {
-      if (outgoing.length === 0) {
-        this.store.updateTaskStatus(taskId, "waiting", null);
-        const waitingMessage = {
-          id: randomUUID(),
-          projectId: project.id,
-          taskId,
-          content: `Orchestrator 已收到 ${sourceAgentId} 的结果，但当前拓扑下没有可自动继续推进的下游节点，Task 保持等待状态。`,
-          sender: "system",
-          timestamp: new Date().toISOString(),
-          meta: {
-            kind: "orchestrator-waiting",
-            sourceAgentId,
-          },
-        } satisfies MessageRecord;
-        this.store.insertMessage(waitingMessage);
-        this.emit({
-          type: "message-created",
-          projectId: project.id,
-          payload: waitingMessage,
-        });
-        this.emit({
-          type: "task-updated",
-          projectId: project.id,
-          payload: this.hydrateTask(taskId),
-        });
-      }
       return 0;
     }
 
@@ -957,14 +1024,9 @@ export class Orchestrator {
           return;
         }
 
-        const incrementalContext = this.buildIncrementalAgentContext(taskId, targetName);
-        const forwardedMessage = this.buildDownstreamForwardedMessage(
-          sourceAgentId,
-          sourceContent,
-          incrementalContext.content,
-        );
+        const forwardedContext = this.buildDownstreamForwardedContext(taskId, sourceContent);
         const forwardedRequirement = this.buildAgentHandoffRequirement(
-          "请结合 [Message] 中的上下文继续推进当前任务，并只关注你当前负责的部分。",
+          "请结合 [User Message] 与上游 Agent Message 中的上下文继续推进当前任务，并只关注你当前负责的部分。",
           gitDiffSummary,
         );
         const signature = this.buildTriggerSignature(topology, completed, targetName);
@@ -972,13 +1034,103 @@ export class Orchestrator {
         await this.dispatchAgentRun(project, taskId, targetName, {
           mode: "structured",
           from: sourceAgentId,
-          message: forwardedMessage,
-          requirement: forwardedRequirement,
-        }, incrementalContext.messageIds);
+          userMessage: forwardedContext.userMessage,
+          agentMessage: forwardedContext.agentMessage,
+          requirement: targetName === BUILD_AGENT_NAME ? undefined : forwardedRequirement,
+        });
       }),
     );
 
     return triggerTargets.length;
+  }
+
+  private async triggerReviewDownstream(
+    project: ProjectRecord,
+    taskId: string,
+    sourceAgent: Pick<AgentFileRecord, "name">,
+    parsedReview: ParsedReview,
+    visibleContent: string,
+  ): Promise<number> {
+    const topology = this.store.getTopology(project.id);
+    const reviewTargets = [...new Set(
+      this.getOutgoingEdges(topology, sourceAgent.name, "review")
+        .map((edge) => edge.target)
+        .filter((targetName) => targetName !== sourceAgent.name),
+    )];
+    if (reviewTargets.length === 0) {
+      return 0;
+    }
+
+    const feedback = parsedReview.feedback?.trim() || "请根据当前审视意见修复问题，并重新提交本轮结果。";
+    const contextSummary = visibleContent.trim()
+      ? `当前阶段高层结果：\n${visibleContent.trim()}\n\n`
+      : "";
+    const reviewContent = `${contextSummary}具体修改意见：\n${feedback}`.trim();
+    const latestUserContent = this.getLatestUserMessageContent(taskId);
+    const userMessage = latestUserContent && !this.contentContainsNormalized(reviewContent, latestUserContent)
+      ? latestUserContent
+      : undefined;
+    const currentTask = this.store.getTask(taskId);
+    const gitDiffSummary = await this.buildProjectGitDiffSummary(currentTask.cwd);
+    const forwardedRequirement = this.buildAgentHandoffRequirement(
+      "请根据 [User Message] 与上游 Agent Message 中的审视意见完成修复，仅处理阻塞当前交付的问题。",
+      gitDiffSummary,
+    );
+
+    for (const targetName of reviewTargets) {
+      const remediationMessage: MessageRecord = {
+        id: randomUUID(),
+        projectId: project.id,
+        taskId,
+        sender: sourceAgent.name,
+        timestamp: new Date().toISOString(),
+        content: `@${targetName} 审视不通过，请根据以下意见继续处理。\n\n${contextSummary}具体修改意见：\n${feedback}`,
+        meta: {
+          kind: "revision-request",
+          sourceAgentId: sourceAgent.name,
+          targetAgentId: targetName,
+        },
+      };
+      this.store.insertMessage(remediationMessage);
+      this.emit({
+        type: "message-created",
+        projectId: project.id,
+        payload: remediationMessage,
+      });
+    }
+
+    this.store.updateTaskStatus(taskId, "needs_revision", null);
+    this.emit({
+      type: "task-updated",
+      projectId: project.id,
+      payload: this.hydrateTask(taskId),
+    });
+
+    await Promise.all(
+      reviewTargets.map(async (targetName) => {
+        const targetAgent = this.findAgentFile(
+          this.agentFiles.listAgentFiles(project.id, project.path),
+          targetName,
+        );
+        if (!targetAgent) {
+          return;
+        }
+        await this.dispatchAgentRun(
+          project,
+          taskId,
+          targetName,
+          {
+            mode: "structured",
+            from: sourceAgent.name,
+            userMessage,
+            agentMessage: reviewContent,
+            requirement: targetName === BUILD_AGENT_NAME ? undefined : forwardedRequirement,
+          },
+        );
+      }),
+    );
+
+    return reviewTargets.length;
   }
 
   private shouldSuppressDuplicateHighLevelTrigger(
@@ -1033,10 +1185,8 @@ export class Orchestrator {
       return false;
     }
 
-    const incomingSuccessEdges = topology.edges.filter(
-      (edge) => edge.target === targetName && edge.triggerOn === "success",
-    );
-    if (incomingSuccessEdges.some((edge) => !completedEdges.has(edge.id))) {
+    const incomingAssociationEdges = this.getIncomingEdges(topology, targetName, "association");
+    if (incomingAssociationEdges.some((edge) => !completedEdges.has(edge.id))) {
       return false;
     }
 
@@ -1058,36 +1208,33 @@ export class Orchestrator {
     targetName: string,
   ): string {
     const relevantEdgeIds = topology.edges
-      .filter((edge) => edge.target === targetName && completedEdges.has(edge.id))
+      .filter(
+        (edge) =>
+          edge.target === targetName &&
+          edge.triggerOn === "association" &&
+          completedEdges.has(edge.id),
+      )
       .map((edge) => edge.id)
       .sort();
     return relevantEdgeIds.join("|") || `direct:${targetName}`;
   }
 
-  private hasCompletedIncomingSuccess(
+  private hasSatisfiedIncomingAssociation(
     topology: TopologyRecord,
     completedEdges: Set<string>,
     agentName: string,
   ): boolean {
-    return topology.edges.some(
-      (edge) =>
-        edge.target === agentName &&
-        edge.triggerOn === "success" &&
-        completedEdges.has(edge.id),
-    );
+    const incomingEdges = this.getIncomingEdges(topology, agentName, "association");
+    return incomingEdges.every((edge) => completedEdges.has(edge.id));
   }
 
-  private hasCompletedOutgoingSuccess(
+  private hasSatisfiedOutgoingAssociation(
     topology: TopologyRecord,
     completedEdges: Set<string>,
     agentName: string,
   ): boolean {
-    return topology.edges.some(
-      (edge) =>
-        edge.source === agentName &&
-        edge.triggerOn === "success" &&
-        completedEdges.has(edge.id),
-    );
+    const outgoingEdges = this.getOutgoingEdges(topology, agentName, "association");
+    return outgoingEdges.every((edge) => completedEdges.has(edge.id));
   }
 
   private parseSignal(content: string): ParsedSignal {
@@ -1207,12 +1354,22 @@ export class Orchestrator {
 
   private buildAgentExecutionPrompt(prompt: AgentExecutionPrompt): string {
     if (prompt.mode === "raw") {
-      return prompt.content.trim();
+      const content = prompt.content.trim();
+      const from = this.getAgentDisplayName(prompt.from?.trim() || "System");
+      return `[${from}] ${content || "（无）"}`.trim();
     }
 
     const from = this.getAgentDisplayName(prompt.from.trim() || "System");
-    const message = prompt.message.trim() || "（无）";
-    const sections = [`[From] ${from}`, `[Message]\n${message}`];
+    const sections: string[] = [];
+    if (prompt.userMessage?.trim()) {
+      sections.push(`[User Message]\n${prompt.userMessage.trim()}`);
+    }
+    if (prompt.agentMessage?.trim()) {
+      sections.push(`[${from} Agent Message]\n${prompt.agentMessage.trim()}`);
+    }
+    if (sections.length === 0) {
+      sections.push("[User Message]\n（无）");
+    }
     if (prompt.requirement?.trim()) {
       sections.push(`[Requeirement]\n${prompt.requirement.trim()}`);
     }
@@ -1235,31 +1392,19 @@ export class Orchestrator {
     return candidates.find((item) => item.length > 0) ?? "";
   }
 
-  private buildDownstreamForwardedMessage(
-    sourceAgentId: string,
+  private buildDownstreamForwardedContext(
+    taskId: string,
     sourceContent: string,
-    incrementalContextContent: string,
-  ): string {
-    const history = incrementalContextContent.trim();
+  ): { userMessage?: string; agentMessage: string } {
+    const latestUserContent = this.getLatestUserMessageContent(taskId);
     const latestSourceContent = sourceContent.trim();
-    const latestSourceSection =
-      latestSourceContent.length > 0 &&
-      !history.includes(latestSourceContent)
-        ? `以下是上游 Agent ${this.getAgentDisplayName(sourceAgentId)} 本轮最新完成结果：\n\n${latestSourceContent}`
-        : "";
-
-    if (history.length > 0) {
-      return [history, latestSourceSection, "请基于以上新增历史继续处理当前任务。"]
-        .filter(Boolean)
-        .join("\n\n")
-        .trim();
-    }
-
-    if (latestSourceContent.length > 0) {
-      return `上游 Agent ${this.getAgentDisplayName(sourceAgentId)} 已完成，请继续处理以下上下文：\n\n${latestSourceContent}`;
-    }
-
-    return `上游 Agent ${this.getAgentDisplayName(sourceAgentId)} 已完成，请继续处理当前任务。`;
+    return {
+      userMessage:
+        latestUserContent && !this.contentContainsNormalized(latestSourceContent, latestUserContent)
+          ? latestUserContent
+          : undefined,
+      agentMessage: latestSourceContent || "（该上游 Agent 未返回可继续流转的正文。）",
+    };
   }
 
   private buildHighLevelTriggerMessageContent(targetAgentIds: string[], content: string): string {
@@ -1273,6 +1418,35 @@ export class Orchestrator {
 
   private hasMeaningfulSummaryText(value: string): boolean {
     return /[\p{L}\p{N}]/u.test(value);
+  }
+
+  private extractAgentDisplayContent(content: string): string {
+    const trimmed = content.trim();
+    if (!trimmed) {
+      return "";
+    }
+
+    const trailingSection = this.extractTrailingTopLevelSection(trimmed);
+    return trailingSection
+      .replace(/\n(?:---|\*\*\*)(?:\s*\n?)*$/u, "")
+      .trim();
+  }
+
+  private extractTrailingTopLevelSection(content: string): string {
+    const headingPattern = /(^|\n)(#{1,2}\s+[^\n]+)\n/g;
+    let lastHeadingIndex = -1;
+    let match: RegExpExecArray | null = headingPattern.exec(content);
+    while (match) {
+      lastHeadingIndex = match.index + match[1].length;
+      match = headingPattern.exec(content);
+    }
+
+    if (lastHeadingIndex < 0) {
+      return content;
+    }
+
+    const trailingSection = content.slice(lastHeadingIndex).trim();
+    return trailingSection || content;
   }
 
   private extractDisplaySummary(content: string): string | null {
@@ -1320,12 +1494,16 @@ export class Orchestrator {
     parsedReview: ParsedReview,
     fallbackMessage?: string | null,
   ): string {
-    if (parsedReview.cleanContent.trim()) {
-      return parsedReview.cleanContent.trim();
+    const cleanContent = this.extractAgentDisplayContent(parsedReview.cleanContent);
+    if (cleanContent) {
+      return cleanContent;
     }
-    if (fallbackMessage?.trim()) {
-      return fallbackMessage.trim();
+
+    const fallbackContent = this.extractAgentDisplayContent(fallbackMessage?.trim() ?? "");
+    if (fallbackContent) {
+      return fallbackContent;
     }
+
     if (parsedReview.decision === "needs_revision") {
       return this.isReviewAgent(agent)
         ? "（该 Agent 已给出“审查不通过”的结论，Orchestrator 已触发 Build 并将当前 Task 收口为“不通过”。）"
@@ -1498,78 +1676,6 @@ export class Orchestrator {
     }
   }
 
-  private async handleReviewFailure(
-    project: ProjectRecord,
-    taskId: string,
-    sourceAgent: Pick<AgentFileRecord, "name">,
-    parsedReview: ParsedReview,
-    visibleContent: string,
-  ) {
-    const feedback = parsedReview.feedback?.trim() || "请根据当前审查意见修复问题，并重新提交本轮结果。";
-    const contextSummary = visibleContent.trim()
-      ? `当前阶段高层结果：\n${visibleContent.trim()}\n\n`
-      : "";
-    const remediationMessage: MessageRecord = {
-      id: randomUUID(),
-      projectId: project.id,
-      taskId,
-      sender: sourceAgent.name,
-      timestamp: new Date().toISOString(),
-      content: `@${BUILD_AGENT_NAME} 审查不通过，请根据以下意见继续处理。\n\n${contextSummary}具体修改意见：\n${feedback}`,
-      meta: {
-        kind: "revision-request",
-        sourceAgentId: sourceAgent.name,
-        targetAgentId: BUILD_AGENT_NAME,
-      },
-    };
-    this.store.insertMessage(remediationMessage);
-    this.emit({
-      type: "message-created",
-      projectId: project.id,
-      payload: remediationMessage,
-    });
-
-    await this.completeTask(taskId, "failed");
-
-    const buildAgent = this.findAgentFile(
-      this.agentFiles.listAgentFiles(project.id, project.path),
-      BUILD_AGENT_NAME,
-    );
-    if (!buildAgent || sourceAgent.name === BUILD_AGENT_NAME) {
-      return;
-    }
-
-    const incrementalContext = this.buildIncrementalAgentContext(taskId, BUILD_AGENT_NAME);
-    const forwardedMessage =
-      incrementalContext.content.trim().length > 0
-        ? `${incrementalContext.content}\n\n请根据以上新增历史继续处理，并优先修复以下审查问题：\n${feedback}`
-        : `审查来源 Agent：${this.getAgentDisplayName(sourceAgent.name)}\n\n${contextSummary}具体修改意见：\n${feedback}`;
-
-    void this.dispatchAgentRun(
-      project,
-      taskId,
-      BUILD_AGENT_NAME,
-      {
-        mode: "structured",
-        from: sourceAgent.name,
-        message: forwardedMessage,
-        requirement: "请根据 [Message] 中的审查意见完成修复，仅处理阻塞当前交付的问题。",
-      },
-      incrementalContext.messageIds,
-      {
-        followTopology: false,
-        updateTaskStatusOnStart: false,
-        completeTaskOnFinish: false,
-      },
-    ).catch((error) => {
-      console.error("[orchestrator] 审查不通过后触发 Build 失败", {
-        taskId,
-        sourceAgentId: sourceAgent.name,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }
-
   private isReviewAgent(agent: Pick<AgentFileRecord, "name">): boolean {
     return isReviewAgentName(agent.name);
   }
@@ -1626,6 +1732,22 @@ export class Orchestrator {
 
     const stripped = trimmed.slice(mentionToken.length).trimStart();
     return stripped || trimmed;
+  }
+
+  private stripTargetMention(content: string, targetAgentName: string): string {
+    const trimmed = this.stripLeadingTargetMention(content, targetAgentName);
+    if (!trimmed) {
+      return "";
+    }
+
+    const mentionToken = `@${targetAgentName}`;
+    const trailingPattern = new RegExp(`(?:^|\\s)${this.escapeRegExp(mentionToken)}\\s*$`, "u");
+    const strippedTrailing = trimmed.replace(trailingPattern, "").trimEnd();
+    return strippedTrailing || trimmed;
+  }
+
+  private escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   private findAgentFile(agentFiles: AgentFileRecord[], name: string | undefined): AgentFileRecord | undefined {
@@ -1698,7 +1820,7 @@ export class Orchestrator {
     const validNames = new Set(agentFiles.map((item) => item.name));
     const seenEdges = new Set<string>();
     const edges = topology.edges
-      .filter((edge) => edge.triggerOn === "success")
+      .filter((edge) => edge.triggerOn === "association" || edge.triggerOn === "review")
       .filter((edge) => validNames.has(edge.source) && validNames.has(edge.target))
       .filter((edge) => {
         const key = `${edge.source}__${edge.target}__${edge.triggerOn}`;
@@ -1814,120 +1936,67 @@ export class Orchestrator {
         lastSignatureByAgent: new Map(),
         runningAgents: new Set(),
         queuedAgents: new Set(),
-        deliveredMessageIdsByAgent: new Map(),
+        queuedPromptsByAgent: new Map(),
       };
       this.taskRuntime.set(taskId, runtime);
     }
     return runtime;
   }
 
-  private buildIncrementalAgentContext(
-    taskId: string,
-    targetAgentName: string,
-  ): { content: string; messageIds: string[] } {
-    const task = this.store.getTask(taskId);
-    const runtime = this.getRuntime(taskId);
-    const delivered = runtime.deliveredMessageIdsByAgent.get(targetAgentName) ?? new Set<string>();
-    const allMessages = this.store.listMessages(task.projectId, taskId);
-    const contextMessages = allMessages.filter((message) => {
-      if (delivered.has(message.id)) {
-        return false;
-      }
-      if (message.meta?.optimistic === "true") {
-        return false;
-      }
-      if (
-        message.meta?.kind === "task-created" ||
-        message.meta?.kind === "task-completed" ||
-        message.meta?.kind === "high-level-trigger"
-      ) {
-        return false;
-      }
-      return true;
-    });
-
-    if (contextMessages.length === 0) {
-      return {
-        content: "",
-        messageIds: [],
-      };
-    }
-
-    const rendered = contextMessages
-      .map((message) => this.renderContextMessage(message, targetAgentName))
-      .filter(Boolean)
-      .join("\n\n");
-
-    return {
-      content: `以下是你尚未收到的群聊历史，请按时间顺序阅读：\n\n${rendered}`.trim(),
-      messageIds: contextMessages.map((message) => message.id),
-    };
+  private getOutgoingEdges(
+    topology: TopologyRecord,
+    sourceAgentId: string,
+    triggerOn: "association" | "review",
+  ) {
+    return topology.edges.filter(
+      (edge) => edge.source === sourceAgentId && edge.triggerOn === triggerOn,
+    );
   }
 
-  private renderContextMessage(message: MessageRecord, targetAgentName: string): string {
-    const time = this.toShortTime(message.timestamp);
-    const sender = this.getMessageSenderLabel(message);
-    const content = this.getMessageContextContent(message, targetAgentName);
-    if (!content) {
-      return "";
-    }
-    return `[${time}] ${sender}\n${content}`;
+  private getIncomingEdges(
+    topology: TopologyRecord,
+    targetAgentId: string,
+    triggerOn: "association" | "review",
+  ) {
+    return topology.edges.filter(
+      (edge) => edge.target === targetAgentId && edge.triggerOn === triggerOn,
+    );
   }
 
-  private markMessagesDelivered(taskId: string, targetAgentName: string, messageIds: string[]) {
-    if (messageIds.length === 0) {
+  private moveTaskToWaiting(projectId: string, taskId: string, sourceAgentId: string) {
+    const currentTask = this.store.getTask(taskId);
+    if (currentTask.status === "waiting") {
       return;
     }
-    const runtime = this.getRuntime(taskId);
-    const delivered = runtime.deliveredMessageIdsByAgent.get(targetAgentName) ?? new Set<string>();
-    for (const messageId of messageIds) {
-      delivered.add(messageId);
-    }
-    runtime.deliveredMessageIdsByAgent.set(targetAgentName, delivered);
-  }
 
-  private getMessageSenderLabel(message: MessageRecord) {
-    if (message.sender === "user") {
-      return "User";
-    }
-    if (message.sender === "system") {
-      return "System";
-    }
-    return this.getAgentDisplayName(message.sender);
+    this.store.updateTaskStatus(taskId, "waiting", null);
+    const waitingMessage = {
+      id: randomUUID(),
+      projectId,
+      taskId,
+      content: `Orchestrator 已收到 ${sourceAgentId} 的结果，但当前拓扑下没有可自动继续推进的下游节点，Task 保持等待状态。`,
+      sender: "system",
+      timestamp: new Date().toISOString(),
+      meta: {
+        kind: "orchestrator-waiting",
+        sourceAgentId,
+      },
+    } satisfies MessageRecord;
+    this.store.insertMessage(waitingMessage);
+    this.emit({
+      type: "message-created",
+      projectId,
+      payload: waitingMessage,
+    });
+    this.emit({
+      type: "task-updated",
+      projectId,
+      payload: this.hydrateTask(taskId),
+    });
   }
 
   private getAgentDisplayName(name: string) {
     return name;
-  }
-
-  private getMessageContextContent(message: MessageRecord, targetAgentName?: string) {
-    if (message.meta?.kind === "agent-final") {
-      const finalMessage = message.meta.finalMessage?.trim();
-      if (finalMessage) {
-        return finalMessage;
-      }
-    }
-
-    if (
-      message.sender === "user" &&
-      targetAgentName &&
-      message.meta?.targetAgentId === targetAgentName
-    ) {
-      return this.stripLeadingTargetMention(message.content, targetAgentName);
-    }
-
-    return message.content.trim();
-  }
-
-  private toShortTime(timestamp: string) {
-    const value = new Date(timestamp);
-    if (Number.isNaN(value.getTime())) {
-      return timestamp;
-    }
-    return value.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
   }
 
   private emit(event: AgentFlowEvent) {
