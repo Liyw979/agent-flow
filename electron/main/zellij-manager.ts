@@ -9,6 +9,7 @@ import {
   buildOpencodePaneCommand,
 } from "@shared/terminal-commands";
 import { toOpenCodeAgentName } from "./opencode-agent-name";
+import { resolveZellijExecutable } from "./zellij-executable";
 
 const execFileAsync = promisify(execFile);
 
@@ -44,13 +45,27 @@ const HIDDEN_PANEL_AGENTS = new Set<string>();
 export class ZellijManager {
   private zellijAvailable: boolean | null = null;
 
+  protected getZellijCommand(): string {
+    return resolveZellijExecutable().command;
+  }
+
+  protected execZellij(args: string[], options?: Parameters<typeof execFile>[2]) {
+    return execFileAsync(this.getZellijCommand(), args, options);
+  }
+
   async isAvailable(): Promise<boolean> {
     if (this.zellijAvailable !== null) {
       return this.zellijAvailable;
     }
 
     try {
-      await execFileAsync("zellij", ["--version"], {
+      const resolved = resolveZellijExecutable();
+      if (resolved.bundled && !resolved.available) {
+        this.zellijAvailable = false;
+        return this.zellijAvailable;
+      }
+
+      await execFileAsync(resolved.command, ["--version"], {
         timeout: 2000,
       });
       this.zellijAvailable = true;
@@ -75,7 +90,7 @@ export class ZellijManager {
     }
 
     try {
-      await execFileAsync("zellij", ["attach", "--create-background", sessionName], {
+      await this.execZellij(["attach", "--create-background", sessionName], {
         timeout: 4000,
       });
     } catch {
@@ -97,8 +112,8 @@ export class ZellijManager {
       return;
     }
 
-    await execFileAsync("zellij", ["kill-session", sessionName]).catch(async () => {
-      await execFileAsync("zellij", ["delete-session", sessionName]).catch(() => undefined);
+    await this.execZellij(["kill-session", sessionName]).catch(async () => {
+      await this.execZellij(["delete-session", sessionName]).catch(() => undefined);
     });
   }
 
@@ -108,7 +123,7 @@ export class ZellijManager {
     }
 
     try {
-      const { stdout } = await execFileAsync("zellij", ["list-sessions", "--no-formatting"], {
+      const { stdout } = await this.execZellij(["list-sessions", "--no-formatting"], {
         timeout: 2000,
       });
       return new Set(this.extractActiveSessionNames(stdout));
@@ -260,7 +275,7 @@ export class ZellijManager {
       return;
     }
 
-    await execFileAsync("zellij", [
+    await this.execZellij([
       "-s",
       panel.sessionName,
       "action",
@@ -269,7 +284,7 @@ export class ZellijManager {
       panel.paneId,
       content,
     ]).catch(() => undefined);
-    await execFileAsync("zellij", [
+    await this.execZellij([
       "-s",
       panel.sessionName,
       "action",
@@ -337,13 +352,13 @@ export class ZellijManager {
       return;
     }
 
-    await execFileAsync("zellij", ["attach", "--create-background", sessionName], {
+    await this.execZellij(["attach", "--create-background", sessionName], {
       timeout: 4000,
     });
   }
 
-  private async listTerminalPanes(sessionName: string): Promise<ZellijPaneInfo[]> {
-    const { stdout } = await execFileAsync("zellij", [
+  protected async listTerminalPanes(sessionName: string): Promise<ZellijPaneInfo[]> {
+    const { stdout } = await this.execZellij([
       "-s",
       sessionName,
       "action",
@@ -402,8 +417,8 @@ export class ZellijManager {
     }
   }
 
-  private async togglePaneFullscreen(sessionName: string, paneId: string): Promise<void> {
-    await execFileAsync("zellij", [
+  protected async togglePaneFullscreen(sessionName: string, paneId: string): Promise<void> {
+    await this.execZellij([
       "-s",
       sessionName,
       "action",
@@ -417,8 +432,8 @@ export class ZellijManager {
     return agents.filter((agent) => !HIDDEN_PANEL_AGENTS.has(agent.name));
   }
 
-  private async closePane(sessionName: string, paneId: string): Promise<void> {
-    await execFileAsync("zellij", [
+  protected async closePane(sessionName: string, paneId: string): Promise<void> {
+    await this.execZellij([
       "-s",
       sessionName,
       "action",
@@ -440,7 +455,7 @@ export class ZellijManager {
       agentName,
       opencodeSessionId,
     );
-    const { stdout } = await execFileAsync("zellij", [
+    const { stdout } = await this.execZellij([
       "-s",
       sessionName,
       "run",
@@ -491,7 +506,7 @@ export class ZellijManager {
 
   private async openSessionInTerminal(sessionName: string, cwd: string): Promise<void> {
     const terminalCommand = buildInlineCommand({
-      command: "zellij",
+      command: this.getZellijCommand(),
       args: ["attach", sessionName, "--create"],
     });
     await this.openCommandInTerminal(cwd, terminalCommand);
@@ -693,7 +708,7 @@ export class ZellijManager {
       return false;
     }
 
-    await execFileAsync("zellij", [
+    await this.execZellij([
       "-s",
       sessionName,
       "action",

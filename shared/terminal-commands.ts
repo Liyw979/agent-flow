@@ -1,5 +1,10 @@
 export type TerminalPlatform = NodeJS.Platform;
 
+interface CliAttachCommandOptions {
+  command?: string;
+  platform?: TerminalPlatform;
+}
+
 interface InlineCommandOptions {
   command: string;
   args: string[];
@@ -83,8 +88,13 @@ export function buildCliPanelFocusCommand(
   return `npm run cli -- panel focus ${quotePortableShellArg(taskId)} ${quotePortableShellArg(agentName)}`;
 }
 
-export function buildCliAttachSessionCommand(sessionName: string): string {
-  return `zellij attach ${quotePortableShellArg(sessionName)} --create`;
+export function buildCliAttachSessionCommand(
+  sessionName: string,
+  options: CliAttachCommandOptions = {},
+): string {
+  const command = options.command ?? "zellij";
+  const renderedCommand = /[\s"]/.test(command) ? quotePortableShellArg(command) : command;
+  return `${renderedCommand} attach ${quotePortableShellArg(sessionName)} --create`;
 }
 
 export function buildOpencodePaneCommand(

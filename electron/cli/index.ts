@@ -11,6 +11,7 @@ import {
 import { buildZellijMissingMessage, buildZellijMissingReminder } from "@shared/zellij";
 import { Orchestrator } from "../main/orchestrator";
 import { resolveCliUserDataPath } from "../main/user-data-path";
+import { resolveZellijExecutable } from "../main/zellij-executable";
 import type {
   AgentFileRecord,
   InitializeTaskPayload,
@@ -110,7 +111,11 @@ function buildOpenPanelCommand(panel: TaskPanelRecord) {
 }
 
 function buildAttachSessionCommand(sessionName: string) {
-  return buildCliAttachSessionCommand(sessionName);
+  const resolved = resolveZellijExecutable();
+  return buildCliAttachSessionCommand(sessionName, {
+    command: resolved.command,
+    platform: process.platform,
+  });
 }
 
 let cliZellijAvailableCache: boolean | null = null;
@@ -120,7 +125,13 @@ function isCliZellijAvailable() {
     return cliZellijAvailableCache;
   }
 
-  const result = spawnSync("zellij", ["--version"], {
+  const resolved = resolveZellijExecutable();
+  if (resolved.bundled && !resolved.available) {
+    cliZellijAvailableCache = false;
+    return cliZellijAvailableCache;
+  }
+
+  const result = spawnSync(resolved.command, ["--version"], {
     stdio: "ignore",
   });
   cliZellijAvailableCache = !result.error && result.status === 0;
@@ -356,7 +367,8 @@ async function attachTaskSession(taskSnapshot: TaskSnapshot) {
   assertCliZellijAvailable("无法进入 Zellij Session");
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("zellij", ["attach", sessionName, "--create"], {
+    const resolved = resolveZellijExecutable();
+    const child = spawn(resolved.command, ["attach", sessionName, "--create"], {
       cwd: taskSnapshot.task.cwd,
       stdio: "inherit",
     });

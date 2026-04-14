@@ -5,6 +5,14 @@
   "description": "Project / Task oriented OpenCode Code Agent orchestration tool",
   "main": "out/main/index.js",
   "type": "module",
+  "build": {
+    "extraResources": [
+      {
+        "from": "download/zellij.exe",
+        "to": "bin/zellij.exe"
+      }
+    ]
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

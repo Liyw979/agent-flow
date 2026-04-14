@@ -21,6 +21,16 @@ test("CLI 打开的 zellij attach 命令对 Windows 和 POSIX 都可直接复用
   );
 });
 
+test("CLI 打开的 zellij attach 命令支持 Windows 内置二进制路径", () => {
+  assert.equal(
+    buildCliAttachSessionCommand("session 123", {
+      command: "C:\\Program Files\\Agent Flow\\resources\\bin\\zellij.exe",
+      platform: "win32",
+    }),
+    '"C:\\Program Files\\Agent Flow\\resources\\bin\\zellij.exe" attach "session 123" --create',
+  );
+});
+
 test("Windows pane 启动命令使用 cmd.exe 和 Windows 环境变量语法", () => {
   const command = buildOpencodePaneCommand({
     cwd: "C:\\work tree\\agent-team",
