@@ -17,7 +17,7 @@ function shouldMergeMessages(
     previousSender === current.sender &&
     previousSender !== "user" &&
     previousSender !== "system" &&
-    previousKind === "agent-final" &&
+    previousKind === "high-level-trigger" &&
     current.meta?.kind === "high-level-trigger"
   );
 }

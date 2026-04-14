@@ -31,6 +31,7 @@ import {
   type TopologyRecord,
   type UpdateTopologyPayload,
 } from "@shared/types";
+import { buildZellijMissingReminder } from "@shared/zellij";
 import { AgentFileService } from "./agent-files";
 import { OpenCodeClient } from "./opencode-client";
 import { OpenCodeRunner } from "./opencode-runner";
@@ -78,11 +79,6 @@ type AgentExecutionPrompt =
       message: string;
       requirement?: string;
     };
-
-const SELF_REVIEW_PROMPT = `在你完成本轮所有工作后，必须用中文严格按照以下格式给出最终决策，不要有任何其他解释或额外文字：
-- 如果你认为自己负责的任务已完全完成（或你负责审核的部分已严格通过），请直接输出：【DECISION】检查通过
-- 如果存在问题需要修改，请直接输出：【DECISION】需要修改
-具体修改意见：（此处详细列出需要修改的点，越具体越好）`;
 
 export class Orchestrator {
   private readonly store: StoreService;
@@ -290,6 +286,7 @@ export class Orchestrator {
     if (!panel) {
       return;
     }
+    await this.zellijManager.assertAvailable(`无法打开 Agent ${agentId} 对应的 Zellij pane`);
     await this.zellijManager.focusAgentPANEL(panel);
   }
 
@@ -300,6 +297,7 @@ export class Orchestrator {
       throw new Error("Task 不属于当前 Project");
     }
 
+    await this.zellijManager.assertAvailable("无法打开 Zellij Session");
     const snapshot = await this.ensureTaskInitialized(
       project,
       task,
@@ -429,6 +427,20 @@ export class Orchestrator {
       },
     };
     this.store.insertMessage(taskCreatedMessage);
+
+    if (!(await this.zellijManager.isAvailable())) {
+      this.store.insertMessage({
+        id: randomUUID(),
+        projectId: project.id,
+        taskId,
+        content: buildZellijMissingReminder(),
+        sender: "system",
+        timestamp: new Date().toISOString(),
+        meta: {
+          kind: "zellij-missing",
+        },
+      });
+    }
 
     this.taskRuntime.set(taskId, {
       completedEdges: new Set(),
@@ -663,17 +675,22 @@ export class Orchestrator {
       }
 
       const parsedReview = this.parseReview(response.finalMessage);
+      const agentContextContent = this.resolveAgentContextContent(
+        parsedReview,
+        response.finalMessage,
+        response.fallbackMessage,
+      );
       const taskMessage: MessageRecord = {
         id: response.messageId,
         projectId: project.id,
         taskId: task.id,
-        content: this.createDisplayContent(parsedReview, response.fallbackMessage),
+        content: this.createDisplayContent(latestAgentFile, parsedReview, response.fallbackMessage),
         sender: agentName,
         timestamp: response.timestamp,
         meta: {
           kind: "agent-final",
           status: response.status,
-          finalMessage: parsedReview.cleanContent,
+          finalMessage: agentContextContent,
           reviewDecision: parsedReview.decision,
           reviewFeedback: parsedReview.feedback ?? "",
           rawResponse: response.finalMessage,
@@ -724,7 +741,13 @@ export class Orchestrator {
         return;
       }
 
-      const triggered = await this.triggerDownstream(project, task.id, agentName, parsedReview.cleanContent, signal);
+      const triggered = await this.triggerDownstream(
+        project,
+        task.id,
+        agentName,
+        agentContextContent,
+        signal,
+      );
       const topology = this.store.getTopology(project.id);
       const hasOtherRunningAgents = [...runtime.runningAgents].some((runningAgent) => runningAgent !== agentName);
       const hasQueuedAgents = runtime.queuedAgents.size > 0;
@@ -810,7 +833,7 @@ export class Orchestrator {
     project: ProjectRecord,
     taskId: string,
     sourceAgentId: string,
-    content: string,
+    sourceContent: string,
     signal: ParsedSignal,
   ): Promise<number> {
     const runtime = this.getRuntime(taskId);
@@ -893,7 +916,7 @@ export class Orchestrator {
         taskId,
         sender: sourceAgentId,
         timestamp: new Date().toISOString(),
-        content: `${triggerTargets.map((targetName) => `@${targetName}`).join(" ")} 请基于我刚刚完成的结果继续处理。`,
+        content: this.buildHighLevelTriggerMessageContent(triggerTargets, content),
         meta: {
           kind: "high-level-trigger",
           sourceAgentId,
@@ -919,10 +942,11 @@ export class Orchestrator {
         }
 
         const incrementalContext = this.buildIncrementalAgentContext(taskId, targetName);
-        const forwardedMessage =
-          incrementalContext.content.trim().length > 0
-            ? `${incrementalContext.content}\n\n请基于以上新增历史继续处理当前任务。`
-            : `上游 Agent ${this.getAgentDisplayName(sourceAgentId)} 已完成，请继续处理以下上下文：\n\n${content}`;
+        const forwardedMessage = this.buildDownstreamForwardedMessage(
+          sourceAgentId,
+          sourceContent,
+          incrementalContext.content,
+        );
         const forwardedRequirement =
           signal.targets.length > 0
             ? this.buildAgentHandoffRequirement(
@@ -1115,7 +1139,7 @@ export class Orchestrator {
       cleanContent: this.stripStructuredSignals(body),
       decision: /【DECISION】\s*需要修改/.test(decisionBlock)
         ? "needs_revision"
-        : /【DECISION】\s*检查通过/.test(decisionBlock)
+        : /【DECISION】\s*(检查通过|已完成)/.test(decisionBlock)
           ? "pass"
           : "unknown",
       feedback,
@@ -1220,6 +1244,60 @@ export class Orchestrator {
       .trim();
   }
 
+  private resolveAgentContextContent(
+    parsedReview: ParsedReview,
+    rawFinalMessage: string,
+    fallbackMessage?: string | null,
+  ): string {
+    const candidates = [
+      parsedReview.cleanContent.trim(),
+      this.stripStructuredSignals(rawFinalMessage).trim(),
+      fallbackMessage?.trim() ?? "",
+    ];
+
+    return candidates.find((item) => item.length > 0) ?? "";
+  }
+
+  private buildDownstreamForwardedMessage(
+    sourceAgentId: string,
+    sourceContent: string,
+    incrementalContextContent: string,
+  ): string {
+    const history = incrementalContextContent.trim();
+    const latestSourceContent = sourceContent.trim();
+    const latestSourceSection =
+      latestSourceContent.length > 0 &&
+      !history.includes(latestSourceContent)
+        ? `以下是上游 Agent ${this.getAgentDisplayName(sourceAgentId)} 本轮最新完成结果：\n\n${latestSourceContent}`
+        : "";
+
+    if (history.length > 0) {
+      return [history, latestSourceSection, "请基于以上新增历史继续处理当前任务。"]
+        .filter(Boolean)
+        .join("\n\n")
+        .trim();
+    }
+
+    if (latestSourceContent.length > 0) {
+      return `上游 Agent ${this.getAgentDisplayName(sourceAgentId)} 已完成，请继续处理以下上下文：\n\n${latestSourceContent}`;
+    }
+
+    return `上游 Agent ${this.getAgentDisplayName(sourceAgentId)} 已完成，请继续处理当前任务。`;
+  }
+
+  private buildHighLevelTriggerMessageContent(targetAgentIds: string[], content: string): string {
+    const mentions = targetAgentIds.map((targetName) => `@${targetName}`).join(" ");
+    const summary = this.extractDisplaySummary(content) ?? content.trim();
+    if (!summary) {
+      return `${mentions}\n已收到上游结果并转交下游继续处理。`.trim();
+    }
+    return `${mentions}\n上游摘要：${summary}`.trim();
+  }
+
+  private hasMeaningfulSummaryText(value: string): boolean {
+    return /[\p{L}\p{N}]/u.test(value);
+  }
+
   private extractDisplaySummary(content: string): string | null {
     const normalized = content
       .replace(/\r/g, "")
@@ -1230,21 +1308,41 @@ export class Orchestrator {
       return null;
     }
 
-    const lastBlock = normalized.at(-1) ?? "";
-    const sentences =
-      lastBlock
-        .match(/[^。！？!?]+[。！？!?]?/g)
-        ?.map((item) => item.trim())
-        .filter(Boolean) ?? [];
-    const lastSentence = (sentences.at(-1) ?? lastBlock)
-      .replace(/^[-*]\s+/u, "")
-      .replace(/^\d+[.)、]\s*/u, "")
-      .trim();
+    for (let blockIndex = normalized.length - 1; blockIndex >= 0; blockIndex -= 1) {
+      const block = normalized[blockIndex] ?? "";
+      if (!this.hasMeaningfulSummaryText(block)) {
+        continue;
+      }
 
-    return lastSentence || lastBlock || null;
+      const sentences =
+        block
+          .match(/[^。！？!?]+[。！？!?]?/g)
+          ?.map((item) =>
+            item
+              .trim()
+              .replace(/^[-*]\s+/u, "")
+              .replace(/^\d+[.)、]\s*/u, "")
+              .trim(),
+          )
+          .filter(Boolean) ?? [];
+      for (let sentenceIndex = sentences.length - 1; sentenceIndex >= 0; sentenceIndex -= 1) {
+        const sentence = sentences[sentenceIndex] ?? "";
+        if (this.hasMeaningfulSummaryText(sentence)) {
+          return sentence;
+        }
+      }
+
+      return block;
+    }
+
+    return null;
   }
 
-  private createDisplayContent(parsedReview: ParsedReview, fallbackMessage?: string | null): string {
+  private createDisplayContent(
+    agent: Pick<AgentFileRecord, "name" | "role">,
+    parsedReview: ParsedReview,
+    fallbackMessage?: string | null,
+  ): string {
     if (parsedReview.cleanContent.trim()) {
       return this.extractDisplaySummary(parsedReview.cleanContent) ?? parsedReview.cleanContent.trim();
     }
@@ -1255,7 +1353,9 @@ export class Orchestrator {
       return "（该 Agent 已给出“需要修改”的决策，详细修改意见由 Orchestrator 以返工消息形式展示。）";
     }
     if (parsedReview.decision === "pass") {
-      return "（该 Agent 已完成本轮工作并通过自检，未额外返回高层说明。）";
+      return this.usesReviewPassDecision(agent)
+        ? "（该 Agent 已完成本轮审查并给出通过结论，未额外返回高层说明。）"
+        : "（该 Agent 已完成本轮工作，未额外返回高层说明。）";
     }
     return "（该 Agent 未返回可展示的高层结果。）";
   }
@@ -1558,10 +1658,30 @@ export class Orchestrator {
     return [...visited];
   }
 
-  private createSystemPrompt(_agent: AgentFileRecord): string {
+  private usesReviewPassDecision(agent: Pick<AgentFileRecord, "name" | "role">): boolean {
+    return new Set(["code_review", "docs_review", "unit_test", "integration_test"]).has(
+      agent.role ?? "",
+    );
+  }
+
+  private buildDecisionPrompt(agent: Pick<AgentFileRecord, "name" | "role">): string {
+    if (this.usesReviewPassDecision(agent)) {
+      return `在你完成本轮所有工作后，必须用中文严格按照以下格式给出最终决策，不要有任何其他解释或额外文字：
+- 如果你确认自己负责的审查已经严格通过，请直接输出：【DECISION】检查通过
+- 如果存在问题需要修改，请直接输出：【DECISION】需要修改
+具体修改意见：（此处详细列出需要修改的点，越具体越好）`;
+    }
+
+    return `在你完成本轮所有工作后，必须用中文严格按照以下格式给出最终决策，不要有任何其他解释或额外文字：
+- 如果你确认自己负责的工作已经完成，请直接输出：【DECISION】已完成
+- 如果存在问题需要修改，请直接输出：【DECISION】需要修改
+具体修改意见：（此处详细列出需要修改的点，越具体越好）`;
+  }
+
+  private createSystemPrompt(agent: AgentFileRecord): string {
     const orchestrationRules =
       "请只关注你当前负责的工作本身，不要假设还有其他 Agent，也不要描述任何调度链路。先输出对用户有意义的高层结果。无论收到的正文是否带额外格式或补充要求，你在完成本轮工作后都必须用中文输出最终的【DECISION】结论，格式如下：\n"
-      + SELF_REVIEW_PROMPT;
+      + this.buildDecisionPrompt(agent);
     return orchestrationRules;
   }
 
