@@ -95,7 +95,7 @@ export interface TaskPanelRecord {
 export interface TopologyNode {
   id: string;
   label: string;
-  kind: "agent" | "entry" | "checkpoint";
+  kind: "agent" | "checkpoint";
 }
 
 export interface TopologyEdge {
@@ -107,7 +107,7 @@ export interface TopologyEdge {
 
 export interface TopologyRecord {
   projectId: string;
-  rootAgentId: string | null;
+  startAgentId: string | null;
   agentOrderIds: string[];
   nodes: TopologyNode[];
   edges: TopologyEdge[];
@@ -244,12 +244,12 @@ function findAgentByRole(agents: TopologyAgentSeed[], role: AgentRole): Topology
   return agents.find((agent) => agent.role === role) ?? null;
 }
 
-export function resolveTopologyRootAgent(
+export function resolveTopologyStartAgent(
   agents: Array<Pick<TopologyAgentSeed, "name" | "mode" | "role" | "relativePath">>,
-  preferredRootAgentId?: string | null,
+  preferredStartAgentId?: string | null,
 ): string | null {
-  if (preferredRootAgentId && agents.some((agent) => agent.name === preferredRootAgentId)) {
-    return preferredRootAgentId;
+  if (preferredStartAgentId && agents.some((agent) => agent.name === preferredStartAgentId)) {
+    return preferredStartAgentId;
   }
 
   const primaryAgents = agents.filter((agent) => agent.mode === "primary");
@@ -288,16 +288,16 @@ export function resolveTopologyAgentOrder(
     return order;
   }
 
-  const rootAgentName = resolveTopologyRootAgent(agents);
+  const startAgentName = resolveTopologyStartAgent(agents);
   const primaryAgents = agents.filter((agent) => agent.mode === "primary");
   const builtinPrimaryAgents = primaryAgents.filter((agent) => isBuiltinAgentPath(agent.relativePath));
   const implementationAgent =
     findAgentByRole(agents as TopologyAgentSeed[], "implementation") ??
     builtinPrimaryAgents[0] ??
-    primaryAgents.find((agent) => agent.name !== rootAgentName) ??
+    primaryAgents.find((agent) => agent.name !== startAgentName) ??
     null;
 
-  push(rootAgentName);
+  push(startAgentName);
   push(implementationAgent?.name);
   push(findAgentByRole(agents as TopologyAgentSeed[], "docs_review")?.name);
   push(findAgentByRole(agents as TopologyAgentSeed[], "unit_test")?.name);
@@ -320,14 +320,14 @@ export function createDefaultTopology(projectId: string, agents: TopologyAgentSe
   const nodes = agentOrderIds.map(createNode);
   const edges: TopologyEdge[] = [];
 
-  const rootAgentName = resolveTopologyRootAgent(agents);
-  const rootAgent = agents.find((agent) => agent.name === rootAgentName) ?? null;
+  const startAgentName = resolveTopologyStartAgent(agents);
+  const startAgent = agents.find((agent) => agent.name === startAgentName) ?? null;
   const primaryAgents = agents.filter((agent) => agent.mode === "primary");
   const builtinPrimaryAgents = primaryAgents.filter((agent) => isBuiltinAgentPath(agent.relativePath));
   const implementationAgent =
     findAgentByRole(agents, "implementation") ??
     builtinPrimaryAgents[0] ??
-    primaryAgents.find((agent) => agent.name !== rootAgent?.name) ??
+    primaryAgents.find((agent) => agent.name !== startAgent?.name) ??
     null;
   const docsReviewAgent = findAgentByRole(agents, "docs_review");
   const unitTestAgent = findAgentByRole(agents, "unit_test");
@@ -343,17 +343,17 @@ export function createDefaultTopology(projectId: string, agents: TopologyAgentSe
     edges.push({ id: `${source}__${target}__${triggerOn}`, source, target, triggerOn });
   };
 
-  if (rootAgent && implementationAgent && rootAgent.name !== implementationAgent.name) {
-    push(rootAgent.name, implementationAgent.name, "success");
+  if (startAgent && implementationAgent && startAgent.name !== implementationAgent.name) {
+    push(startAgent.name, implementationAgent.name, "success");
   }
   push(implementationAgent?.name, docsReviewAgent?.name, "success");
   push(implementationAgent?.name, unitTestAgent?.name, "success");
   push(implementationAgent?.name, integrationTestAgent?.name, "success");
-  push(integrationTestAgent?.name, rootAgent?.name, "success");
+  push(integrationTestAgent?.name, startAgent?.name, "success");
 
   return {
     projectId,
-    rootAgentId: rootAgent?.name ?? null,
+    startAgentId: startAgent?.name ?? null,
     agentOrderIds,
     nodes,
     edges,

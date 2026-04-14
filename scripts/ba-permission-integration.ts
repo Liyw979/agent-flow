@@ -81,7 +81,7 @@ async function main() {
       projectId: project.project.id,
       topology: {
         ...project.topology,
-        rootAgentId: "BA",
+        startAgentId: "BA",
         agentOrderIds: ["BA"],
         nodes: [{ id: "BA", label: "BA", kind: "agent" }],
         edges: [],

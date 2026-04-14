@@ -35,7 +35,6 @@ Task 是用户真正协作和观察的基本容器，也是围绕一个工作目
 
 - Task 基础信息
 - Task 群聊 Talk
-- 入口 Agent
 - 当前状态
 - 独立 Zellij session
 - 当前 Task 运行时的 `panel <-> agent` 对应关系
@@ -102,7 +101,7 @@ Task 是用户真正协作和观察的基本容器，也是围绕一个工作目
 
 - 顶层列出全部 Project
 - 展开某个 Project 后，列出该 Project 下全部 Task
-- Task 在这里既是执行记录，也是聊天入口
+- Task 在这里既是执行记录，也是对应的聊天会话
 - 用户选中哪个 Task，中间就显示哪个 Task 的群聊
 
 中间：Task 级群聊消息流
@@ -180,7 +179,7 @@ Task 群聊中至少要出现三类消息：
 7. 用户按 `Tab` 时，视为选中当前候选 Agent。
 8. 选中后，输入框补全为标准化的 `@AgentName`。
 9. 用户发送消息时，前端只做轻量解析，用于输入体验和 optimistic UI。
-10. 发送时，后端/Orchestrator 作为权威入口完成最终解析、校验与派发。
+10. 发送时，由后端/Orchestrator 完成最终解析、校验与派发。
 
 底层原理可归纳为：
 
@@ -237,7 +236,7 @@ Task 群聊中至少要出现三类消息：
 规则如下：
 
 1. 用户在 Task 群聊中 `@AgentX`：
-   - 作为入口派发，允许启动对应执行
+   - 作为直接派发，允许启动对应执行
    - 同时把 AgentX 状态改为运行中
 2. 前端看到一条 `AgentA @AgentB` 风格的消息：
    - 这条消息通常由 Orchestrator 在 `AgentA` 完成后生成
@@ -362,7 +361,7 @@ Orchestrator 的职责分为“群聊反馈”和“执行调度”两部分。
 - 创建或推进 Task
 - 创建对应 Zellij session
 - 为每个 Agent 创建或绑定对应 panel，并维护 `panel <-> agent` 映射
-- 启动入口 Agent
+- 启动首个 Agent
 - 在某个 Agent 执行完成后，根据当前 Project 拓扑决定允许触发哪些下游 Agent
 - 由 Orchestrator 真正向下游 Agent 发送消息并启动执行
 - 更新 Task 与 Project Agent 在该 Task 下的状态
@@ -590,7 +589,7 @@ Orchestrator 至少应依赖以下能力：
 13. 在 Task 启动前先扫描 Project 下全部 Agent，建立 `panel <-> agent` 运行时映射。
 14. 优先通过 Zellij CLI 完成对目标 pane 的任务下发。
 15. 为每个 Agent pane 增加一个极薄的 runner/adapter，用结构化 sidecar 通道把 `finalMessage` 回传给 Orchestrator。
-16. 保留 Task 作为执行记录、聊天容器和 Zellij 入口。
+16. 保留 Task 作为执行记录、聊天容器和 Zellij 会话承载单元。
 17. 保留 OpenCode 原始 Agent 配置文件作为唯一配置源。
 
 以上即为更新后的正式实施方案。后续设计与实现都应以这份约束为准。

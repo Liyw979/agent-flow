@@ -22,7 +22,7 @@ import {
   type ProjectSnapshot,
   type ReadAgentFilePayload,
   resolveTopologyAgentOrder,
-  resolveTopologyRootAgent,
+  resolveTopologyStartAgent,
   type SubmitTaskPayload,
   type TaskAgentRecord,
   type TaskPanelRecord,
@@ -1563,7 +1563,7 @@ export class Orchestrator {
 
     return {
       projectId,
-      rootAgentId: resolveTopologyRootAgent(
+      startAgentId: resolveTopologyStartAgent(
         agentFiles.map((file) => ({
           name: file.name,
           mode: file.mode,

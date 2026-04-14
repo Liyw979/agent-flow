@@ -91,7 +91,7 @@ npm run electron:dev
 
 ## CLI
 
-项目同时提供一套复用 `Orchestrator` 的 CLI 入口，CLI 和 GUI 走同一套 Project / Task / Agent / 拓扑图 / Panel 运行时能力。
+项目同时提供一套复用 `Orchestrator` 的 CLI，CLI 和 GUI 走同一套 Project / Task / Agent / 拓扑图 / Panel 运行时能力。
 
 ```bash
 npm run cli -- help

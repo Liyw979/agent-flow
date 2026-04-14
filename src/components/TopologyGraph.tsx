@@ -279,7 +279,7 @@ function computeNodeLayout(
   >();
   const nodeIds = draft.nodes.map((node) => node.id);
   const nodeIdSet = new Set(nodeIds);
-  const rootAgentId = nodeIdSet.has(draft.rootAgentId ?? "") ? draft.rootAgentId : nodeIds[0] ?? null;
+  const startAgentId = nodeIdSet.has(draft.startAgentId ?? "") ? draft.startAgentId : nodeIds[0] ?? null;
   const manualOrderIndex = new Map(
     (draft.agentOrderIds ?? [])
       .filter((agentId) => nodeIdSet.has(agentId))
@@ -304,13 +304,13 @@ function computeNodeLayout(
         !nodeIdSet.has(edge.source) ||
         !nodeIdSet.has(edge.target) ||
         edge.source === edge.target ||
-        edge.target === rootAgentId
+        edge.target === startAgentId
       ) {
         continue;
       }
 
       const sourceAncestors = ancestorSets.get(edge.source) ?? new Set<string>();
-      const sourceReachable = edge.source === rootAgentId || sourceAncestors.size > 0;
+      const sourceReachable = edge.source === startAgentId || sourceAncestors.size > 0;
       if (!sourceReachable || sourceAncestors.has(edge.target)) {
         continue;
       }
@@ -349,10 +349,10 @@ function computeNodeLayout(
         return leftManualIndex - rightManualIndex;
       }
     } else {
-      if (left === rootAgentId) {
+      if (left === startAgentId) {
         return -1;
       }
-      if (right === rootAgentId) {
+      if (right === startAgentId) {
         return 1;
       }
     }
