@@ -20,6 +20,7 @@
 - Agent frontmatter 使用最新的 `permission:` 配置字段，值使用 `allow / ask / deny`
 - 对只读 Agent，`write / edit / bash` 设为 `deny` 时，`patch / task` 也必须一起限制；运行时会对这类缺省项自动补成 `deny`，避免借子代理绕过只读约束
 - `Build` 是项目内部名称，底层对应 OpenCode 自带内置 `build` agent，不对应本地 Markdown 文件
+- 只有审查类 Agent 会被编排器注入 system prompt，并使用 `【DECISION】检查通过 / 需要修改` 这套最终决策协议；`Build` 不会被注入任何 system prompt
 - 除 `Build` 外，其余本地 Agent、非本地 Agent、公共 Agent 一律按“审查类 Agent”处理；只有 OpenCode 内置 `Build` 是实际执行实现的 Agent
 - 审查类 Agent 通过 OpenCode HTTP 配置接口会被默认强制注入 `write/edit/bash: deny`，不依赖它们各自 Markdown 里是否手写了权限
 - 当前处于项目开发初期，不要求兼容历史数据；如果现有 Project 状态、拓扑或运行数据与当前实现不一致，优先直接修正当前数据与实现，不额外为旧数据添加兼容分支

@@ -53,6 +53,7 @@
 - 当前默认 Agent 集合为 `BA / Build / CodeReview / DocsReview / IntegrationTest / UnitTest`
 - `Build` 是项目内部名称，底层使用 OpenCode 内置 `build` agent，不需要项目自己在 `.opencode/agents` 里额外定义 Markdown 文件
 - 除 `Build` 外，其余 Agent 一律按审查类 Agent 处理；只有 `Build` 是实际执行实现的 Agent
+- 只有审查类 Agent 会被编排器注入 system prompt，并使用 `【DECISION】检查通过 / 需要修改` 这套最终决策协议；`Build` 不会被注入任何 system prompt
 - 审查类 Agent 通过 OpenCode HTTP 配置接口会被默认强制注入 `write / edit / bash: deny`
 - 当前处于项目开发初期，不要求兼容历史数据；如果现有 Project 状态、拓扑或运行数据与当前实现不一致，优先直接修正当前数据与实现，不额外为旧数据添加兼容分支
 - 默认工作流里，`BA -> Build`、`Build -> (DocsReview / UnitTest / IntegrationTest)`、`IntegrationTest -> BA` 使用 `association`；`BA / DocsReview / UnitTest / IntegrationTest -> Build` 使用 `review`
