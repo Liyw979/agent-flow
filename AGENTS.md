@@ -26,6 +26,7 @@
 - Project 一旦已有拓扑，后续运行时只认当前拓扑，不会再根据固定名字做调度判断
 - Task 不再快照 Agent 的 prompt / permission 定义；运行时始终读取当前 Project 下 `.opencode/agents/**/*.md` 的最新内容，`.agentflow/state.json` 里的 `taskAgents` 只保留运行态字段
 - Project 只保留全局注册信息；拓扑、Task、消息、panel 绑定等运行数据保存在各自 Project 目录下的 `.agentflow/`
+- CLI 不再在 `<project>/.agentflow/projects.json` 静默回退创建本地 Project registry；若默认全局目录不可写，必须显式设置 `AGENTFLOW_USER_DATA_DIR`
 - GUI 主布局为：左侧 `Project + Task` 列表，右侧上方大拓扑图，右侧下方左聊天、右 Agent 列表
 - 右下角团队成员面板顶部展示 build Agent 最近一次接收到的任务摘要，以及当前 Task 的 panel 绑定摘要
 - 当一个 Agent 同时触发多个下游 Agent 时，聊天区会合并展示为一条批量 `Agent -> Agent` 派发消息，而不是拆成多条重复消息

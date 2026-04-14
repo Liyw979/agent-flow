@@ -85,6 +85,53 @@ export class StoreService {
     return sortByCreatedAtDesc(this.readRegistry().projects).map((entry) => this.hydrateProjectRecord(entry));
   }
 
+  reconcileLegacyProjectRegistry(projectPath: string): ProjectRecord | null {
+    const normalizedPath = path.resolve(projectPath);
+    const globalRegistry = this.readRegistry();
+    const globalEntry =
+      globalRegistry.projects.find((entry) => path.resolve(entry.path) === normalizedPath) ?? null;
+    const legacyRegistryPath = this.getLegacyProjectRegistryPath(normalizedPath);
+    if (!fs.existsSync(legacyRegistryPath) || path.resolve(legacyRegistryPath) === path.resolve(this.registryPath)) {
+      if (globalEntry) {
+        this.normalizeProjectState(normalizedPath, globalEntry.id);
+      }
+      return globalEntry ? this.hydrateProjectRecord(globalEntry) : null;
+    }
+
+    const legacyRegistry = this.readRegistryFile(legacyRegistryPath);
+    const legacyEntry =
+      legacyRegistry.projects.find((entry) => path.resolve(entry.path) === normalizedPath) ?? null;
+
+    if (!legacyEntry) {
+      this.archiveLegacyProjectRegistry(legacyRegistryPath, "empty");
+      if (globalEntry) {
+        this.normalizeProjectState(normalizedPath, globalEntry.id);
+      }
+      return globalEntry ? this.hydrateProjectRecord(globalEntry) : null;
+    }
+
+    if (!globalEntry) {
+      this.writeRegistry({
+        ...globalRegistry,
+        projects: sortByCreatedAtDesc(
+          globalRegistry.projects
+            .filter((entry) => path.resolve(entry.path) !== normalizedPath)
+            .concat(legacyEntry),
+        ),
+      });
+      this.archiveLegacyProjectRegistry(legacyRegistryPath, "migrated");
+      this.normalizeProjectState(normalizedPath, legacyEntry.id);
+      return this.hydrateProjectRecord(legacyEntry);
+    }
+
+    this.archiveLegacyProjectRegistry(
+      legacyRegistryPath,
+      legacyEntry.id === globalEntry.id ? "deduplicated" : "conflict",
+    );
+    this.normalizeProjectState(normalizedPath, globalEntry.id);
+    return this.hydrateProjectRecord(globalEntry);
+  }
+
   getProject(projectId: string): ProjectRecord {
     const entry = this.readRegistry().projects.find((item) => item.id === projectId);
     if (!entry) {
@@ -315,14 +362,18 @@ export class StoreService {
   }
 
   private readRegistry(): ProjectRegistryFile {
-    if (!fs.existsSync(this.registryPath)) {
+    return this.readRegistryFile(this.registryPath);
+  }
+
+  private readRegistryFile(registryPath: string): ProjectRegistryFile {
+    if (!fs.existsSync(registryPath)) {
       return {
         version: 1,
         projects: [],
       };
     }
 
-    const raw = fs.readFileSync(this.registryPath, "utf8").trim();
+    const raw = fs.readFileSync(registryPath, "utf8").trim();
     if (!raw) {
       return {
         version: 1,
@@ -363,6 +414,10 @@ export class StoreService {
 
   private getProjectStatePath(projectPath: string) {
     return path.join(projectPath, PROJECT_DATA_DIR_NAME, PROJECT_STATE_FILE_NAME);
+  }
+
+  private getLegacyProjectRegistryPath(projectPath: string) {
+    return path.join(projectPath, PROJECT_DATA_DIR_NAME, REGISTRY_FILE_NAME);
   }
 
   private readProjectStateById(projectId: string): ProjectStateFile {
@@ -472,6 +527,24 @@ export class StoreService {
     const statePath = this.getProjectStatePath(projectPath);
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  }
+
+  private normalizeProjectState(projectPath: string, projectId: string) {
+    const state = this.readProjectState(projectPath, projectId);
+    this.writeProjectState(projectPath, state);
+  }
+
+  private archiveLegacyProjectRegistry(legacyRegistryPath: string, reason: string) {
+    if (!fs.existsSync(legacyRegistryPath)) {
+      return;
+    }
+
+    const parsed = path.parse(legacyRegistryPath);
+    const archivedPath = path.join(
+      parsed.dir,
+      `${parsed.name}.legacy-${reason}-${Date.now()}${parsed.ext}`,
+    );
+    fs.renameSync(legacyRegistryPath, archivedPath);
   }
 
   private updateProjectState(projectId: string, updater: (state: ProjectStateFile) => ProjectStateFile) {

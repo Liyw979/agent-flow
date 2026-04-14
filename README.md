@@ -82,6 +82,7 @@ agentflow/
 - 全局 Project 注册信息位于用户数据目录下的 `projects.json`
 - 每个 Project 自己的拓扑、Task、消息、panel 绑定等数据位于 `<project>/.agentflow/state.json`
 - OpenCode runtime 和 pane runtime 也统一落到 `.agentflow/` 下，便于随 Project 一起迁移
+- CLI 不再在 `<project>/.agentflow/projects.json` 静默回退创建本地 Project registry；如果默认全局用户目录不可写，必须通过 `AGENTFLOW_USER_DATA_DIR` 显式指定另一份可写的全局 registry 目录
 
 ## 开发
 

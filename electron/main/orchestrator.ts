@@ -109,9 +109,7 @@ export class Orchestrator {
 
     const existing = this.store.listProjects();
     if (existing.length === 0) {
-      await this.createProject({
-        path: process.cwd(),
-      });
+      await this.ensureProjectForPath(process.cwd());
     }
   }
 
@@ -146,6 +144,7 @@ export class Orchestrator {
 
   async findProjectByPath(projectPath: string): Promise<ProjectSnapshot | null> {
     const normalizedPath = path.resolve(projectPath);
+    this.store.reconcileLegacyProjectRegistry(normalizedPath);
     const project = this.store.listProjects().find((item) => path.resolve(item.path) === normalizedPath);
     if (!project) {
       return null;
