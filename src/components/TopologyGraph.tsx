@@ -228,7 +228,9 @@ function getAgentStatusBadge(agentName: string, agentState: string) {
     case "running":
       return {
         label: "运行中",
-        className: "border border-[#d8c27a]/70 bg-[#fff7dc] text-[#7b6110]",
+        className: "border border-[#d4a62c] bg-[linear-gradient(180deg,#fff5c9_0%,#ffe79a_100%)] text-[#5f4300]",
+        effectClassName: "topology-status-badge-running",
+        indicatorClassName: "topology-status-badge-running-indicator",
       };
     case "success":
       return {
@@ -1189,9 +1191,12 @@ export function TopologyGraph({
               >
                 {statusBadge ? (
                   <span
-                    className={`absolute right-3 top-1/2 inline-flex min-h-7 -translate-y-1/2 items-center rounded-full px-3 py-1 text-[12px] font-semibold leading-none tracking-[0.01em] shadow-[0_1px_0_rgba(255,255,255,0.45)] ${statusBadge.className}`}
+                    className={`absolute right-3 top-1/2 inline-flex min-h-7 -translate-y-1/2 items-center rounded-full px-3 py-1 text-[12px] font-semibold leading-none tracking-[0.01em] shadow-[0_1px_0_rgba(255,255,255,0.45)] ${statusBadge.className} ${statusBadge.effectClassName || ""}`}
                   >
-                    {statusBadge.label}
+                    {statusBadge.indicatorClassName ? (
+                      <span className={`mr-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${statusBadge.indicatorClassName}`} />
+                    ) : null}
+                    <span className="relative z-[1]">{statusBadge.label}</span>
                   </span>
                 ) : null}
                 <p

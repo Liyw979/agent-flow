@@ -64,3 +64,122 @@ body {
 .react-flow__controls {
   display: none !important;
 }
+
+.topology-status-badge-running {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.45),
+    0 0 0 1px rgba(212, 166, 44, 0.24),
+    0 0 0 4px rgba(255, 221, 92, 0.15),
+    0 0 22px rgba(233, 184, 56, 0.38);
+  animation: topology-running-badge-glow 1.8s ease-in-out infinite;
+}
+
+.topology-status-badge-running::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(
+    115deg,
+    rgba(255, 255, 255, 0) 8%,
+    rgba(255, 252, 236, 0.28) 28%,
+    rgba(255, 255, 255, 0.9) 46%,
+    rgba(255, 214, 79, 0.8) 56%,
+    rgba(255, 255, 255, 0) 74%
+  );
+  transform: translateX(-165%);
+  animation: topology-running-badge-sheen 1.5s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.topology-status-badge-running::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0));
+  opacity: 0.7;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.topology-status-badge-running-indicator {
+  position: relative;
+  z-index: 1;
+  background: radial-gradient(circle at 35% 35%, #fffdf1 0%, #ffe476 32%, #d78e00 100%);
+  box-shadow:
+    0 0 0 2px rgba(255, 247, 210, 0.62),
+    0 0 13px rgba(255, 187, 32, 0.9);
+  animation: topology-running-indicator-pulse 1.35s ease-out infinite;
+}
+
+@keyframes topology-running-indicator-pulse {
+  0% {
+    transform: scale(0.92);
+    box-shadow:
+      0 0 0 0 rgba(255, 223, 89, 0.62),
+      0 0 10px rgba(255, 187, 32, 0.8);
+  }
+
+  70% {
+    transform: scale(1.08);
+    box-shadow:
+      0 0 0 6px rgba(255, 223, 89, 0),
+      0 0 16px rgba(255, 187, 32, 0.98);
+  }
+
+  100% {
+    transform: scale(0.96);
+    box-shadow:
+      0 0 0 0 rgba(255, 223, 89, 0),
+      0 0 8px rgba(255, 187, 32, 0.64);
+  }
+}
+
+@keyframes topology-running-badge-sheen {
+  from {
+    transform: translateX(-165%);
+  }
+
+  to {
+    transform: translateX(165%);
+  }
+}
+
+@keyframes topology-running-badge-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.45),
+      0 0 0 1px rgba(212, 166, 44, 0.24),
+      0 0 0 4px rgba(255, 221, 92, 0.12),
+      0 0 16px rgba(233, 184, 56, 0.28);
+  }
+
+  50% {
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.45),
+      0 0 0 1px rgba(212, 166, 44, 0.38),
+      0 0 0 7px rgba(255, 221, 92, 0.22),
+      0 0 30px rgba(255, 187, 32, 0.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topology-status-badge-running {
+    animation: none;
+  }
+
+  .topology-status-badge-running::before {
+    animation: none;
+    transform: translateX(0);
+    opacity: 0.2;
+  }
+
+  .topology-status-badge-running-indicator {
+    animation: none;
+  }
+}
