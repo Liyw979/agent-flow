@@ -16,6 +16,16 @@ export type TaskStatus =
 export type PermissionMode = "allow" | "ask" | "deny";
 
 export const BUILD_AGENT_NAME = "Build";
+export const RESTRICTED_AGENT_PERMISSION_KEYS = [
+  "write",
+  "edit",
+  "bash",
+  "task",
+  "patch",
+] as const;
+
+export type RestrictedAgentPermissionKey =
+  (typeof RESTRICTED_AGENT_PERMISSION_KEYS)[number];
 
 export function usesOpenCodeBuiltinPrompt(agentName: string): boolean {
   return agentName.trim().toLowerCase() === BUILD_AGENT_NAME.toLowerCase();
@@ -68,6 +78,7 @@ export interface TaskRecord {
 export interface AgentFileRecord {
   name: string;
   prompt: string;
+  isWritable?: boolean;
 }
 
 export interface BuiltinAgentTemplateRecord {
@@ -202,6 +213,7 @@ export interface SaveAgentPromptPayload {
   currentAgentName: string;
   nextAgentName: string;
   prompt: string;
+  isWritable?: boolean;
 }
 
 export interface SaveBuiltinAgentTemplatePayload {
@@ -239,6 +251,10 @@ export interface OpenAgentPanePayload {
 export interface DeleteTaskPayload {
   projectId: string;
   taskId: string;
+}
+
+export interface DeleteProjectPayload {
+  projectId: string;
 }
 
 export interface DeleteAgentPayload {

@@ -210,7 +210,7 @@ function App() {
           ...agentFile,
           id: agentFile.name,
           displayName: getAgentDisplayName(agentFile.name),
-          isBuiltin: agentFile.name === BUILD_AGENT_NAME,
+          isWritable: agentFile.isWritable === true,
           roleSummary,
           status: runtime?.status ?? "idle",
           messageCount: runtimeSnapshot?.messageCount ?? 0,
@@ -412,6 +412,12 @@ function App() {
               projectCompletionReminderCounts={projectCompletionReminderCounts}
               onSelectProject={selectProject}
               onSelectTask={selectTask}
+              onDeleteProject={async (projectId) => {
+                const snapshots = await window.agentFlow.deleteProject({
+                  projectId,
+                });
+                setProjects(snapshots);
+              }}
               onDeleteTask={async (projectId, taskId) => {
                 await window.agentFlow.deleteTask({
                   projectId,
@@ -620,10 +626,10 @@ function App() {
                                     >
                                       {agent.displayName}
                                     </p>
-                                    {agent.isBuiltin && (
+                                    {agent.isWritable && (
                                       <span
                                         className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]"
-                                        title="当前唯一允许写代码的 Agent"
+                                        title="当前唯一不禁用写入相关工具的 Agent"
                                         style={{
                                           color: agentColor.text,
                                           borderColor: agentColor.border,

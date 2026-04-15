@@ -11,11 +11,21 @@ interface SidebarListProps {
   projectCompletionReminderCounts: ReadonlyMap<string, number>;
   onSelectProject: (projectId: string) => void;
   onSelectTask: (projectId: string, taskId: string | null) => void;
+  onDeleteProject: (projectId: string) => Promise<void>;
   onDeleteTask: (projectId: string, taskId: string) => Promise<void>;
   onCreateProject: (path: string) => Promise<void>;
 }
 
+interface ProjectContextMenuState {
+  kind: "project";
+  projectId: string;
+  projectName: string;
+  x: number;
+  y: number;
+}
+
 interface TaskContextMenuState {
+  kind: "task";
   projectId: string;
   taskId: string;
   taskTitle: string;
@@ -23,8 +33,12 @@ interface TaskContextMenuState {
   y: number;
 }
 
+type ContextMenuState = ProjectContextMenuState | TaskContextMenuState;
+
 const TASK_CONTEXT_MENU_WIDTH = 188;
 const TASK_CONTEXT_MENU_HEIGHT = 56;
+const PROJECT_CONTEXT_MENU_WIDTH = 188;
+const PROJECT_CONTEXT_MENU_HEIGHT = 56;
 const TASK_CONTEXT_MENU_MARGIN = 12;
 
 const taskStatusStyles: Record<string, string> = {
@@ -53,10 +67,11 @@ export function SidebarList({
   projectCompletionReminderCounts,
   onSelectProject,
   onSelectTask,
+  onDeleteProject,
   onDeleteTask,
   onCreateProject,
 }: SidebarListProps) {
-  const [contextMenu, setContextMenu] = useState<TaskContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -82,7 +97,10 @@ export function SidebarList({
     <aside
       className="PANEL-surface mesh-bg relative flex h-full flex-col rounded-[10px] p-4"
       onContextMenu={(event) => {
-        if (!(event.target instanceof HTMLElement) || !event.target.closest("[data-task-item]")) {
+        if (
+          !(event.target instanceof HTMLElement)
+          || (!event.target.closest("[data-task-item]") && !event.target.closest("[data-project-item]"))
+        ) {
           setContextMenu(null);
         }
       }}
@@ -103,6 +121,18 @@ export function SidebarList({
           return (
             <section
               key={snapshot.project.id}
+              data-project-item="true"
+              onContextMenu={(event) => {
+                event.preventDefault();
+                onSelectProject(snapshot.project.id);
+                setContextMenu({
+                  kind: "project",
+                  projectId: snapshot.project.id,
+                  projectName: snapshot.project.name,
+                  x: event.clientX,
+                  y: event.clientY,
+                });
+              }}
               className={cn(
                 "rounded-[8px] border p-3 transition",
                 activeProject
@@ -161,8 +191,10 @@ export function SidebarList({
                       onClick={() => onSelectTask(snapshot.project.id, task.task.id)}
                       onContextMenu={(event) => {
                         event.preventDefault();
+                        event.stopPropagation();
                         onSelectTask(snapshot.project.id, task.task.id);
                         setContextMenu({
+                          kind: "task",
                           projectId: snapshot.project.id,
                           taskId: task.task.id,
                           taskTitle: task.task.title,
@@ -230,29 +262,53 @@ export function SidebarList({
           style={{
             left: Math.min(
               Math.max(TASK_CONTEXT_MENU_MARGIN, contextMenu.x - 12),
-              window.innerWidth - TASK_CONTEXT_MENU_WIDTH - TASK_CONTEXT_MENU_MARGIN,
+              window.innerWidth
+                - (contextMenu.kind === "project" ? PROJECT_CONTEXT_MENU_WIDTH : TASK_CONTEXT_MENU_WIDTH)
+                - TASK_CONTEXT_MENU_MARGIN,
             ),
             top: Math.min(
               Math.max(TASK_CONTEXT_MENU_MARGIN, contextMenu.y - 12),
-              window.innerHeight - TASK_CONTEXT_MENU_HEIGHT - TASK_CONTEXT_MENU_MARGIN,
+              window.innerHeight
+                - (contextMenu.kind === "project" ? PROJECT_CONTEXT_MENU_HEIGHT : TASK_CONTEXT_MENU_HEIGHT)
+                - TASK_CONTEXT_MENU_MARGIN,
             ),
           }}
         >
-          <button
-            type="button"
-            onClick={() => {
-              const confirmed = window.confirm(`确认删除 Task「${contextMenu.taskTitle}」吗？对应的 Zellij session 也会一起删除。`);
-              const payload = contextMenu;
-              setContextMenu(null);
-              if (!confirmed) {
-                return;
-              }
-              void onDeleteTask(payload.projectId, payload.taskId);
-            }}
-            className="w-full rounded-[8px] px-3 py-2 text-left text-sm font-medium text-[#8a2f1a] transition hover:bg-[#f7dfd6]"
-          >
-            删除 Task
-          </button>
+          {contextMenu.kind === "project" ? (
+            <button
+              type="button"
+              onClick={() => {
+                const confirmed = window.confirm(
+                  `确认从 AgentFlow 中删除 Project「${contextMenu.projectName}」吗？这会同时清理该 Project 的任务记录、.agentflow/ 运行态数据、自定义 Agent 配置，以及相关 Zellij session / OpenCode serve，但不会删除项目源码目录。`,
+                );
+                const payload = contextMenu;
+                setContextMenu(null);
+                if (!confirmed) {
+                  return;
+                }
+                void onDeleteProject(payload.projectId);
+              }}
+              className="w-full rounded-[8px] px-3 py-2 text-left text-sm font-medium text-[#8a2f1a] transition hover:bg-[#f7dfd6]"
+            >
+              删除 Project
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                const confirmed = window.confirm(`确认删除 Task「${contextMenu.taskTitle}」吗？对应的 Zellij session 也会一起删除。`);
+                const payload = contextMenu;
+                setContextMenu(null);
+                if (!confirmed) {
+                  return;
+                }
+                void onDeleteTask(payload.projectId, payload.taskId);
+              }}
+              className="w-full rounded-[8px] px-3 py-2 text-left text-sm font-medium text-[#8a2f1a] transition hover:bg-[#f7dfd6]"
+            >
+              删除 Task
+            </button>
+          )}
         </div>
       ) : null}
     </aside>

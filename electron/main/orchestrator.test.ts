@@ -1,5 +1,6 @@
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,79 @@ import { Orchestrator } from "./orchestrator";
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-orchestrator-"));
 }
+
+const activeOrchestrators = new Set<Orchestrator>();
+
+function createTestOrchestrator(
+  options: ConstructorParameters<typeof Orchestrator>[0],
+): Orchestrator {
+  const orchestrator = new Orchestrator(options);
+  activeOrchestrators.add(orchestrator);
+  return orchestrator;
+}
+
+function forceCleanupCurrentProcessOpenCodeChildren() {
+  try {
+    const output = execFileSync("ps", ["-axo", "pid=,ppid=,command="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const childrenByParent = new Map<number, Array<{ pid: number; command: string }>>();
+    for (const line of output.split(/\r?\n/)) {
+      const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+      if (!match) {
+        continue;
+      }
+      const pid = Number(match[1]);
+      const parentPid = Number(match[2]);
+      const command = match[3] ?? "";
+      if (!Number.isInteger(pid) || !Number.isInteger(parentPid) || pid <= 0 || parentPid <= 0) {
+        continue;
+      }
+      const current = childrenByParent.get(parentPid) ?? [];
+      current.push({ pid, command });
+      childrenByParent.set(parentPid, current);
+    }
+
+    const descendants: Array<{ pid: number; command: string }> = [];
+    const pending = [...(childrenByParent.get(process.pid) ?? [])];
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (!current || descendants.some((item) => item.pid === current.pid)) {
+        continue;
+      }
+      descendants.push(current);
+      for (const child of childrenByParent.get(current.pid) ?? []) {
+        pending.push(child);
+      }
+    }
+
+    for (const child of descendants.reverse()) {
+      if (!child.command.includes("opencode") || !child.command.includes("serve")) {
+        continue;
+      }
+      try {
+        process.kill(child.pid, "SIGTERM");
+      } catch {
+        continue;
+      }
+      try {
+        process.kill(child.pid, "SIGKILL");
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore cleanup errors in tests
+  }
+}
+
+afterEach(async () => {
+  const orchestrators = [...activeOrchestrators];
+  activeOrchestrators.clear();
+  await Promise.allSettled(orchestrators.map((orchestrator) => orchestrator.dispose()));
+  forceCleanupCurrentProcessOpenCodeChildren();
+});
 
 async function addBuiltinAgents(
   orchestrator: Orchestrator,
@@ -52,7 +126,7 @@ test("task init 会写入 Zellij session 信息并补齐运行态", async () => 
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const panelRecords: Array<{ projectId: string; taskId: string; sessionName: string; cwd: string }> = [];
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
     zellijManager: {
@@ -115,7 +189,7 @@ test("task init 会写入 Zellij session 信息并补齐运行态", async () => 
 test("zellij 不可用时会追加系统提醒", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
     zellijManager: {
@@ -156,7 +230,7 @@ test("内置模板可按 Project 单独覆盖且不会直接写入 agentFiles", 
   const userDataPath = createTempDir();
   const projectAPath = createTempDir();
   const projectBPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
   });
@@ -193,7 +267,7 @@ test("内置模板可按 Project 单独覆盖且不会直接写入 agentFiles", 
 test("Build 作为内置模板可按需写入 Project，并可像其他 Agent 一样删除", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
   });
@@ -222,10 +296,74 @@ test("Build 作为内置模板可按需写入 Project，并可像其他 Agent �
   assert.equal(withoutBuild.agentFiles.some((agent) => agent.name === "Build"), false);
 });
 
+test("删除 Project 会清理运行态与配置，但不会删除项目源码目录", async () => {
+  const userDataPath = createTempDir();
+  const projectPath = createTempDir();
+  const deletedSessions: Array<string | null | undefined> = [];
+  const orchestrator = createTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+    zellijManager: {
+      isAvailable: async () => true,
+      listSessionNames: async () => new Set<string>(),
+      createTaskSession: async (_projectId: string, taskId: string) => `session-${taskId}`,
+      createPanelBindings: () => [],
+      materializePanelBindings: async () => [],
+      openTaskSession: async () => undefined,
+      deleteTaskSession: async (sessionName: string | null | undefined) => {
+        deletedSessions.push(sessionName);
+      },
+      setOpenCodeAttachBaseUrl: () => undefined,
+    } as never,
+  });
+
+  let project = await orchestrator.createProject({ path: projectPath });
+  project = await addBuiltinAgents(orchestrator, project.project.id, ["Build"]);
+  project = await addCustomAgent(orchestrator, project.project.id, "BA", "你是 BA。");
+  const firstTask = await orchestrator.initializeTask({ projectId: project.project.id, title: "task-1" });
+  const secondTask = await orchestrator.initializeTask({ projectId: project.project.id, title: "task-2" });
+
+  const typed = orchestrator as unknown as Orchestrator & {
+    opencodeClient: {
+      setInjectedConfigContent: (projectPath: string, content: string | null) => void;
+      servers: Map<string, { runtimeDir: string }>;
+    };
+  };
+  typed.opencodeClient.setInjectedConfigContent(projectPath, "{\"agent\":{}}");
+  const runtimeDir = typed.opencodeClient.servers.get(projectPath)?.runtimeDir ?? null;
+  assert.notEqual(runtimeDir, null);
+  assert.equal(fs.existsSync(runtimeDir), true);
+
+  const statePath = path.join(projectPath, ".agentflow", "state.json");
+  const projectDataDir = path.join(projectPath, ".agentflow");
+  const customAgentsPath = path.join(userDataPath, "custom-agents.json");
+  assert.equal(fs.existsSync(statePath), true);
+  assert.equal(fs.readFileSync(customAgentsPath, "utf8").includes(projectPath), true);
+
+  const remainingProjects = await orchestrator.deleteProject({
+    projectId: project.project.id,
+  });
+
+  assert.equal(remainingProjects.some((snapshot) => snapshot.project.id === project.project.id), false);
+  assert.deepEqual(
+    deletedSessions.sort(),
+    [firstTask.task.zellijSessionId, secondTask.task.zellijSessionId].sort(),
+  );
+  assert.equal(fs.existsSync(statePath), false);
+  assert.equal(fs.existsSync(projectDataDir), false);
+  assert.equal(fs.readFileSync(customAgentsPath, "utf8").includes(projectPath), false);
+  assert.equal(fs.existsSync(runtimeDir), false);
+  assert.equal(fs.existsSync(projectPath), true);
+  assert.equal(
+    (await orchestrator.bootstrap()).some((snapshot) => snapshot.project.id === project.project.id),
+    false,
+  );
+});
+
 test("Build 模板不允许在 AgentFlow 中覆盖 prompt", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
   });
@@ -247,7 +385,7 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
   const userDataPath = createTempDir();
   const projectAPath = createTempDir();
   const projectBPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
     zellijManager: {
@@ -300,7 +438,7 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
 test("可以不配置可写 Agent，此时所有 Agent 都注入 deny 权限", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
   });
@@ -323,7 +461,7 @@ test("可以不配置可写 Agent，此时所有 Agent 都注入 deny 权限", a
 test("把自定义 Agent 设为可写时会自动取消其他 Agent 的可写标记", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
   });
@@ -353,7 +491,7 @@ test("把自定义 Agent 设为可写时会自动取消其他 Agent 的可写标
 });
 
 test("下游结构化 prompt 会使用 Initial Task 与真实来源 Agent 段标题", async () => {
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath: createTempDir(),
     enableEventStream: false,
   });
@@ -386,7 +524,7 @@ test("下游结构化 prompt 会使用 Initial Task 与真实来源 Agent 段标
 test("下游结构化 prompt 的 [Initial Task] 使用首条用户任务而不是最新用户消息", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
     zellijManager: {
@@ -463,7 +601,7 @@ test("下游结构化 prompt 的 [Initial Task] 使用首条用户任务而不�
 });
 
 test("审视类 system prompt 会使用真实来源 Agent 名称", () => {
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath: createTempDir(),
     enableEventStream: false,
   });
@@ -512,7 +650,7 @@ test("审视类 system prompt 会使用真实来源 Agent 名称", () => {
 test("Task 启动后不允许再修改 Agent 配置或内置模板", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
     zellijManager: {
@@ -562,7 +700,7 @@ test("Task 启动后不允许再修改 Agent 配置或内置模板", async () =>
 });
 
 test("审视通过但没有可展示结果正文时返回简洁兜底文案", () => {
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath: createTempDir(),
     enableEventStream: false,
   });
@@ -595,7 +733,7 @@ test("审视通过但没有可展示结果正文时返回简洁兜底文案", ()
 test("群聊保留 @Agent，但下游转发读取的用户消息会去掉寻址 @Agent", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
     zellijManager: {
@@ -670,7 +808,7 @@ test("群聊保留 @Agent，但下游转发读取的用户消息会去掉寻址 
 test("审视 Agent 执行中止时不会伪造成整改意见", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
     zellijManager: {
@@ -810,7 +948,7 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
 
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
     zellijManager: {
@@ -952,7 +1090,7 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
 test("Build 在收到 UnitTest 回流后再次交付时会重新触发全部 association 下游", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
     zellijManager: {
@@ -1096,7 +1234,7 @@ test("Build 在收到 UnitTest 回流后再次交付时会重新触发全部 ass
 test("旧运行数据里悬空 idle Agent 不会阻止 Task 自动结束", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new Orchestrator({
+  const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
     zellijManager: {

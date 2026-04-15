@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { IPC_CHANNELS } from "@shared/ipc";
 import type {
   CreateProjectPayload,
+  DeleteProjectPayload,
   DeleteAgentPayload,
   DeleteTaskPayload,
   GetTaskRuntimePayload,
@@ -170,6 +171,10 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     IPC_CHANNELS.submitTask,
     (_event, payload: SubmitTaskPayload) => orchestrator.submitTask(payload),
+  );
+  ipcMain.handle(
+    IPC_CHANNELS.deleteProject,
+    (_event, payload: DeleteProjectPayload) => orchestrator.deleteProject(payload),
   );
   ipcMain.handle(
     IPC_CHANNELS.deleteTask,

@@ -13,6 +13,7 @@ import {
   createDefaultTopology,
   type AgentFileRecord,
   type CreateProjectPayload,
+  type DeleteProjectPayload,
   type DeleteAgentPayload,
   type DeleteTaskPayload,
   type GetTaskRuntimePayload,
@@ -268,7 +269,9 @@ export class Orchestrator {
       payload.currentAgentName,
       payload.nextAgentName,
       payload.prompt,
+      payload.isWritable ?? false,
     );
+    this.customAgentConfig.validateProjectAgents(project.path);
     const updated = this.hydrateProject(project.id, true);
     this.emit({
       type: "project-updated",
@@ -325,6 +328,7 @@ export class Orchestrator {
       throw new Error("当前 Project 已进入任务驱动阶段，不允许删除 Agent。");
     }
     this.customAgentConfig.deleteProjectAgent(project.path, payload.agentName);
+    this.customAgentConfig.validateProjectAgents(project.path);
     const updated = this.hydrateProject(project.id, true);
     this.emit({
       type: "project-updated",
@@ -373,9 +377,40 @@ export class Orchestrator {
     return updated;
   }
 
+  async deleteProject(payload: DeleteProjectPayload): Promise<ProjectSnapshot[]> {
+    const project = this.store.getProject(payload.projectId);
+    const tasks = this.store.listTasks(project.id);
+
+    for (const task of tasks) {
+      this.taskRuntime.delete(task.id);
+      await this.zellijManager.deleteTaskSession(task.zellijSessionId).catch(() => undefined);
+    }
+
+    await this.opencodeClient.deleteProject(project.path).catch(() => undefined);
+    this.connectedEventProjects.delete(path.resolve(project.path));
+    this.customAgentConfig.deleteProject(project.path);
+    this.store.deleteProject(project.id);
+
+    const remainingProjects = this.store.listProjects();
+    const nextCurrentProject =
+      remainingProjects.find((item) => path.resolve(item.path) === path.resolve(process.cwd()))
+      ?? remainingProjects[0]
+      ?? null;
+    this.setInjectedConfigForProject(nextCurrentProject);
+
+    const snapshots: ProjectSnapshot[] = [];
+    for (const remainingProject of remainingProjects) {
+      await this.reconcilePersistedProjectTasks(remainingProject.id);
+      snapshots.push(this.hydrateProject(remainingProject.id));
+    }
+
+    return snapshots;
+  }
+
   async submitTask(payload: SubmitTaskPayload): Promise<TaskSnapshot> {
     const project = this.store.getProject(payload.projectId);
     const agentFiles = this.listProjectAgents(project);
+    this.customAgentConfig.validateProjectAgents(project.path);
     this.syncTopology(project, agentFiles);
     const mentionName =
       payload.mentionAgent ||
@@ -406,6 +441,7 @@ export class Orchestrator {
   async initializeTask(payload: InitializeTaskPayload): Promise<TaskSnapshot> {
     const project = this.store.getProject(payload.projectId);
     const agentFiles = this.listProjectAgents(project);
+    this.customAgentConfig.validateProjectAgents(project.path);
     this.syncTopology(project, agentFiles);
 
     return this.createTask(project, agentFiles, {

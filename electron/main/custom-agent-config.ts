@@ -2,15 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   DEFAULT_BUILTIN_AGENT_TEMPLATES,
+  DEFAULT_TOOL_PERMISSIONS,
+  RESTRICTED_AGENT_PERMISSION_KEYS,
   type AgentFileRecord,
   type BuiltinAgentTemplateRecord,
   usesOpenCodeBuiltinPrompt,
 } from "@shared/types";
+import { toOpenCodeAgentName } from "./opencode-agent-name";
 
 const CUSTOM_AGENT_CONFIG_FILE_NAME = "custom-agents.json";
 
 interface UserAgentEntry {
   prompt: string;
+  writable?: boolean;
 }
 
 interface UserBuiltinAgentTemplateEntry {
@@ -39,6 +43,56 @@ function sanitizeAgentName(name: string): string {
   return name.trim();
 }
 
+function createEmptyUserAgentConfig(): UserAgentConfig {
+  return {
+    version: 1,
+    agents: {},
+    builtinTemplates: {},
+  };
+}
+
+function resolveWritableAgentName(config: UserAgentConfig): string | null {
+  const explicitWritableNames = Object.keys(config.agents).filter(
+    (name) => config.agents[name]?.writable === true,
+  );
+  if (explicitWritableNames.length === 0) {
+    return null;
+  }
+  return explicitWritableNames[0] ?? null;
+}
+
+function enforceSingleWritableAgent(value: UserAgentConfig): {
+  config: UserAgentConfig;
+  changed: boolean;
+} {
+  const normalized = normalizeUserAgentConfig(value);
+  const writableAgentName = resolveWritableAgentName(normalized);
+  let changed = false;
+  const agents = Object.fromEntries(
+    Object.entries(normalized.agents).map(([name, entry]) => {
+      const nextWritable = writableAgentName !== null && name === writableAgentName;
+      if ((entry.writable ?? false) !== nextWritable) {
+        changed = true;
+      }
+      return [
+        name,
+        {
+          ...entry,
+          writable: nextWritable,
+        },
+      ];
+    }),
+  );
+
+  return {
+    config: {
+      ...normalized,
+      agents,
+    },
+    changed,
+  };
+}
+
 function normalizeUserAgentConfig(value: unknown): UserAgentConfig {
   const parsed = asRecord(value);
   const agentsRecord = asRecord(parsed.agents);
@@ -54,6 +108,7 @@ function normalizeUserAgentConfig(value: unknown): UserAgentConfig {
     const rawAgent = asRecord(rawAgentValue);
     normalizedAgents[name] = {
       prompt: typeof rawAgent.prompt === "string" ? rawAgent.prompt : "",
+      writable: rawAgent.writable === true,
     };
   }
 
@@ -88,6 +143,12 @@ export class CustomAgentConfigService {
     task: "deny",
     patch: "deny",
   } as const;
+  private readonly writablePermission = Object.fromEntries(
+    RESTRICTED_AGENT_PERMISSION_KEYS.map((name) => [
+      name,
+      DEFAULT_TOOL_PERMISSIONS.find((permission) => permission.name === name)?.mode ?? "ask",
+    ]),
+  );
 
   constructor(userDataPath: string) {
     fs.mkdirSync(userDataPath, { recursive: true });
@@ -138,36 +199,79 @@ export class CustomAgentConfigService {
     const key = path.resolve(projectPath);
     const registry = this.readRegistry();
     const config = registry.projects[key];
-    return config ? normalizeUserAgentConfig(config) : null;
+    if (!config) {
+      return null;
+    }
+
+    return enforceSingleWritableAgent(config).config;
   }
 
   private setProjectConfig(projectPath: string, config: UserAgentConfig): void {
     const key = path.resolve(projectPath);
     const registry = this.readRegistry();
-    registry.projects[key] = normalizeUserAgentConfig(config);
+    registry.projects[key] = enforceSingleWritableAgent(config).config;
     this.writeRegistry(registry);
   }
 
   private ensureUserConfig(projectPath: string): UserAgentConfig {
     const fromDisk = this.getProjectConfig(projectPath);
     if (fromDisk) {
-      return fromDisk;
+      const normalized = enforceSingleWritableAgent(fromDisk);
+      if (normalized.changed) {
+        this.setProjectConfig(projectPath, normalized.config);
+      }
+      return normalized.config;
+    }
+
+    const emptyConfig = createEmptyUserAgentConfig();
+    const normalized = enforceSingleWritableAgent(emptyConfig);
+    if (normalized.changed) {
+      this.setProjectConfig(projectPath, normalized.config);
+    }
+    return normalized.config;
+  }
+
+  private applyWritableSelection(
+    config: UserAgentConfig,
+    writableAgentName: string | null,
+  ): UserAgentConfig {
+    if (!writableAgentName) {
+      return config;
     }
 
     return {
-      version: 1,
-      agents: {},
-      builtinTemplates: {},
+      ...config,
+      agents: Object.fromEntries(
+        Object.entries(config.agents).map(([name, entry]) => [
+          name,
+          {
+            ...entry,
+            writable: name === writableAgentName,
+          },
+        ]),
+      ),
     };
+  }
+
+  validateProjectAgents(projectPath: string): void {
+    const agents = this.listProjectAgents(projectPath);
+    if (agents.length === 0) {
+      return;
+    }
+    const writableCount = agents.filter((agent) => agent.isWritable).length;
+    if (writableCount > 1) {
+      throw new Error("当前已勾选的 Agent 中，至多只能有一个可写 Agent。");
+    }
   }
 
   listProjectAgents(projectPath: string): AgentFileRecord[] {
     const userConfig = this.ensureUserConfig(projectPath);
     return Object.keys(userConfig.agents).map((agentName) => {
-      const prompt = userConfig.agents[agentName]?.prompt ?? "";
+      const agent = userConfig.agents[agentName];
       return {
         name: agentName,
-        prompt,
+        prompt: agent?.prompt ?? "",
+        isWritable: agent?.writable === true,
       };
     });
   }
@@ -206,6 +310,7 @@ export class CustomAgentConfigService {
     currentAgentName: string,
     nextAgentName: string,
     prompt: string,
+    isWritable = false,
   ): void {
     const normalizedCurrentAgentName = sanitizeAgentName(currentAgentName);
     const normalizedNextAgentName = sanitizeAgentName(nextAgentName);
@@ -221,15 +326,16 @@ export class CustomAgentConfigService {
       if (current.agents[normalizedNextAgentName]) {
         throw new Error(`Agent 名称已存在：${normalizedNextAgentName}`);
       }
-      const next = normalizeUserAgentConfig({
+      const next = this.applyWritableSelection(normalizeUserAgentConfig({
         ...current,
         agents: {
           ...current.agents,
           [normalizedNextAgentName]: {
             prompt: "",
+            writable: isWritable,
           },
         },
-      });
+      }), isWritable ? normalizedNextAgentName : null);
       this.setProjectConfig(projectPath, next);
       return;
     }
@@ -241,15 +347,16 @@ export class CustomAgentConfigService {
       if (current.agents[normalizedNextAgentName]) {
         throw new Error(`Agent 名称已存在：${normalizedNextAgentName}`);
       }
-      const next = normalizeUserAgentConfig({
+      const next = this.applyWritableSelection(normalizeUserAgentConfig({
         ...current,
         agents: {
           ...current.agents,
           [normalizedNextAgentName]: {
             prompt,
+            writable: isWritable,
           },
         },
-      });
+      }), isWritable ? normalizedNextAgentName : null);
       this.setProjectConfig(projectPath, next);
       return;
     }
@@ -269,16 +376,17 @@ export class CustomAgentConfigService {
       if (name === normalizedCurrentAgentName) {
         reorderedAgents[normalizedNextAgentName] = {
           prompt,
+          writable: isWritable,
         };
         continue;
       }
       reorderedAgents[name] = entry;
     }
 
-    const next = normalizeUserAgentConfig({
+    const next = this.applyWritableSelection(normalizeUserAgentConfig({
       ...current,
       agents: reorderedAgents,
-    });
+    }), isWritable ? normalizedNextAgentName : null);
     this.setProjectConfig(projectPath, next);
   }
 
@@ -363,22 +471,46 @@ export class CustomAgentConfigService {
     this.setProjectConfig(projectPath, next);
   }
 
+  deleteProject(projectPath: string): void {
+    const key = path.resolve(projectPath);
+    const registry = this.readRegistry();
+    if (!registry.projects[key]) {
+      return;
+    }
+
+    delete registry.projects[key];
+    this.writeRegistry(registry);
+  }
+
   buildInjectedConfigContent(projectPath: string): string {
     const userConfig = this.ensureUserConfig(projectPath);
-    const agentNames = Object.keys(userConfig.agents).filter((name) => !usesOpenCodeBuiltinPrompt(name));
-
     const agents = Object.fromEntries(
-      agentNames.map((name) => [
-        name,
-        {
-          mode: "primary",
-          prompt: userConfig.agents[name]?.prompt ?? "",
-          permission: this.deniedPermission,
-        },
-      ]),
+      Object.entries(userConfig.agents).map(([name, entry]) => {
+        const agentKey = toOpenCodeAgentName(name);
+        const permission = entry.writable ? this.writablePermission : this.deniedPermission;
+        if (usesOpenCodeBuiltinPrompt(name)) {
+          return [
+            agentKey,
+            {
+              mode: "primary",
+              permission,
+            },
+          ];
+        }
+
+        return [
+          agentKey,
+          {
+            mode: "primary",
+            prompt: entry.prompt ?? "",
+            permission,
+          },
+        ];
+      }),
     );
 
     const content: Record<string, unknown> = {
+      permission: this.deniedPermission,
       agent: agents,
     };
 

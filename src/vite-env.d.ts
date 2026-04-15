@@ -6,6 +6,7 @@ import type {
   BuiltinAgentTemplateRecord,
   AgentFlowEvent,
   CreateProjectPayload,
+  DeleteProjectPayload,
   DeleteAgentPayload,
   DeleteTaskPayload,
   GetTaskRuntimePayload,
@@ -28,6 +29,7 @@ declare global {
       createProject: (payload: CreateProjectPayload) => Promise<ProjectSnapshot>;
       pickProjectPath: () => Promise<string | null>;
       submitTask: (payload: SubmitTaskPayload) => Promise<TaskSnapshot>;
+      deleteProject: (payload: DeleteProjectPayload) => Promise<ProjectSnapshot[]>;
       deleteTask: (payload: DeleteTaskPayload) => Promise<ProjectSnapshot>;
       openTaskSession: (payload: OpenTaskSessionPayload) => Promise<void>;
       readAgentFile: (payload: ReadAgentFilePayload) => Promise<AgentFileRecord>;

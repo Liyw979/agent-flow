@@ -336,9 +336,7 @@ export class OpenCodeClient {
 
       try {
         const server = await state.serverHandle;
-        if (!server.mock && server.process && !server.process.killed) {
-          server.process.kill();
-        }
+        await this.terminateServeHandle(server);
       } catch {
         // ignore shutdown errors
       } finally {
@@ -354,9 +352,7 @@ export class OpenCodeClient {
           continue;
         }
         const server = await state.serverHandle;
-        if (!server.mock && server.process && !server.process.killed) {
-          server.process.kill();
-        }
+        await this.terminateServeHandle(server);
       } catch {
         // ignore shutdown errors
       } finally {
@@ -368,6 +364,155 @@ export class OpenCodeClient {
     this.sessionIdleAt.clear();
     this.sessionErrors.clear();
     this.sessionWaiters.clear();
+  }
+
+  async deleteProject(projectPath: string): Promise<void> {
+    const key = this.getProjectKey(projectPath);
+    await this.shutdown(key);
+    const state = this.servers.get(key);
+    if (!state) {
+      return;
+    }
+
+    this.servers.delete(key);
+    if (fs.existsSync(state.runtimeDir)) {
+      fs.rmSync(state.runtimeDir, { recursive: true, force: true });
+    }
+  }
+
+  private async terminateServeHandle(server: ServeHandle): Promise<void> {
+    if (server.mock || !server.process) {
+      return;
+    }
+
+    await this.killChildProcessTree(server.process);
+    for (const pid of this.findListeningPids(server.port)) {
+      this.killProcess(pid);
+    }
+  }
+
+  private async killChildProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
+    const pid = child.pid;
+    if (!pid) {
+      if (!child.killed) {
+        child.kill();
+      }
+      return;
+    }
+
+    if (process.platform === "win32") {
+      this.killWindowsProcessTree(pid);
+      const exited = await this.waitForChildExit(child, 1500);
+      if (!exited && !child.killed) {
+        child.kill("SIGKILL");
+        await this.waitForChildExit(child, 1000);
+      }
+      return;
+    }
+
+    const processTree = this.collectUnixProcessTreePids(pid);
+    this.killUnixPids(processTree, "SIGTERM");
+    await this.waitForChildExit(child, 1500);
+    if (this.findAlivePids(processTree).length === 0) {
+      return;
+    }
+
+    this.killUnixPids(processTree, "SIGKILL");
+    await this.waitForChildExit(child, 1000);
+  }
+
+  private waitForChildExit(
+    child: ChildProcessWithoutNullStreams,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return Promise.resolve(true);
+    }
+
+    return new Promise<boolean>((resolve) => {
+      const handleExit = () => {
+        clearTimeout(timeout);
+        child.off("exit", handleExit);
+        resolve(true);
+      };
+      const timeout = setTimeout(() => {
+        child.off("exit", handleExit);
+        resolve(false);
+      }, timeoutMs);
+      child.on("exit", handleExit);
+    });
+  }
+
+  private killWindowsProcessTree(pid: number) {
+    try {
+      execFileSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+    } catch {
+      this.killProcess(pid);
+    }
+  }
+
+  private killUnixPids(targets: number[], signal: NodeJS.Signals) {
+    for (const targetPid of targets.reverse()) {
+      try {
+        process.kill(targetPid, signal);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  private collectUnixProcessTreePids(rootPid: number): number[] {
+    try {
+      const output = execFileSync("ps", ["-axo", "pid=,ppid="], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const childPidsByParent = new Map<number, number[]>();
+      for (const line of output.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          continue;
+        }
+        const [pidText, parentPidText] = trimmed.split(/\s+/);
+        const pid = Number(pidText);
+        const parentPid = Number(parentPidText);
+        if (!Number.isInteger(pid) || !Number.isInteger(parentPid) || pid <= 0 || parentPid <= 0) {
+          continue;
+        }
+        const current = childPidsByParent.get(parentPid) ?? [];
+        current.push(pid);
+        childPidsByParent.set(parentPid, current);
+      }
+
+      const ordered: number[] = [];
+      const pending = [rootPid];
+      while (pending.length > 0) {
+        const currentPid = pending.pop();
+        if (!currentPid || ordered.includes(currentPid)) {
+          continue;
+        }
+        ordered.push(currentPid);
+        for (const childPid of childPidsByParent.get(currentPid) ?? []) {
+          pending.push(childPid);
+        }
+      }
+      return ordered;
+    } catch {
+      return [rootPid];
+    }
+  }
+
+  private findAlivePids(targets: number[]): number[] {
+    return targets.filter((pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
   }
 
   private async startServer(projectPath: string): Promise<ServeHandle> {

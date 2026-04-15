@@ -16,6 +16,7 @@
 
 - Project / Task 两层结构：Project 作为任务协作容器，Task 作为最小执行单元
 - 左侧固定为 `Project + Task` 垂直面板，中间主区域始终展示当前 Task 群聊
+- 左侧 Project 卡片支持右键删除 Project；删除时会同时清理该 Project 的 Task 记录、`.agentflow/` 运行态数据、用户目录里的自定义 Agent 配置，以及相关 Zellij session / OpenCode serve，但不会删除项目源码目录
 - 左侧 Task 列表支持右键删除 Task；删除时会同时清理该 Task 对应的 Zellij session
 - 左侧 Task 列表会定期与 Zellij session 状态同步；如果对应 session 已被外部删除，或只剩 `EXITED - attach to resurrect` 这类非活跃残留，关联 Task 会自动从列表中移除
 - 后台 Task 整体完成后，左侧 Task 列表会为未查看的已完成项显示提醒，并在对应 Project 卡片上汇总提醒数量；点开该 Task 后提醒会自动消除

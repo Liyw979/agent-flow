@@ -180,6 +180,20 @@ export class StoreService {
     this.ensureProjectState(record);
   }
 
+  deleteProject(projectId: string) {
+    const project = this.getProject(projectId);
+    const registry = this.readRegistry();
+    this.writeRegistry({
+      ...registry,
+      projects: registry.projects.filter((entry) => entry.id !== projectId),
+    });
+
+    const projectDataDir = path.join(project.path, PROJECT_DATA_DIR_NAME);
+    if (fs.existsSync(projectDataDir)) {
+      fs.rmSync(projectDataDir, { recursive: true, force: true });
+    }
+  }
+
   listTasks(projectId: string): TaskRecord[] {
     const state = this.readProjectStateById(projectId);
     return sortByCreatedAtDesc(state.tasks);

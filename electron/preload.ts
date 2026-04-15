@@ -4,6 +4,7 @@ import type {
   BuiltinAgentTemplateRecord,
   AgentFlowEvent,
   CreateProjectPayload,
+  DeleteProjectPayload,
   DeleteAgentPayload,
   DeleteTaskPayload,
   GetTaskRuntimePayload,
@@ -28,6 +29,8 @@ const api = {
   pickProjectPath: (): Promise<string | null> => ipcRenderer.invoke(IPC_CHANNELS.pickProjectPath),
   submitTask: (payload: SubmitTaskPayload): Promise<TaskSnapshot> =>
     ipcRenderer.invoke(IPC_CHANNELS.submitTask, payload),
+  deleteProject: (payload: DeleteProjectPayload): Promise<ProjectSnapshot[]> =>
+    ipcRenderer.invoke(IPC_CHANNELS.deleteProject, payload),
   deleteTask: (payload: DeleteTaskPayload): Promise<ProjectSnapshot> =>
     ipcRenderer.invoke(IPC_CHANNELS.deleteTask, payload),
   openAgentPane: (payload: OpenAgentPanePayload): Promise<void> =>

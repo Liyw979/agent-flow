@@ -3,6 +3,7 @@ export const IPC_CHANNELS = {
   createProject: "agentflow/create-project",
   pickProjectPath: "agentflow/pick-project-path",
   submitTask: "agentflow/submit-task",
+  deleteProject: "agentflow/delete-project",
   deleteTask: "agentflow/delete-task",
   openAgentPane: "agentflow/open-agent-pane",
   openTaskSession: "agentflow/open-task-session",
