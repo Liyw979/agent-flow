@@ -50,8 +50,8 @@
 - 拓扑图在面板尺寸变化时会保持“Agent 在上、历史区在下、首尾节点贴近左右边界但保留少量留白、顶部预留连线通道”的布局约束，而不是把整张图简单等比缩放后居中
 - 拓扑图历史区会优先展示 Agent 最近的运行活动，并明确区分思考、普通消息、步骤与 Tool Call 参数摘要，而不只是单行运行状态
 - 右下角展示 Project 全量 Agent，以及它们在当前 Task 语境下的状态；点击 Agent 可直接编辑并保存当前 Agent 名称与 prompt
-- Agent 来自用户目录中的自定义配置（`$AGENTFLOW_USER_DATA_DIR/custom-agents.json`）；同一份配置里还会保存当前 Project 的“内置模板 prompt 覆盖”。内置模板默认仍是可选项，不会自动写入当前 Project，可先单独编辑可编辑模板的 prompt，再按需写入为 Agent，而且模板修改只影响当前 Project，不影响新项目默认值。Build 也作为默认模板提供，但它使用 OpenCode 自带 prompt，只负责选择是否加入当前 Project，并支持像其他已写入 Agent 一样删除。每个 Project 还可以额外指定 0 个或 1 个“可写 Agent”；可写的定义是不禁用 `write / edit / bash / task / patch`。前端仍不支持逐项编辑工具权限；一旦当前 Project 出现 Task 启动记录，Agent 与内置模板配置都会被锁定，不允许继续修改
-- 启动 OpenCode 时会通过 `OPENCODE_CONFIG_CONTENT` 全局注入 `write / edit / bash / task / patch: deny`；若某个 Agent 被标记为可写，则只对该 Agent 恢复默认工具权限，其他已写入 Agent 继续保持 deny
+- Agent 来自用户目录中的自定义配置（`$AGENTFLOW_USER_DATA_DIR/custom-agents.json`）；同一份配置里还会保存当前 Project 的“内置模板 prompt 覆盖”。内置模板默认仍是可选项，不会自动写入当前 Project，可先单独编辑可编辑模板的 prompt，再按需写入为 Agent，而且模板修改只影响当前 Project，不影响新项目默认值。Build 也作为默认模板提供，但它使用 OpenCode 自带 prompt，只负责选择是否加入当前 Project，并支持像其他已写入 Agent 一样删除。当前 Project 可以从已写入的 Agent 中指定 1 个作为可写 Agent，也可以不指定；Build 与用户自定义 Agent 都支持被选为可写 Agent。一旦当前 Project 出现 Task 启动记录，Agent 与内置模板配置都会被锁定，不允许继续修改
+- 启动 OpenCode 时会把当前 Project 的 Agent 配置整体注入到 `OPENCODE_CONFIG_CONTENT` 中；Build 与其他 Agent 的可用工具范围会按上述规则统一生效
 - 当前处于项目开发初期，不要求兼容历史数据；如果现有 Project 状态、拓扑或运行数据与当前实现不一致，优先直接修正当前数据与实现，不额外为旧数据添加兼容分支
 - 默认拓扑只在首次初始化且当前无拓扑数据时按当前 Agent 列表自动推断
 - Project 是全局注册信息；拓扑、Task、消息、panel 绑定等运行数据都保存在各自 Project 目录下的 `.agentflow/`

@@ -38,6 +38,8 @@ export function AgentConfigModal({
 }: AgentConfigModalProps) {
   const [agentName, setAgentName] = useState("");
   const [savedAgentName, setSavedAgentName] = useState("");
+  const [isWritable, setIsWritable] = useState(false);
+  const [savedIsWritable, setSavedIsWritable] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [savedPrompt, setSavedPrompt] = useState("");
   const [loading, setLoading] = useState(false);
@@ -57,6 +59,10 @@ export function AgentConfigModal({
   const hasTaskRecords = (project?.tasks.length ?? 0) > 0;
   const existingAgentNames = useMemo(
     () => new Set(viewableAgents.map((agent) => agent.name)),
+    [viewableAgents],
+  );
+  const currentWritableAgentName = useMemo(
+    () => viewableAgents.find((agent) => agent.isWritable)?.name ?? null,
     [viewableAgents],
   );
   const builtinTemplates = useMemo(
@@ -110,12 +116,14 @@ export function AgentConfigModal({
     }
     setAgentName("");
     setSavedAgentName("");
+    setIsWritable(false);
+    setSavedIsWritable(false);
     setPrompt("");
     setSavedPrompt("");
     setLoadError(null);
     setSaveError(null);
     setSaveSuccess(null);
-  }, [creatingNewAgent]);
+  }, [creatingNewAgent, viewableAgents.length]);
 
   useEffect(() => {
     if (selectedPath) {
@@ -163,6 +171,9 @@ export function AgentConfigModal({
         }
         setAgentName(file.name);
         setSavedAgentName(file.name);
+        const nextWritable = file.isWritable === true;
+        setIsWritable(nextWritable);
+        setSavedIsWritable(nextWritable);
         setPrompt(file.prompt);
         setSavedPrompt(file.prompt);
       })
@@ -174,6 +185,9 @@ export function AgentConfigModal({
         if (fallback) {
           setAgentName(fallback.name);
           setSavedAgentName(fallback.name);
+          const nextWritable = selectedFile?.isWritable === true;
+          setIsWritable(nextWritable);
+          setSavedIsWritable(nextWritable);
           setPrompt(fallback.prompt);
           setSavedPrompt(fallback.prompt);
         }
@@ -200,9 +214,19 @@ export function AgentConfigModal({
     );
   }, [builtinTemplates]);
 
+  useEffect(() => {
+    if (!selectedBuiltinTemplate) {
+      return;
+    }
+    const existingAgent = viewableAgents.find((agent) => agent.name === selectedBuiltinTemplate.name);
+    const nextWritable = existingAgent?.isWritable === true;
+    setIsWritable(nextWritable);
+    setSavedIsWritable(nextWritable);
+  }, [selectedBuiltinTemplate, viewableAgents]);
+
   const hasUnsavedChanges = creatingNewAgent
-    ? Boolean(agentName.trim() || prompt.trim())
-    : prompt !== savedPrompt || agentName !== savedAgentName;
+    ? Boolean(agentName.trim() || prompt.trim() || isWritable !== savedIsWritable)
+    : prompt !== savedPrompt || agentName !== savedAgentName || isWritable !== savedIsWritable;
   const isRenamingBlocked = hasTaskRecords
     && !creatingNewAgent
     && !editingBuiltinTemplate
@@ -214,7 +238,7 @@ export function AgentConfigModal({
     || resettingTemplate
     || !hasUnsavedChanges
     || !agentName.trim()
-    || currentSelectionUsesBuiltinPrompt
+    || (editingBuiltinTemplate && selectedTemplateUsesBuiltinPrompt)
     || (creatingNewAgent && isNewAgentCreationLocked)
     || isRenamingBlocked;
   const deleteDisabled =
@@ -257,12 +281,13 @@ export function AgentConfigModal({
     || resettingTemplate
     || hasTaskRecords
     || isNewAgentCreationLocked
-    || !agentName.trim();
+    || !agentName.trim()
+    || existingAgentNames.has(selectedBuiltinTemplate?.name ?? "");
   const showResetBuiltinTemplateButton = editingBuiltinTemplate && !selectedTemplateUsesBuiltinPrompt;
   const showResetAgentPromptButton =
     !editingBuiltinTemplate && Boolean(selectedAgentDefaultTemplate) && !selectedFileUsesBuiltinPrompt;
-  const showRestoreButton = !currentSelectionUsesBuiltinPrompt || creatingNewAgent;
-  const showSaveButton = !currentSelectionUsesBuiltinPrompt || creatingNewAgent;
+  const showRestoreButton = creatingNewAgent || !editingBuiltinTemplate;
+  const showSaveButton = creatingNewAgent || !editingBuiltinTemplate;
 
   async function handleAddPresetAgents() {
     if (!project || isNewAgentCreationLocked || addingPresets || selectedPresetNames.length === 0) {
@@ -341,9 +366,6 @@ export function AgentConfigModal({
       }
 
       const nextAgentName = agentName.trim();
-      if (selectedFileUsesBuiltinPrompt) {
-        throw new Error("Build 使用 OpenCode 内置 prompt，不支持修改名称或 prompt。");
-      }
       if (hasTaskRecords) {
         throw new Error("当前 Project 已有 Task 启动记录，不允许再修改 Agent 配置。");
       }
@@ -352,15 +374,19 @@ export function AgentConfigModal({
         currentAgentName: selectedFile?.name ?? "",
         nextAgentName,
         prompt,
+        isWritable,
       });
       const matchedAgent = updatedProject.agentFiles.find((agent) => agent.name === nextAgentName);
       if (matchedAgent) {
         setAgentName(matchedAgent.name);
         setSavedAgentName(matchedAgent.name);
+        setIsWritable(matchedAgent.isWritable === true);
+        setSavedIsWritable(matchedAgent.isWritable === true);
         onSelectPath(matchedAgent.name);
       } else {
         setAgentName(nextAgentName);
         setSavedAgentName(nextAgentName);
+        setSavedIsWritable(isWritable);
       }
       setSavedPrompt(prompt);
       setSaveSuccess(
@@ -393,6 +419,7 @@ export function AgentConfigModal({
         currentAgentName: "",
         nextAgentName: selectedBuiltinTemplate.name,
         prompt,
+        isWritable,
       });
       const matchedAgent = updatedProject.agentFiles.find(
         (agent) => agent.name === selectedBuiltinTemplate.name,
@@ -402,6 +429,8 @@ export function AgentConfigModal({
       }
       setAgentName(matchedAgent.name);
       setSavedAgentName(matchedAgent.name);
+      setIsWritable(matchedAgent.isWritable === true);
+      setSavedIsWritable(matchedAgent.isWritable === true);
       setPrompt(matchedAgent.prompt);
       setSavedPrompt(matchedAgent.prompt);
       onSelectPath(matchedAgent.name);
@@ -475,11 +504,14 @@ export function AgentConfigModal({
         currentAgentName: selectedFile.name,
         nextAgentName: selectedFile.name,
         prompt: selectedAgentDefaultTemplate.prompt,
+        isWritable: selectedFile.isWritable === true,
       });
       const matchedAgent = updatedProject.agentFiles.find((agent) => agent.name === selectedFile.name);
       const nextPrompt = matchedAgent?.prompt ?? selectedAgentDefaultTemplate.prompt;
       setAgentName(selectedFile.name);
       setSavedAgentName(selectedFile.name);
+      setIsWritable(matchedAgent?.isWritable === true);
+      setSavedIsWritable(matchedAgent?.isWritable === true);
       setPrompt(nextPrompt);
       setSavedPrompt(nextPrompt);
       setSaveSuccess("已恢复为默认 Prompt。");
@@ -518,6 +550,8 @@ export function AgentConfigModal({
       onSelectPath(nextViewableAgents[0]?.name ?? (restoredTemplate ? toBuiltinTemplatePath(restoredTemplate.name) : NEW_AGENT_DRAFT_PATH));
       setAgentName("");
       setSavedAgentName("");
+      setIsWritable(false);
+      setSavedIsWritable(false);
       setPrompt("");
       setSavedPrompt("");
       setSaveSuccess(`已删除 Agent「${selectedFile.name}」。`);
@@ -543,7 +577,7 @@ export function AgentConfigModal({
           <Dialog.Description className="mt-1 text-sm text-muted-foreground">
             Build 现作为默认内置模板提供，可按需写入当前 Project，也可像其他已写入 Agent 一样删除。
             <br />
-            自定义 Agent 与可编辑内置模板固定禁用 write / edit / patch / bash / task 工具，且不支持在这里修改工具权限。
+            当前 Project 可以不设置可写 Agent；一旦设置，同一 Project 中最多只能有一个。
             <br />
             内置模板会一直保留在这里供选择；其中 Build 使用 OpenCode 自带 prompt，这里只负责选择是否加入当前 Project。
             {hasTaskRecords
@@ -570,7 +604,14 @@ export function AgentConfigModal({
                         : "border-border bg-white/70 hover:border-accent"
                     }`}
                   >
-                    <p className="text-sm font-semibold">{agent.name}</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold">{agent.name}</p>
+                      {agent.isWritable && (
+                        <span className="rounded-full border px-2 py-0.5 text-[10px] font-semibold">
+                          唯一可写
+                        </span>
+                      )}
+                    </div>
                   </button>
                 ))}
                 <button
@@ -579,6 +620,8 @@ export function AgentConfigModal({
                     onSelectPath(NEW_AGENT_DRAFT_PATH);
                     setAgentName("");
                     setSavedAgentName("");
+                    setIsWritable(false);
+                    setSavedIsWritable(false);
                     setPrompt("");
                     setSavedPrompt("");
                     setLoadError(null);
@@ -685,11 +728,11 @@ export function AgentConfigModal({
                 <p className="text-xs text-muted-foreground">
                   {selectedFile
                     ? selectedFileUsesBuiltinPrompt
-                      ? "这是已写入当前 Project 的 Build Agent。它继续使用 OpenCode 内置 prompt，这里仅支持查看与删除。"
-                      : "打开时会直接读取最新配置；仅可修改 Agent 名称与 prompt，工具权限固定禁用。"
+                      ? "这是已写入当前 Project 的 Build Agent。它继续使用 OpenCode 内置 prompt；这里可调整当前 Project 的可写 Agent 归属，也支持删除。"
+                      : "打开时会直接读取最新配置；可修改 Agent 名称、prompt 与可写状态。"
                     : selectedBuiltinTemplate
                       ? selectedTemplateUsesBuiltinPrompt
-                        ? "这是 Build 的默认模板入口。它使用 OpenCode 自带 prompt，这里不支持编辑模板内容，但可直接写入当前 Project。"
+                        ? "这是 Build 的默认模板入口。它使用 OpenCode 自带 prompt，这里不支持编辑模板内容，但可直接写入当前 Project，并可在写入时设为可写 Agent。"
                         : "这是当前 Project 的内置模板入口。保存这里只会更新模板本身，不会自动创建 Agent，也不会影响新项目默认值。"
                       : creatingNewAgent
                         ? ""
@@ -705,10 +748,12 @@ export function AgentConfigModal({
                       : currentSelectionUsesBuiltinPrompt
                         ? editingBuiltinTemplate
                           ? "该模板使用 OpenCode 内置 prompt，可直接写入当前 Project。"
-                          : "该 Agent 使用 OpenCode 内置 prompt；如需移除请直接删除。"
-                      : editingBuiltinTemplate
-                        ? hasUnsavedChanges
-                          ? "模板有未保存修改。"
+                          : hasUnsavedChanges
+                            ? "可调整当前 Project 的可写 Agent 设置。"
+                            : "该 Agent 使用 OpenCode 内置 prompt；可调整可写状态，如需移除请直接删除。"
+                        : editingBuiltinTemplate
+                          ? hasUnsavedChanges
+                            ? "模板有未保存修改。"
                           : "当前模板已与项目配置同步。"
                         : hasTaskRecords
                           ? "当前 Project 已有 Task 启动记录：配置已锁定。"
@@ -745,6 +790,58 @@ export function AgentConfigModal({
                   className="w-full rounded-[8px] border border-border bg-white px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </label>
+              {!editingBuiltinTemplate && (
+                <label className="mb-3 flex items-start gap-3 rounded-[8px] border border-border/70 bg-white/70 px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    checked={isWritable}
+                    disabled={loading || saving || deleting || resettingTemplate || hasTaskRecords}
+                    onChange={(event) => {
+                      setIsWritable(event.target.checked);
+                      if (saveError) {
+                        setSaveError(null);
+                      }
+                      if (saveSuccess) {
+                        setSaveSuccess(null);
+                      }
+                    }}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-foreground">设为可写 Agent</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {currentWritableAgentName && currentWritableAgentName !== agentName.trim()
+                        ? `保存后会把当前 Project 的可写 Agent 从 ${currentWritableAgentName} 切换为 ${agentName.trim() || "当前 Agent"}。取消勾选则保留现有可写 Agent。`
+                        : "同一 Project 中最多只能有一个可写 Agent。取消勾选后，当前 Project 也可以没有可写 Agent。"}
+                    </span>
+                  </span>
+                </label>
+              )}
+              {editingBuiltinTemplate && (
+                <label className="mb-3 flex items-start gap-3 rounded-[8px] border border-border/70 bg-white/70 px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    checked={isWritable}
+                    disabled={loading || saving || deleting || resettingTemplate || hasTaskRecords || existingAgentNames.has(selectedBuiltinTemplate?.name ?? "")}
+                    onChange={(event) => {
+                      setIsWritable(event.target.checked);
+                      if (saveError) {
+                        setSaveError(null);
+                      }
+                      if (saveSuccess) {
+                        setSaveSuccess(null);
+                      }
+                    }}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-foreground">写入当前 Project 时设为可写 Agent</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {currentWritableAgentName && currentWritableAgentName !== selectedBuiltinTemplate?.name
+                        ? `写入后会把当前 Project 的可写 Agent 切换为 ${selectedBuiltinTemplate?.name ?? "该 Agent"}。`
+                        : "这个选项只影响“添加为项目成员”。保存模板本身不会改动当前 Project 的可写 Agent。"}
+                    </span>
+                  </span>
+                </label>
+              )}
               <textarea
                 value={prompt}
                 onChange={(event) => {
@@ -826,6 +923,7 @@ export function AgentConfigModal({
                   onClick={() => {
                     setPrompt(savedPrompt);
                     setAgentName(savedAgentName);
+                    setIsWritable(savedIsWritable);
                     setSaveError(null);
                     setSaveSuccess(null);
                   }}
@@ -857,7 +955,9 @@ export function AgentConfigModal({
                       ? "创建 Agent"
                       : editingBuiltinTemplate
                         ? "保存模板"
-                        : "保存 Prompt"}
+                        : selectedFileUsesBuiltinPrompt
+                          ? "保存配置"
+                          : "保存 Prompt"}
                 </button>
               )}
               <Dialog.Close asChild>

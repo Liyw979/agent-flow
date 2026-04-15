@@ -14,7 +14,7 @@ import {
 } from "./lib/task-completion-reminders";
 import { getAgentColorToken } from "./lib/agent-colors";
 import { useAgentFlowStore } from "./store/useAgentFlowStore";
-import { BUILD_AGENT_NAME, resolveTopologyAgentOrder, usesOpenCodeBuiltinPrompt } from "@shared/types";
+import { resolveTopologyAgentOrder, usesOpenCodeBuiltinPrompt } from "@shared/types";
 import type { AgentRuntimeSnapshot, MessageRecord, TaskSnapshot, TopologyRecord } from "@shared/types";
 
 interface OptimisticSubmission {
@@ -629,7 +629,7 @@ function App() {
                                     {agent.isWritable && (
                                       <span
                                         className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]"
-                                        title="当前唯一不禁用写入相关工具的 Agent"
+                                        title="当前 Project 的可写 Agent"
                                         style={{
                                           color: agentColor.text,
                                           borderColor: agentColor.border,

@@ -235,10 +235,6 @@ export class CustomAgentConfigService {
     config: UserAgentConfig,
     writableAgentName: string | null,
   ): UserAgentConfig {
-    if (!writableAgentName) {
-      return config;
-    }
-
     return {
       ...config,
       agents: Object.fromEntries(
@@ -246,7 +242,7 @@ export class CustomAgentConfigService {
           name,
           {
             ...entry,
-            writable: name === writableAgentName,
+            writable: writableAgentName !== null && name === writableAgentName,
           },
         ]),
       ),
@@ -260,7 +256,7 @@ export class CustomAgentConfigService {
     }
     const writableCount = agents.filter((agent) => agent.isWritable).length;
     if (writableCount > 1) {
-      throw new Error("当前已勾选的 Agent 中，至多只能有一个可写 Agent。");
+      throw new Error("当前 Project 中至多只能有一个可写 Agent。");
     }
   }
 
@@ -317,15 +313,39 @@ export class CustomAgentConfigService {
     if (!normalizedNextAgentName) {
       throw new Error("新的 Agent 名称不能为空。");
     }
+    const current = this.ensureUserConfig(projectPath);
+    const currentWritableAgentName = resolveWritableAgentName(current);
     if (usesOpenCodeBuiltinPrompt(normalizedCurrentAgentName)) {
-      throw new Error("Build 使用 OpenCode 内置 prompt，不支持修改名称或 prompt；如需移除请删除该 Agent。");
+      if (normalizedCurrentAgentName !== normalizedNextAgentName) {
+        throw new Error("Build 使用 OpenCode 内置 prompt，不支持修改名称；如需移除请删除该 Agent。");
+      }
+      if (!current.agents[normalizedCurrentAgentName]) {
+        throw new Error(`Agent 不存在：${normalizedCurrentAgentName}`);
+      }
+      const nextWritableAgentName = isWritable
+        ? normalizedCurrentAgentName
+        : (currentWritableAgentName === normalizedCurrentAgentName ? null : currentWritableAgentName);
+      const next = this.applyWritableSelection(normalizeUserAgentConfig({
+        ...current,
+        agents: {
+          ...current.agents,
+          [normalizedCurrentAgentName]: {
+            prompt: "",
+            writable: isWritable,
+          },
+        },
+      }), nextWritableAgentName);
+      this.setProjectConfig(projectPath, next);
+      return;
     }
 
-    const current = this.ensureUserConfig(projectPath);
     if (!normalizedCurrentAgentName && usesOpenCodeBuiltinPrompt(normalizedNextAgentName)) {
       if (current.agents[normalizedNextAgentName]) {
         throw new Error(`Agent 名称已存在：${normalizedNextAgentName}`);
       }
+      const nextWritableAgentName = isWritable
+        ? normalizedNextAgentName
+        : currentWritableAgentName;
       const next = this.applyWritableSelection(normalizeUserAgentConfig({
         ...current,
         agents: {
@@ -335,7 +355,7 @@ export class CustomAgentConfigService {
             writable: isWritable,
           },
         },
-      }), isWritable ? normalizedNextAgentName : null);
+      }), nextWritableAgentName);
       this.setProjectConfig(projectPath, next);
       return;
     }
@@ -347,6 +367,9 @@ export class CustomAgentConfigService {
       if (current.agents[normalizedNextAgentName]) {
         throw new Error(`Agent 名称已存在：${normalizedNextAgentName}`);
       }
+      const nextWritableAgentName = isWritable
+        ? normalizedNextAgentName
+        : currentWritableAgentName;
       const next = this.applyWritableSelection(normalizeUserAgentConfig({
         ...current,
         agents: {
@@ -356,7 +379,7 @@ export class CustomAgentConfigService {
             writable: isWritable,
           },
         },
-      }), isWritable ? normalizedNextAgentName : null);
+      }), nextWritableAgentName);
       this.setProjectConfig(projectPath, next);
       return;
     }
@@ -383,10 +406,13 @@ export class CustomAgentConfigService {
       reorderedAgents[name] = entry;
     }
 
+    const nextWritableAgentName = isWritable
+      ? normalizedNextAgentName
+      : (currentWritableAgentName === normalizedCurrentAgentName ? null : currentWritableAgentName);
     const next = this.applyWritableSelection(normalizeUserAgentConfig({
       ...current,
       agents: reorderedAgents,
-    }), isWritable ? normalizedNextAgentName : null);
+    }), nextWritableAgentName);
     this.setProjectConfig(projectPath, next);
   }
 
