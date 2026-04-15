@@ -232,12 +232,15 @@ export function ChatWindow({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const composerRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const messageViewportRef = useRef<HTMLDivElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
 
   useEffect(() => {
     if (task) {
       setDraft("");
       setMentionContext(null);
       setSubmitError(null);
+      shouldStickToBottomRef.current = true;
       return;
     }
   }, [task?.task.id]);
@@ -261,6 +264,25 @@ export function ChatWindow({
     const defaultIndex = defaultAgentName ? mentionOptions.indexOf(defaultAgentName) : -1;
     setActiveIndex(defaultIndex >= 0 ? defaultIndex : 0);
   }, [defaultAgentName, mentionContext?.query, mentionOptions]);
+
+  useEffect(() => {
+    const viewport = messageViewportRef.current;
+    if (!viewport || !shouldStickToBottomRef.current) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      const nextViewport = messageViewportRef.current;
+      if (!nextViewport) {
+        return;
+      }
+      nextViewport.scrollTop = nextViewport.scrollHeight;
+    });
+
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [messages, task?.task.id]);
 
   useEffect(() => {
     if (!mentionContext) {
@@ -407,7 +429,16 @@ export function ChatWindow({
         ) : null}
       </header>
 
-      <div className="flex-1 min-h-0 space-y-3 overflow-y-auto px-5 py-3">
+      <div
+        ref={messageViewportRef}
+        onScroll={(event) => {
+          const viewport = event.currentTarget;
+          const distanceToBottom =
+            viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+          shouldStickToBottomRef.current = distanceToBottom <= 48;
+        }}
+        className="flex-1 min-h-0 space-y-3 overflow-y-auto px-5 py-3"
+      >
         {messages.length > 0 ? (
           messages.map((message) => (
             <MessageBubble key={message.id} message={message} />
