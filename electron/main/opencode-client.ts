@@ -977,7 +977,7 @@ export class OpenCodeClient {
 
   private pickFallbackMessage(finalMessage: string, activities: OpenCodeRuntimeActivity[]): string | null {
     const normalizedFinal = finalMessage.trim();
-    if (normalizedFinal && !/^【DECISION】/u.test(normalizedFinal)) {
+    if (normalizedFinal) {
       return normalizedFinal;
     }
 
@@ -987,9 +987,6 @@ export class OpenCodeClient {
       }
       const detail = activity.detail.trim();
       if (!detail) {
-        continue;
-      }
-      if (/^【DECISION】/u.test(detail)) {
         continue;
       }
       return detail;

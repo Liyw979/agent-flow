@@ -38,12 +38,12 @@ function stripTrailingMentions(content: string): string {
 }
 
 function stripRevisionFeedbackLabel(content: string): string {
-  return content.replace(/^具体修改意见[:：]\s*/u, "").trim();
+  return content.replace(/^回应[:：]\s*/u, "").trim();
 }
 
 function getRevisionRequestFeedback(content: string): string {
   const normalized = stripTrailingMentions(content);
-  const marker = /具体修改意见[:：]/gu;
+  const marker = /回应[:：]/gu;
   let lastMatch: RegExpExecArray | null = null;
   let match: RegExpExecArray | null = marker.exec(normalized);
 
@@ -125,7 +125,7 @@ function buildMergedRevisionRequestContent(previous: ChatMessageItem, current: M
   }
 
   return formatRevisionRequestContent(
-    `${summary}\n\n具体修改意见：\n${feedback}`,
+    `${summary}\n\n回应：\n${feedback}`,
     current.meta?.targetAgentId,
   );
 }

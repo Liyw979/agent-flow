@@ -13,13 +13,14 @@ test("Build agent 完全不注入 system prompt", () => {
   assert.equal(prompt, "");
 });
 
-test("存在审视边的 agent 才注入 DECISION 协议", () => {
+test("存在审视边的 agent 才注入回应协议", () => {
   const prompt = buildAgentSystemPrompt({
     name: "TaskReview",
   }, true);
 
-  assert.match(prompt, /【DECISION】检查通过/);
-  assert.match(prompt, /【DECISION】需要修改/);
+  assert.match(prompt, /\[@来源 Agent Message\]/);
+  assert.match(prompt, /回应：/);
+  assert.doesNotMatch(prompt, /下一个 Agent/);
 });
 
 test("没有审视边的 agent 不注入 system prompt", () => {
@@ -33,14 +34,14 @@ test("没有审视边的 agent 不注入 system prompt", () => {
 test("mock 模式下 Build agent 回复不再伪造已完成决策块", () => {
   const reply = buildMockAgentReply("Build", "请实现功能并自检");
 
-  assert.doesNotMatch(reply, /【DECISION】已完成/);
+  assert.doesNotMatch(reply, /回应：/);
   assert.match(reply, /我已完成主要实现与本地自检/);
 });
 
 test("mock 模式下 BA 回复不再伪造审视决策块", () => {
   const reply = buildMockAgentReply("BA", "请整理需求");
 
-  assert.doesNotMatch(reply, /【DECISION】/);
+  assert.doesNotMatch(reply, /回应：/);
   assert.match(reply, /目标、范围、约束与验收标准/);
 });
 
@@ -67,5 +68,5 @@ test("存在审视边的 agent 请求体继续携带 system 字段", () => {
   });
 
   assert.equal(typeof body.system, "string");
-  assert.match(String(body.system), /【DECISION】检查通过/);
+  assert.match(String(body.system), /回应：/);
 });

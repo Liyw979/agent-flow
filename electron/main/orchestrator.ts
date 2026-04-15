@@ -70,7 +70,7 @@ type ReviewDecision = "pass" | "needs_revision" | "unknown";
 interface ParsedReview {
   cleanContent: string;
   decision: ReviewDecision;
-  feedback: string | null;
+  opinion: string | null;
   rawDecisionBlock: string | null;
 }
 
@@ -846,7 +846,8 @@ export class Orchestrator {
         );
       }
 
-      const parsedReview = this.parseReview(response.finalMessage);
+      const reviewAgent = this.isReviewAgent(latestAgentFile, topology);
+      const parsedReview = this.parseReview(response.finalMessage, reviewAgent);
       const agentContextContent = this.resolveAgentContextContent(
         parsedReview,
         response.finalMessage,
@@ -864,7 +865,7 @@ export class Orchestrator {
           status: response.status,
           finalMessage: agentContextContent,
           reviewDecision: parsedReview.decision,
-          reviewFeedback: parsedReview.feedback ?? "",
+          reviewOpinion: parsedReview.opinion ?? "",
           rawResponse: response.finalMessage,
           sessionId: agentSessionId,
         },
@@ -876,7 +877,6 @@ export class Orchestrator {
         parsedReview.decision === "needs_revision"
           ? this.getOutgoingEdges(topology, agentName, "review_fail")
           : [];
-      const reviewAgent = this.isReviewAgent(latestAgentFile, topology);
       const agentStatus = parsedReview.decision === "needs_revision" ? "failed" : "completed";
       this.store.updateTaskAgentStatus(task.id, agentName, agentStatus);
       if (behavior.updateTaskStatusOnStart ?? true) {
@@ -1133,7 +1133,7 @@ export class Orchestrator {
 
         const forwardedContext = this.buildDownstreamForwardedContext(taskId, sourceContent);
         const forwardedRequirement = this.buildAgentHandoffRequirement(
-          "请结合 [User Message] 与上游 Agent Message 中的上下文继续推进当前任务，并只关注你当前负责的部分。",
+        "请结合 [User Message] 与 [@来源 Agent Message] 中的上下文继续推进当前任务，并只关注你当前负责的部分。",
           gitDiffSummary,
         );
         const signature = this.buildTriggerSignature(
@@ -1228,7 +1228,7 @@ export class Orchestrator {
           requirement: targetName === BUILD_AGENT_NAME
             ? undefined
             : this.buildAgentHandoffRequirement(
-                "请结合 [User Message] 与上游 Agent Message 中的上下文继续推进当前任务，并只关注你当前负责的部分。",
+                "请结合 [User Message] 与 [@来源 Agent Message] 中的上下文继续推进当前任务，并只关注你当前负责的部分。",
                 gitDiffSummary,
               ),
         });
@@ -1254,8 +1254,9 @@ export class Orchestrator {
       return 0;
     }
 
-    const feedback = parsedReview.feedback?.trim() || "请根据当前审视意见修复问题，并重新提交本轮结果。";
-    const reviewContent = `具体修改意见：\n${feedback}`.trim();
+    const opinion = parsedReview.opinion?.trim()
+      || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
+    const reviewContent = `回应：\n${opinion}`.trim();
     const latestUserContent = this.getLatestUserMessageContent(taskId);
     const userMessage = latestUserContent && !this.contentContainsNormalized(reviewContent, latestUserContent)
       ? latestUserContent
@@ -1263,12 +1264,12 @@ export class Orchestrator {
     const currentTask = this.store.getTask(taskId);
     const gitDiffSummary = await this.buildProjectGitDiffSummary(currentTask.cwd);
     const forwardedRequirement = this.buildAgentHandoffRequirement(
-      "请根据 [User Message] 与上游 Agent Message 中的审视意见完成修复，仅处理阻塞当前交付的问题。",
+      "请结合 [User Message] 与 [@来源 Agent Message] 继续响应当前问题。你可以澄清、补充证据、提出反驳、给出实现方案或直接修改，但必须明确表达你自己的判断，不要只回复空泛结论。",
       gitDiffSummary,
     );
 
     for (const targetName of reviewTargets) {
-      const remediationBody = `审视不通过，请根据以下意见继续处理。\n\n具体修改意见：\n${feedback}`;
+      const remediationBody = `审视不通过，请回应以下内容。\n\n回应：\n${opinion}`;
       const remediationMessage: MessageRecord = {
         id: randomUUID(),
         projectId: project.id,
@@ -1602,38 +1603,49 @@ export class Orchestrator {
     };
   }
 
-  private parseReview(content: string): ParsedReview {
-    const decisionIndex = content.lastIndexOf("【DECISION】");
-    if (decisionIndex < 0) {
+  private parseReview(content: string, reviewAgent: boolean): ParsedReview {
+    const responseMatch = this.extractTrailingResponseBlock(content);
+    if (!responseMatch) {
       return {
         cleanContent: this.stripStructuredSignals(content),
-        decision: "unknown",
-        feedback: null,
+        decision: reviewAgent ? "pass" : "unknown",
+        opinion: null,
         rawDecisionBlock: null,
       };
     }
 
-    const body = content.slice(0, decisionIndex).trim();
-    const decisionBlock = content.slice(decisionIndex).trim();
-    const feedbackMatch = decisionBlock.match(/具体修改意见[:：]\s*([\s\S]*)$/);
-    const feedback = feedbackMatch?.[1]?.trim() ?? null;
-
     return {
-      cleanContent: this.stripStructuredSignals(body),
-      decision: /【DECISION】\s*需要修改/.test(decisionBlock)
-        ? "needs_revision"
-        : /【DECISION】\s*(检查通过|已完成)/.test(decisionBlock)
-          ? "pass"
-          : "unknown",
-      feedback,
-      rawDecisionBlock: decisionBlock,
+      cleanContent: this.stripStructuredSignals(responseMatch.body),
+      decision: "needs_revision",
+      opinion: responseMatch.response,
+      rawDecisionBlock: responseMatch.rawBlock,
+    };
+  }
+
+  private extractTrailingResponseBlock(content: string): {
+    body: string;
+    response: string;
+    rawBlock: string;
+  } | null {
+    const pattern = /(^|\n)回应[:：]\s*([\s\S]*)$/u;
+    const match = pattern.exec(content.trim());
+    const response = match?.[2]?.trim();
+    if (!response) {
+      return null;
+    }
+
+    const startIndex = match.index + (match[1]?.length ?? 0);
+    return {
+      body: content.slice(0, startIndex).trim(),
+      response,
+      rawBlock: content.slice(startIndex).trim(),
     };
   }
 
   private stripStructuredSignals(content: string): string {
     return content
       .split(/\r?\n/)
-      .filter((line) => !/^\s*(NEXT_AGENTS:|TASK_DONE\b|SESSION_REF:|【DECISION】)/i.test(line))
+      .filter((line) => !/^\s*(NEXT_AGENTS:|TASK_DONE\b|SESSION_REF:)/i.test(line))
       .join("\n")
       .trim();
   }
@@ -1718,13 +1730,12 @@ export class Orchestrator {
       return `[${from}] ${content || "（无）"}`.trim();
     }
 
-    const from = this.getAgentDisplayName(prompt.from.trim() || "System");
     const sections: string[] = [];
     if (prompt.userMessage?.trim()) {
       sections.push(`[User Message]\n${prompt.userMessage.trim()}`);
     }
     if (prompt.agentMessage?.trim()) {
-      sections.push(`[${from} Agent Message]\n${prompt.agentMessage.trim()}`);
+      sections.push(`[@来源 Agent Message]\n${prompt.agentMessage.trim()}`);
     }
     if (sections.length === 0) {
       sections.push("[User Message]\n（无）");
@@ -1810,13 +1821,13 @@ export class Orchestrator {
       return fallbackContent;
     }
 
-    const feedback = parsedReview.feedback?.trim();
-    if (feedback) {
-      return `具体修改意见：\n${feedback}`;
+    const opinion = parsedReview.opinion?.trim();
+    if (opinion) {
+      return `回应：\n${opinion}`;
     }
 
     if (parsedReview.decision === "needs_revision") {
-      return "（该 Agent 已给出需要修改的结论，但未返回可展示的高层结果。）";
+      return "（该 Agent 已给出需要响应的结论，但未返回可展示的高层结果。）";
     }
     if (parsedReview.decision === "pass") {
       return "通过";

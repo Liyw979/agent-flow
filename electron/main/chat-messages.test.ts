@@ -18,10 +18,10 @@ function createMessage(overrides: Partial<MessageRecord>): MessageRecord {
   };
 }
 
-test("合并整改消息时只保留一份具体修改意见与一份 mention", () => {
-  const summary = "具体修改意见：暂无修改意见，因为尚未完成润色工作。请先完成需求润色，然后检查实现。";
+test("合并回应消息时只保留一份回应与一份 mention", () => {
+  const summary = "回应：暂无进一步结论，因为尚未完成润色工作。请先完成需求润色，然后再回应实现是否成立。";
   const remediationMessage = formatRevisionRequestContent(
-    "审视不通过，请根据以下意见继续处理。\n\n具体修改意见：\n暂无修改意见，因为尚未完成润色工作。请先完成需求润色，然后检查实现。",
+    "审视不通过，请回应以下内容。\n\n回应：\n暂无进一步结论，因为尚未完成润色工作。请先完成需求润色，然后再回应实现是否成立。",
     "Build",
   );
 
@@ -49,7 +49,7 @@ test("合并整改消息时只保留一份具体修改意见与一份 mention", 
   assert.equal(merged[0]?.content, `${summary}\n\n@Build`);
 });
 
-test("合并整改消息时保留高层结果并追加一份反馈", () => {
+test("合并回应消息时保留高层结果并追加一份回应", () => {
   const summary = "需求已完成初步润色。";
   const merged = mergeTaskChatMessages([
     createMessage({
@@ -64,7 +64,7 @@ test("合并整改消息时保留高层结果并追加一份反馈", () => {
     createMessage({
       id: "revision-request",
       content: formatRevisionRequestContent(
-        "审视不通过，请根据以下意见继续处理。\n\n具体修改意见：\n请补充实现并完成验证。",
+        "审视不通过，请回应以下内容。\n\n回应：\n请补充实现依据，并说明验证为何足以支持当前结论。",
         "Build",
       ),
       meta: {
@@ -77,7 +77,7 @@ test("合并整改消息时保留高层结果并追加一份反馈", () => {
   assert.equal(merged.length, 1);
   assert.equal(
     merged[0]?.content,
-    "需求已完成初步润色。\n\n具体修改意见：\n请补充实现并完成验证。\n\n@Build",
+    "需求已完成初步润色。\n\n回应：\n请补充实现依据，并说明验证为何足以支持当前结论。\n\n@Build",
   );
 });
 

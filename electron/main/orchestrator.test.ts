@@ -296,7 +296,7 @@ test("审视通过但没有可展示高层结果时返回简洁兜底文案", ()
         parsedReview: {
           cleanContent: string;
           decision: "pass" | "needs_revision" | "unknown";
-          feedback: string | null;
+          opinion: string | null;
           rawDecisionBlock: string | null;
         },
         fallbackMessage?: string | null,
@@ -306,8 +306,8 @@ test("审视通过但没有可展示高层结果时返回简洁兜底文案", ()
     {
       cleanContent: "",
       decision: "pass",
-      feedback: null,
-      rawDecisionBlock: "【DECISION】检查通过",
+      opinion: null,
+      rawDecisionBlock: null,
     },
     null,
   );
@@ -516,7 +516,7 @@ test("审视 Agent 执行中止时不会伪造成整改意见", async () => {
   );
   assert.equal(
     snapshot.messages.some(
-      (message) => message.content.includes("具体修改意见：\nAborted"),
+      (message) => message.content.includes("回应：\nAborted"),
     ),
     false,
   );
@@ -730,7 +730,7 @@ test("Build 在收到 UnitTest 回流后再次交付时会重新触发全部 ass
     callCount.set(agent, count);
 
     const finalMessage = agent === "UnitTest"
-      ? "【DECISION】检查通过"
+      ? "单元测试覆盖与结构检查完成，未发现阻塞问题。"
       : `${agent} 已完成`;
     return {
       status: "completed",

@@ -4,15 +4,16 @@ export function buildMockAgentReply(agent: string, content: string): string {
     .replace(/在你完成本轮所有工作后[\s\S]*$/m, "")
     .trim();
   const revisionFeedback =
-    "【DECISION】需要修改\n具体修改意见：请补齐缺失实现、补充验证步骤，并确保最终回复只保留对用户有意义的高层结果。";
-  const reviewPassed = "【DECISION】检查通过";
-  const completed = "【DECISION】已完成";
+    "回应：我不同意直接进入下一阶段，因为当前结论缺少关键证据，且“已完成验证”的说法与现有上下文不一致。请说明验证依据，并解释为何可以得出当前结论。";
+  const reviewPassed = "";
+  const completed = "";
 
-  const withDecision = (body: string, decision: string = completed) => `${body}\n${decision}`;
+  const withDecision = (body: string, decision: string = completed) =>
+    [body, decision].filter(Boolean).join("\n");
 
-  if (/需要修改|返工|rework|revise/i.test(cleaned)) {
+  if (/需要修改|需要回应|需要响应|返工|rework|revise/i.test(cleaned)) {
     return withDecision(
-      "我已重新检查当前上下文，确认这一轮需要继续返工后再继续推进。",
+      "我已重新检查当前上下文，确认这一轮需要继续响应争议点后再继续推进。",
       revisionFeedback,
     );
   }
