@@ -117,7 +117,7 @@ export class Orchestrator {
   private readonly taskRuntime = new Map<string, TaskRuntimeState>();
   private readonly autoOpenTaskSession: boolean;
   private readonly enableEventStream: boolean;
-  private eventsConnected = false;
+  private readonly connectedEventProjects = new Set<string>();
   private window: BrowserWindow | null = null;
 
   constructor(options: OrchestratorOptions) {
@@ -141,11 +141,7 @@ export class Orchestrator {
       projects.find((project) => path.resolve(project.path) === cwd) ??
       projects[0] ??
       null;
-    this.opencodeClient.setInjectedConfigContent(
-      currentProject
-        ? this.customAgentConfig.buildInjectedConfigContent(currentProject.path)
-        : null,
-    );
+    this.syncInjectedConfigForProject(currentProject);
 
     await this.ensureEventStream();
   }
@@ -236,6 +232,8 @@ export class Orchestrator {
       projectId,
       payload: snapshot,
     });
+
+    await this.ensureEventStream(record.path);
 
     return {
       ...snapshot,
@@ -434,7 +432,7 @@ export class Orchestrator {
     if (!panel || !taskAgent) {
       throw new Error(`未找到 Agent ${payload.agentName} 对应的运行信息。`);
     }
-    await this.syncOpenCodeAttachEndpoint();
+    await this.syncOpenCodeAttachEndpoint(project.path);
     await this.zellijManager.openAgentTerminal({
       sessionName: panel.sessionName,
       cwd: panel.cwd,
@@ -790,6 +788,7 @@ export class Orchestrator {
     prompt: AgentExecutionPrompt,
     behavior: AgentRunBehaviorOptions = {},
   ) {
+    this.syncInjectedConfigForProject(project);
     const runtime = this.getRuntime(task.id);
     runtime.runningAgents.add(agentName);
     this.invalidateDownstreamTriggerSignatures(task.id, agentName);
@@ -1829,6 +1828,7 @@ export class Orchestrator {
     task: TaskRecord,
     agent: TaskAgentRecord,
   ): Promise<string> {
+    this.syncInjectedConfigForProject(project);
     if (agent.opencodeSessionId) {
       return agent.opencodeSessionId;
     }
@@ -1861,11 +1861,13 @@ export class Orchestrator {
     task: TaskRecord,
     agentFiles: AgentFileRecord[],
   ): Promise<TaskSnapshot> {
+    await this.ensureEventStream(project.path);
+    this.syncInjectedConfigForProject(project);
     this.syncTaskAgents(task, agentFiles);
     const currentTask = this.store.getTask(task.id);
     const agents = this.orderTaskAgents(task.id, this.store.listTaskAgents(task.id));
     const agentSessions = await this.ensureTaskAgentSessions(project, currentTask);
-    await this.syncOpenCodeAttachEndpoint();
+    await this.syncOpenCodeAttachEndpoint(project.path);
     const panels = await this.zellijManager.materializePanelBindings({
       projectId: currentTask.projectId,
       taskId: currentTask.id,
@@ -1960,7 +1962,7 @@ export class Orchestrator {
           topology,
         );
         const agentSessions = await this.ensureTaskAgentSessions(project, task);
-        await this.syncOpenCodeAttachEndpoint();
+        await this.syncOpenCodeAttachEndpoint(project.path);
         const panels = await this.zellijManager.materializePanelBindings({
           projectId: task.projectId,
           taskId: task.id,
@@ -1985,8 +1987,8 @@ export class Orchestrator {
     }
   }
 
-  private async syncOpenCodeAttachEndpoint() {
-    const attachBaseUrl = await this.opencodeClient.getAttachBaseUrl();
+  private async syncOpenCodeAttachEndpoint(projectPath: string) {
+    const attachBaseUrl = await this.opencodeClient.getAttachBaseUrl(projectPath);
     this.zellijManager.setOpenCodeAttachBaseUrl(attachBaseUrl);
     return attachBaseUrl;
   }
@@ -2016,6 +2018,16 @@ export class Orchestrator {
       .map((item) => item.trim())
       .find(Boolean);
     return (firstLine ?? "未命名任务").slice(0, 80);
+  }
+
+  private syncInjectedConfigForProject(project: ProjectRecord | null) {
+    if (!project) {
+      return;
+    }
+    this.opencodeClient.setInjectedConfigContent(
+      project.path,
+      this.customAgentConfig.buildInjectedConfigContent(project.path),
+    );
   }
 
   private extractMention(content: string): string | undefined {
@@ -2340,12 +2352,23 @@ export class Orchestrator {
   private emit(event: AgentFlowEvent) {
     this.events.emit("agentflow-event", event);
   }
-  private async ensureEventStream() {
-    if (!this.enableEventStream || this.eventsConnected) {
+  private async ensureEventStream(projectPath?: string) {
+    if (!this.enableEventStream) {
       return;
     }
 
-    this.eventsConnected = true;
-    void this.opencodeClient.connectEvents(() => undefined);
+    if (projectPath) {
+      const normalized = path.resolve(projectPath);
+      if (this.connectedEventProjects.has(normalized)) {
+        return;
+      }
+      this.connectedEventProjects.add(normalized);
+      void this.opencodeClient.connectEvents(normalized, () => undefined);
+      return;
+    }
+
+    await Promise.all(
+      this.store.listProjects().map((project) => this.ensureEventStream(project.path)),
+    );
   }
 }

@@ -184,6 +184,54 @@ test("内置模板可按 Project 单独覆盖且不会直接写入 agentFiles", 
   assert.equal(projectB.agentFiles.some((agent) => agent.name === "BA"), false);
 });
 
+test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", async () => {
+  const userDataPath = createTempDir();
+  const projectAPath = createTempDir();
+  const projectBPath = createTempDir();
+  const orchestrator = new Orchestrator({
+    userDataPath,
+    enableEventStream: false,
+    zellijManager: {
+      isAvailable: async () => true,
+      createTaskSession: async (_projectId: string, taskId: string) => `oap-${taskId}`,
+      createPanelBindings: () => [],
+      materializePanelBindings: async () => [],
+      openTaskSession: async () => undefined,
+      deleteTaskSession: async () => undefined,
+      setOpenCodeAttachBaseUrl: () => undefined,
+    } as never,
+  });
+
+  const typed = orchestrator as unknown as Orchestrator & {
+    opencodeClient: {
+      setInjectedConfigContent: (projectPath: string, content: string | null) => void;
+      createSession: (projectPath: string, title: string) => Promise<string>;
+      getAttachBaseUrl: (projectPath: string) => Promise<string>;
+    };
+  };
+
+  const injectedConfigs: string[] = [];
+  typed.opencodeClient.setInjectedConfigContent = (_projectPath, content) => {
+    injectedConfigs.push(content ?? "null");
+  };
+  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:4096";
+
+  const projectA = await orchestrator.createProject({ path: projectAPath });
+  await addCustomAgent(orchestrator, projectA.project.id, "BA", "你是 BA。\n只做需求分析。");
+  const projectB = await orchestrator.createProject({ path: projectBPath });
+
+  await orchestrator.initializeTask({ projectId: projectB.project.id, title: "project-b" });
+  await orchestrator.initializeTask({ projectId: projectA.project.id, title: "project-a" });
+
+  assert.equal(injectedConfigs.length >= 2, true);
+  assert.equal(injectedConfigs.includes("{\"agent\":{}}"), true);
+  assert.equal(
+    injectedConfigs.at(-1),
+    "{\"agent\":{\"BA\":{\"mode\":\"primary\",\"prompt\":\"你是 BA。\\n只做需求分析。\",\"permission\":{\"write\":\"deny\",\"edit\":\"deny\",\"bash\":\"deny\",\"task\":\"deny\",\"patch\":\"deny\"}}}}",
+  );
+});
+
 test("审视通过但没有可展示高层结果时返回简洁兜底文案", () => {
   const orchestrator = new Orchestrator({
     userDataPath: createTempDir(),

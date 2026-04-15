@@ -10,23 +10,50 @@ function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-opencode-client-"));
 }
 
-function createClient() {
+function createClient(projectPath = createTempDir()) {
   const client = new OpenCodeClient(createTempDir()) as OpenCodeClient & {
-    serverHandle: Promise<{ process: null; port: number; mock: boolean }>;
+    servers: Map<string, {
+      projectPath: string;
+      runtimeDir: string;
+      serverHandle: Promise<{ process: null; port: number; mock: boolean }> | null;
+      shutdownPromise: Promise<void> | null;
+      eventPump: Promise<void> | null;
+      injectedConfigContent: string | null;
+    }>;
     request: (pathname: string) => Promise<Response>;
     getSessionMessage: (projectPath: string, sessionId: string, messageId: string) => Promise<unknown>;
     listSessionMessages: (projectPath: string, sessionId: string, limit?: number) => Promise<unknown[]>;
   };
-  client.serverHandle = Promise.resolve({
-    process: null,
-    port: 4096,
-    mock: false,
+  const normalizedProjectPath = path.resolve(projectPath);
+  client.servers.set(normalizedProjectPath, {
+    projectPath: normalizedProjectPath,
+    runtimeDir: createTempDir(),
+    serverHandle: Promise.resolve({
+      process: null,
+      port: 4096,
+      mock: false,
+    }),
+    shutdownPromise: null,
+    eventPump: null,
+    injectedConfigContent: null,
   });
-  return client;
+  return {
+    client,
+    projectPath: normalizedProjectPath,
+  };
 }
 
 test("request 会跟随当前 serverHandle 的实际端口", async () => {
-  const client = createClient() as OpenCodeClient & {
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
+    servers: Map<string, {
+      projectPath: string;
+      runtimeDir: string;
+      serverHandle: Promise<{ process: null; port: number; mock: boolean }> | null;
+      shutdownPromise: Promise<void> | null;
+      eventPump: Promise<void> | null;
+      injectedConfigContent: string | null;
+    }>;
     request: (
       pathname: string,
       options: {
@@ -36,7 +63,9 @@ test("request 会跟随当前 serverHandle 的实际端口", async () => {
       },
     ) => Promise<Response>;
   };
-  client.serverHandle = Promise.resolve({
+  const state = typed.servers.get(projectPath);
+  assert.notEqual(state, undefined);
+  state.serverHandle = Promise.resolve({
     process: null,
     port: 43127,
     mock: false,
@@ -50,8 +79,9 @@ test("request 会跟随当前 serverHandle 的实际端口", async () => {
   }) as typeof fetch;
 
   try {
-    await client.request("/session", {
+    await typed.request("/session", {
       method: "GET",
+      projectPath,
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -61,10 +91,10 @@ test("request 会跟随当前 serverHandle 的实际端口", async () => {
 });
 
 test("submitMessage 在空响应体时不会抛出 JSON 解析错误", async () => {
-  const client = createClient();
+  const { client, projectPath } = createClient();
   client.request = async () => new Response("", { status: 200 });
 
-  const message = await client.submitMessage("/tmp/demo", "session-1", {
+  const message = await client.submitMessage(projectPath, "session-1", {
     agent: "BA",
     content: "请整理需求",
   });
@@ -75,27 +105,28 @@ test("submitMessage 在空响应体时不会抛出 JSON 解析错误", async () 
 });
 
 test("createSession 在空响应体时回退到本地 session id", async () => {
-  const client = createClient();
+  const { client, projectPath } = createClient();
   client.request = async () => new Response("", { status: 200 });
 
-  const sessionId = await client.createSession("/tmp/demo", "demo");
+  const sessionId = await client.createSession(projectPath, "demo");
 
   assert.match(sessionId, /^session-/);
 });
 
 test("消息查询接口空响应体时返回空结果而不是抛错", async () => {
-  const client = createClient();
+  const { client, projectPath } = createClient();
   client.request = async () => new Response("", { status: 200 });
 
-  const message = await client.getSessionMessage("/tmp/demo", "session-1", "msg-1");
-  const list = await client.listSessionMessages("/tmp/demo", "session-1");
+  const message = await client.getSessionMessage(projectPath, "session-1", "msg-1");
+  const list = await client.listSessionMessages(projectPath, "session-1");
 
   assert.equal(message, null);
   assert.deepEqual(list, []);
 });
 
 test("resolveExecutionResult 在消息已完成时不会额外等待 session idle 超时", async () => {
-  const client = createClient() as OpenCodeClient & {
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
     waitForSessionSettled: (sessionId: string, after: number, timeoutMs: number) => Promise<void>;
     waitForMessageCompletion: (
       projectPath: string,
@@ -123,10 +154,10 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
     }>;
   };
   const completedAt = new Date().toISOString();
-  client.waitForSessionSettled = async () => {
+  typed.waitForSessionSettled = async () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
   };
-  client.waitForMessageCompletion = async () => ({
+  typed.waitForMessageCompletion = async () => ({
     id: "msg-1",
     content: "已完成",
     sender: "assistant",
@@ -135,8 +166,8 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
     error: null,
     raw: null,
   });
-  client.getLatestAssistantMessage = async () => null;
-  client.getSessionRuntime = async () => ({
+  typed.getLatestAssistantMessage = async () => null;
+  typed.getSessionRuntime = async () => ({
     sessionId: "session-1",
     messageCount: 1,
     updatedAt: completedAt,
@@ -146,7 +177,7 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
   });
 
   const startedAt = Date.now();
-  const result = await client.resolveExecutionResult("/tmp/demo", "session-1", {
+  const result = await typed.resolveExecutionResult(projectPath, "session-1", {
     id: "msg-1",
     content: "",
     sender: "assistant",
@@ -162,17 +193,31 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
 });
 
 test("配置变更触发 shutdown 时，ensureServer 会等待 shutdown 完成后再启动新服务", async () => {
+  const projectPath = createTempDir();
   const client = new OpenCodeClient(createTempDir()) as OpenCodeClient & {
-    serverHandle: Promise<{ process: null; port: number; mock: boolean }> | null;
-    shutdownPromise: Promise<void> | null;
-    startServer: () => Promise<{ process: null; port: number; mock: boolean }>;
-    shutdown: () => Promise<void>;
+    servers: Map<string, {
+      projectPath: string;
+      runtimeDir: string;
+      serverHandle: Promise<{ process: null; port: number; mock: boolean }> | null;
+      shutdownPromise: Promise<void> | null;
+      eventPump: Promise<void> | null;
+      injectedConfigContent: string | null;
+    }>;
+    startServer: (projectPath: string) => Promise<{ process: null; port: number; mock: boolean }>;
+    shutdown: (projectPath?: string) => Promise<void>;
   };
-
-  client.serverHandle = Promise.resolve({
-    process: null,
-    port: 4096,
-    mock: false,
+  const normalizedProjectPath = path.resolve(projectPath);
+  client.servers.set(normalizedProjectPath, {
+    projectPath: normalizedProjectPath,
+    runtimeDir: createTempDir(),
+    serverHandle: Promise.resolve({
+      process: null,
+      port: 4096,
+      mock: false,
+    }),
+    shutdownPromise: null,
+    eventPump: null,
+    injectedConfigContent: null,
   });
 
   let shutdownStartedResolve: (() => void) | null = null;
@@ -185,15 +230,19 @@ test("配置变更触发 shutdown 时，ensureServer 会等待 shutdown 完成�
   });
 
   let shutdownFinished = false;
-  client.shutdown = async () => {
+  client.shutdown = async (targetProjectPath?: string) => {
+    assert.equal(targetProjectPath, normalizedProjectPath);
     shutdownStartedResolve?.();
     await shutdownRelease;
-    client.serverHandle = null;
+    const state = client.servers.get(normalizedProjectPath);
+    assert.notEqual(state, undefined);
+    state.serverHandle = null;
     shutdownFinished = true;
   };
 
   let startedAfterShutdown = false;
-  client.startServer = async () => {
+  client.startServer = async (targetProjectPath: string) => {
+    assert.equal(targetProjectPath, normalizedProjectPath);
     startedAfterShutdown = shutdownFinished;
     return {
       process: null,
@@ -202,11 +251,11 @@ test("配置变更触发 shutdown 时，ensureServer 会等待 shutdown 完成�
     };
   };
 
-  client.setInjectedConfigContent('{"agent":{}}');
+  client.setInjectedConfigContent(normalizedProjectPath, '{"agent":{}}');
   await shutdownStarted;
 
   let ensureResolved = false;
-  const ensurePromise = client.ensureServer().then(() => {
+  const ensurePromise = client.ensureServer(normalizedProjectPath).then(() => {
     ensureResolved = true;
   });
 
@@ -217,5 +266,56 @@ test("配置变更触发 shutdown 时，ensureServer 会等待 shutdown 完成�
   await ensurePromise;
 
   assert.equal(startedAfterShutdown, true);
-  assert.equal(client.shutdownPromise, null);
+  assert.equal(client.servers.get(normalizedProjectPath)?.shutdownPromise, null);
+});
+
+test("不同 Project 会使用各自独立的 serve 端口", async () => {
+  const client = new OpenCodeClient(createTempDir()) as OpenCodeClient & {
+    startServer: (projectPath: string) => Promise<{ process: null; port: number; mock: boolean }>;
+    request: (
+      pathname: string,
+      options: {
+        method: "GET" | "POST";
+        projectPath?: string;
+        body?: string;
+      },
+    ) => Promise<Response>;
+  };
+  const projectA = createTempDir();
+  const projectB = createTempDir();
+  const portByProject = new Map<string, number>([
+    [path.resolve(projectA), 43127],
+    [path.resolve(projectB), 43128],
+  ]);
+
+  client.startServer = async (projectPath) => ({
+    process: null,
+    port: portByProject.get(path.resolve(projectPath)) ?? 4096,
+    mock: false,
+  });
+
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    requestedUrls.push(String(input));
+    return new Response("", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    await client.request("/session", {
+      method: "GET",
+      projectPath: projectA,
+    });
+    await client.request("/session", {
+      method: "GET",
+      projectPath: projectB,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(requestedUrls, [
+    "http://127.0.0.1:43127/session",
+    "http://127.0.0.1:43128/session",
+  ]);
 });

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { buildMockAgentReply } from "./mock-agent-reply";
 import { buildSubmitMessageBody } from "./opencode-request-body";
@@ -71,70 +71,103 @@ interface SessionWaiter {
   reject: (error: Error) => void;
 }
 
+interface ProjectServerState {
+  projectPath: string;
+  runtimeDir: string;
+  serverHandle: Promise<ServeHandle> | null;
+  shutdownPromise: Promise<void> | null;
+  eventPump: Promise<void> | null;
+  injectedConfigContent: string | null;
+}
+
 export class OpenCodeClient {
-  private serverHandle: Promise<ServeHandle> | null = null;
-  private shutdownPromise: Promise<void> | null = null;
-  private eventPump: Promise<void> | null = null;
+  private readonly servers = new Map<string, ProjectServerState>();
   private readonly host = "127.0.0.1";
   private readonly preferredPort = 4096;
-  private readonly runtimeDir: string;
+  private readonly runtimeRoot: string;
   private readonly sessionIdleAt = new Map<string, number>();
   private readonly sessionErrors = new Map<string, string>();
   private readonly sessionWaiters = new Map<string, SessionWaiter[]>();
-  private injectedConfigContent: string | null = process.env.OPENCODE_CONFIG_CONTENT?.trim() || null;
 
   constructor(runtimeRoot?: string) {
     const baseDir = runtimeRoot ? path.resolve(runtimeRoot) : path.join(process.cwd(), ".agentflow");
-    this.runtimeDir = path.join(baseDir, "opencode-runtime", "server");
-    fs.mkdirSync(this.runtimeDir, { recursive: true });
+    this.runtimeRoot = path.join(baseDir, "opencode-runtime", "servers");
+    fs.mkdirSync(this.runtimeRoot, { recursive: true });
   }
 
-  async ensureServer(): Promise<ServeHandle> {
-    if (this.shutdownPromise) {
-      await this.shutdownPromise;
-    }
-    if (this.serverHandle) {
-      return this.serverHandle;
-    }
-
-    this.serverHandle = this.startServer();
-    return this.serverHandle;
+  private getProjectKey(projectPath: string): string {
+    return path.resolve(projectPath);
   }
 
-  setInjectedConfigContent(content: string | null) {
+  private getProjectServerState(projectPath: string): ProjectServerState {
+    const key = this.getProjectKey(projectPath);
+    const existing = this.servers.get(key);
+    if (existing) {
+      return existing;
+    }
+
+    const basename = path.basename(key) || "project";
+    const safeBasename = basename.replace(/[^a-zA-Z0-9._-]/g, "_") || "project";
+    const digest = createHash("sha1").update(key).digest("hex").slice(0, 12);
+    const runtimeDir = path.join(this.runtimeRoot, `${safeBasename}-${digest}`);
+    fs.mkdirSync(runtimeDir, { recursive: true });
+
+    const created: ProjectServerState = {
+      projectPath: key,
+      runtimeDir,
+      serverHandle: null,
+      shutdownPromise: null,
+      eventPump: null,
+      injectedConfigContent: null,
+    };
+    this.servers.set(key, created);
+    return created;
+  }
+
+  async ensureServer(projectPath: string): Promise<ServeHandle> {
+    const state = this.getProjectServerState(projectPath);
+    if (state.shutdownPromise) {
+      await state.shutdownPromise;
+    }
+    if (state.serverHandle) {
+      return state.serverHandle;
+    }
+
+    state.serverHandle = this.startServer(state.projectPath);
+    return state.serverHandle;
+  }
+
+  setInjectedConfigContent(projectPath: string, content: string | null) {
+    const state = this.getProjectServerState(projectPath);
     const normalized = content?.trim();
     const nextContent = normalized ? normalized : null;
-    if (nextContent === this.injectedConfigContent) {
+    if (nextContent === state.injectedConfigContent) {
       return;
     }
-    this.injectedConfigContent = nextContent;
-    if (this.injectedConfigContent) {
-      process.env.OPENCODE_CONFIG_CONTENT = this.injectedConfigContent;
-    } else {
-      delete process.env.OPENCODE_CONFIG_CONTENT;
-    }
-    if (this.serverHandle) {
-      void this.scheduleShutdown();
+    state.injectedConfigContent = nextContent;
+    if (state.serverHandle) {
+      void this.scheduleShutdown(state.projectPath);
     }
   }
 
-  private scheduleShutdown(): Promise<void> {
-    if (this.shutdownPromise) {
-      return this.shutdownPromise;
+  private scheduleShutdown(projectPath: string): Promise<void> {
+    const state = this.getProjectServerState(projectPath);
+    if (state.shutdownPromise) {
+      return state.shutdownPromise;
     }
-    const pending = this.shutdown()
+    const pending = this.shutdown(state.projectPath)
       .catch(() => undefined)
       .finally(() => {
-        if (this.shutdownPromise === pending) {
-          this.shutdownPromise = null;
+        if (state.shutdownPromise === pending) {
+          state.shutdownPromise = null;
         }
       });
-    this.shutdownPromise = pending;
+    state.shutdownPromise = pending;
     return pending;
   }
 
   async createSession(projectPath: string, title: string): Promise<string> {
-    const server = await this.ensureServer();
+    const server = await this.ensureServer(projectPath);
     if (server.mock) {
       return `session-${randomUUID()}`;
     }
@@ -159,14 +192,15 @@ export class OpenCodeClient {
     }
   }
 
-  async connectEvents(onEvent: (event: OpenCodeEvent) => void): Promise<void> {
-    const server = await this.ensureServer();
-    if (server.mock || this.eventPump) {
+  async connectEvents(projectPath: string, onEvent: (event: OpenCodeEvent) => void): Promise<void> {
+    const state = this.getProjectServerState(projectPath);
+    const server = await this.ensureServer(projectPath);
+    if (server.mock || state.eventPump) {
       return;
     }
 
-    this.eventPump = this.startEventPump(onEvent, server);
-    await this.eventPump;
+    state.eventPump = this.startEventPump(onEvent, server, state.projectPath);
+    await state.eventPump;
   }
 
   async submitMessage(
@@ -174,7 +208,7 @@ export class OpenCodeClient {
     sessionId: string,
     payload: SubmitMessagePayload,
   ): Promise<OpenCodeNormalizedMessage> {
-    const server = await this.ensureServer();
+    const server = await this.ensureServer(projectPath);
     const opencodeAgent = toOpenCodeAgentName(payload.agent);
 
     if (server.mock) {
@@ -214,7 +248,7 @@ export class OpenCodeClient {
     sessionId: string,
     submitted: OpenCodeNormalizedMessage,
   ): Promise<OpenCodeExecutionResult> {
-    const server = await this.ensureServer();
+    const server = await this.ensureServer(projectPath);
     if (server.mock) {
       return {
         status: submitted.error ? "error" : "completed",
@@ -267,7 +301,7 @@ export class OpenCodeClient {
     projectPath: string,
     sessionId: string,
   ): Promise<OpenCodeSessionRuntime> {
-    const server = await this.ensureServer();
+    const server = await this.ensureServer(projectPath);
     if (server.mock) {
       return {
         sessionId,
@@ -293,28 +327,51 @@ export class OpenCodeClient {
     return this.buildRuntimeSnapshot(sessionId, list);
   }
 
-  async shutdown(): Promise<void> {
-    if (!this.serverHandle) {
+  async shutdown(projectPath?: string): Promise<void> {
+    if (projectPath) {
+      const state = this.servers.get(this.getProjectKey(projectPath));
+      if (!state?.serverHandle) {
+        return;
+      }
+
+      try {
+        const server = await state.serverHandle;
+        if (!server.mock && server.process && !server.process.killed) {
+          server.process.kill();
+        }
+      } catch {
+        // ignore shutdown errors
+      } finally {
+        state.serverHandle = null;
+        state.eventPump = null;
+      }
       return;
     }
 
-    try {
-      const server = await this.serverHandle;
-      if (!server.mock && server.process && !server.process.killed) {
-        server.process.kill();
+    for (const state of this.servers.values()) {
+      try {
+        if (!state.serverHandle) {
+          continue;
+        }
+        const server = await state.serverHandle;
+        if (!server.mock && server.process && !server.process.killed) {
+          server.process.kill();
+        }
+      } catch {
+        // ignore shutdown errors
+      } finally {
+        state.serverHandle = null;
+        state.shutdownPromise = null;
+        state.eventPump = null;
       }
-    } catch {
-      // ignore shutdown errors
-    } finally {
-      this.serverHandle = null;
-      this.eventPump = null;
-      this.sessionIdleAt.clear();
-      this.sessionErrors.clear();
-      this.sessionWaiters.clear();
     }
+    this.sessionIdleAt.clear();
+    this.sessionErrors.clear();
+    this.sessionWaiters.clear();
   }
 
-  private async startServer(): Promise<ServeHandle> {
+  private async startServer(projectPath: string): Promise<ServeHandle> {
+    const state = this.getProjectServerState(projectPath);
     const port = await this.resolveServerPort();
 
     const serverEnv = { ...process.env };
@@ -324,18 +381,18 @@ export class OpenCodeClient {
     delete serverEnv.OPENCODE_CONFIG_DIR;
     delete serverEnv.OPENCODE_DB;
     delete serverEnv.OPENCODE_CLIENT;
-    serverEnv.OPENCODE_CONFIG_DIR = this.runtimeDir;
-    serverEnv.OPENCODE_DB = path.join(this.runtimeDir, "opencode-server.db");
+    serverEnv.OPENCODE_CONFIG_DIR = state.runtimeDir;
+    serverEnv.OPENCODE_DB = path.join(state.runtimeDir, "opencode-server.db");
     serverEnv.OPENCODE_CLIENT = "agentflow-orchestrator";
     serverEnv.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
-    if (this.injectedConfigContent) {
-      serverEnv.OPENCODE_CONFIG_CONTENT = this.injectedConfigContent;
+    if (state.injectedConfigContent) {
+      serverEnv.OPENCODE_CONFIG_CONTENT = state.injectedConfigContent;
     }
     const childProcess = spawn(
       "opencode",
       ["serve", "--port", String(port), "--hostname", this.host],
       {
-        cwd: globalThis.process.cwd(),
+        cwd: state.projectPath,
         env: serverEnv,
         stdio: "pipe",
       },
@@ -361,8 +418,8 @@ export class OpenCodeClient {
     };
   }
 
-  async getAttachBaseUrl(): Promise<string> {
-    const server = await this.ensureServer();
+  async getAttachBaseUrl(projectPath: string): Promise<string> {
+    const server = await this.ensureServer(projectPath);
     return this.buildBaseUrl(server.port);
   }
 
@@ -455,6 +512,7 @@ export class OpenCodeClient {
   private async startEventPump(
     onEvent: (event: OpenCodeEvent) => void,
     server: ServeHandle,
+    projectPath: string,
   ): Promise<void> {
     try {
       const response = await fetch(`${this.buildBaseUrl(server.port)}/global/event`);
@@ -498,7 +556,10 @@ export class OpenCodeClient {
         }
       }
     } finally {
-      this.eventPump = null;
+      const state = this.servers.get(this.getProjectKey(projectPath));
+      if (state) {
+        state.eventPump = null;
+      }
     }
   }
 
@@ -547,7 +608,8 @@ export class OpenCodeClient {
       body?: string;
     },
   ): Promise<Response> {
-    const server = await this.ensureServer();
+    const projectPath = options.projectPath ?? globalThis.process.cwd();
+    const server = await this.ensureServer(projectPath);
     const headers: Record<string, string> = {};
     if (options.body) {
       headers["content-type"] = "application/json";
@@ -1222,7 +1284,6 @@ export class OpenCodeClient {
   }
 
   private async resolveServerPort(): Promise<number> {
-    this.terminateStaleServeOnPort(this.preferredPort);
     if (await this.canListenOnPort(this.host, this.preferredPort)) {
       return this.preferredPort;
     }

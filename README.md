@@ -168,9 +168,9 @@ CLI 能力分组：
 
 ## OpenCode 对齐说明
 
-- 当前实现使用单个 `opencode serve`；会优先尝试监听 `127.0.0.1:4096`，若端口已被非 OpenCode 进程占用，则自动切换到本机空闲端口，并让 pane attach / 健康检查跟随实际端口
-- 不同 Project 通过 `x-opencode-directory` 请求头按目录路由到各自工作区实例
-- Agent 配置会在 `opencode serve` 启动前一次性注入，且只注入当前 Project 已经写入的自定义 Agent（仅 name + prompt，权限固定 deny）；未写入的内置模板只用于 UI 里按需创建 Agent，不会直接注入运行时
+- 当前实现为每个 Project 启动独立的 `opencode serve`；实例会优先尝试监听 `127.0.0.1:4096`，若该端口已被占用，则自动切换到本机空闲端口，并让该 Project 的 pane attach / 健康检查跟随各自实际端口
+- 不同 Project 的请求仍会携带 `x-opencode-directory` 请求头，保持会话与工作区目录一致
+- Agent 配置会在各自 Project 的 `opencode serve` 启动前一次性注入，且只注入当前 Project 已经写入的自定义 Agent（仅 name + prompt，权限固定 deny）；未写入的内置模板只用于 UI 里按需创建 Agent，不会直接注入运行时
 - 默认拓扑只在首次初始化且当前还没有拓扑数据时按 Agent `role / mode / 是否内置` 自动推断；后续运行时不依赖固定名字
 - OpenCode 配置只在启动 `opencode serve` 时通过 `OPENCODE_CONFIG_CONTENT` 注入；运行过程中不再做配置 Reload
 - `task init` 会先创建 Task，并完成该 Task 下全部 Agent 的 OpenCode session 与 Zellij pane 初始化；GUI 群聊会优先推荐并默认选中当前列表第一个 Agent
