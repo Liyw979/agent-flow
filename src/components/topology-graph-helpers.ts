@@ -8,7 +8,7 @@ export function getTopologyAgentStatusLabel(
   const reviewAgent = isReviewAgentInTopology(topology, agentName);
 
   switch (agentState) {
-    case "success":
+    case "completed":
       return reviewAgent ? "审视通过" : "已完成";
     case "failed":
       return reviewAgent ? "审视不通过" : "执行失败";

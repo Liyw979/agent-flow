@@ -464,6 +464,60 @@ export class StoreService {
     }
 
     const parsed = JSON.parse(raw) as Partial<ProjectStateFile>;
+    const tasks: TaskRecord[] = Array.isArray(parsed.tasks)
+      ? parsed.tasks
+          .filter((task): task is Partial<TaskRecord> => Boolean(task) && typeof task === "object")
+          .map((task) => ({
+            id: typeof task.id === "string" ? task.id : "",
+            projectId,
+            title: typeof task.title === "string" ? task.title : "未命名任务",
+            status:
+              task.status === "running" ||
+              task.status === "waiting" ||
+              task.status === "finished" ||
+              task.status === "failed" ||
+              task.status === "needs_revision"
+                ? task.status
+                : "pending",
+            cwd: typeof task.cwd === "string" ? task.cwd : projectPath,
+            zellijSessionId: typeof task.zellijSessionId === "string" ? task.zellijSessionId : null,
+            opencodeSessionId: typeof task.opencodeSessionId === "string" ? task.opencodeSessionId : null,
+            agentCount: typeof task.agentCount === "number" ? task.agentCount : 0,
+            createdAt:
+              typeof task.createdAt === "string" ? task.createdAt : new Date(0).toISOString(),
+            completedAt: typeof task.completedAt === "string" ? task.completedAt : null,
+            initializedAt: typeof task.initializedAt === "string" ? task.initializedAt : null,
+          }))
+          .filter((task) => task.id)
+      : [];
+    const finishedTaskIds = new Set(
+      tasks.filter((task) => task.status === "finished").map((task) => task.id),
+    );
+    const taskAgents: TaskAgentRecord[] = Array.isArray(parsed.taskAgents)
+      ? parsed.taskAgents
+          .filter((agent): agent is Partial<TaskAgentRecord> => Boolean(agent) && typeof agent === "object")
+          .map((agent) => {
+            const taskId = typeof agent.taskId === "string" ? agent.taskId : "";
+            const normalizedStatus =
+              agent.status === "running" ||
+              agent.status === "completed" ||
+              agent.status === "failed" ||
+              agent.status === "needs_revision"
+                ? agent.status
+                : "idle";
+
+            return {
+              id: typeof agent.id === "string" ? agent.id : "",
+              taskId,
+              projectId,
+              name: typeof agent.name === "string" ? agent.name : "",
+              opencodeSessionId: typeof agent.opencodeSessionId === "string" ? agent.opencodeSessionId : null,
+              status: finishedTaskIds.has(taskId) ? "completed" : normalizedStatus,
+              runCount: typeof agent.runCount === "number" && Number.isFinite(agent.runCount) ? agent.runCount : 0,
+            };
+          })
+          .filter((agent) => agent.id && agent.taskId && agent.name)
+      : [];
     const state: ProjectStateFile = {
       version: 1,
       topology:
@@ -479,52 +533,8 @@ export class StoreService {
               edges: Array.isArray(parsed.topology.edges) ? parsed.topology.edges : [],
             }
           : createDefaultProjectState(projectId).topology,
-      tasks: Array.isArray(parsed.tasks)
-        ? parsed.tasks
-            .filter((task): task is Partial<TaskRecord> => Boolean(task) && typeof task === "object")
-            .map((task) => ({
-              id: typeof task.id === "string" ? task.id : "",
-              projectId,
-              title: typeof task.title === "string" ? task.title : "未命名任务",
-              status:
-                task.status === "running" ||
-                task.status === "waiting" ||
-                task.status === "finished" ||
-                task.status === "failed" ||
-                task.status === "needs_revision"
-                  ? task.status
-                  : "pending",
-              cwd: typeof task.cwd === "string" ? task.cwd : projectPath,
-              zellijSessionId: typeof task.zellijSessionId === "string" ? task.zellijSessionId : null,
-              opencodeSessionId: typeof task.opencodeSessionId === "string" ? task.opencodeSessionId : null,
-              agentCount: typeof task.agentCount === "number" ? task.agentCount : 0,
-              createdAt:
-                typeof task.createdAt === "string" ? task.createdAt : new Date(0).toISOString(),
-              completedAt: typeof task.completedAt === "string" ? task.completedAt : null,
-              initializedAt: typeof task.initializedAt === "string" ? task.initializedAt : null,
-            }))
-            .filter((task) => task.id)
-        : [],
-      taskAgents: Array.isArray(parsed.taskAgents)
-        ? parsed.taskAgents
-            .filter((agent): agent is Partial<TaskAgentRecord> => Boolean(agent) && typeof agent === "object")
-            .map((agent) => ({
-              id: typeof agent.id === "string" ? agent.id : "",
-              taskId: typeof agent.taskId === "string" ? agent.taskId : "",
-              projectId,
-              name: typeof agent.name === "string" ? agent.name : "",
-              opencodeSessionId: typeof agent.opencodeSessionId === "string" ? agent.opencodeSessionId : null,
-              status:
-                agent.status === "running" ||
-                agent.status === "success" ||
-                agent.status === "failed" ||
-                agent.status === "needs_revision"
-                  ? agent.status
-                  : "idle",
-              runCount: typeof agent.runCount === "number" && Number.isFinite(agent.runCount) ? agent.runCount : 0,
-            }))
-            .filter((agent) => agent.id && agent.taskId && agent.name)
-        : [],
+      tasks,
+      taskAgents,
       taskPanels: Array.isArray(parsed.taskPanels)
         ? parsed.taskPanels
             .filter((panel): panel is Partial<TaskPanelRecord> => Boolean(panel) && typeof panel === "object")

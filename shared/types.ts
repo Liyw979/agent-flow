@@ -1,4 +1,4 @@
-export type AgentStatus = "idle" | "running" | "success" | "failed" | "needs_revision";
+export type AgentStatus = "idle" | "running" | "completed" | "failed" | "needs_revision";
 
 export type TaskStatus = "pending" | "running" | "waiting" | "finished" | "failed" | "needs_revision";
 

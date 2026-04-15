@@ -774,7 +774,7 @@ export class Orchestrator {
           ? this.getOutgoingEdges(topology, agentName, "review_fail")
           : [];
       const reviewAgent = this.isReviewAgent(latestAgentFile, topology);
-      const agentStatus = parsedReview.decision === "needs_revision" ? "failed" : "success";
+      const agentStatus = parsedReview.decision === "needs_revision" ? "failed" : "completed";
       this.store.updateTaskAgentStatus(task.id, agentName, agentStatus);
       if (behavior.updateTaskStatusOnStart ?? true) {
         this.store.updateTaskStatus(
@@ -852,7 +852,7 @@ export class Orchestrator {
         (behavior.completeTaskOnFinish ?? true) &&
         (
           (!hasOtherRunningAgents && !hasQueuedAgents && signal.done) ||
-          (!hasOtherRunningAgents && !hasQueuedAgents && this.haveAllTaskAgentsSucceeded(task.id)) ||
+          (!hasOtherRunningAgents && !hasQueuedAgents && this.haveAllTaskAgentsCompleted(task.id)) ||
           (!hasOtherRunningAgents &&
             !hasQueuedAgents &&
             triggered === 0 &&
@@ -1388,9 +1388,9 @@ export class Orchestrator {
     return new Set(this.getPersistedCompletionSeedAgentNames(taskId));
   }
 
-  private haveAllTaskAgentsSucceeded(taskId: string): boolean {
+  private haveAllTaskAgentsCompleted(taskId: string): boolean {
     const agents = this.store.listTaskAgents(taskId);
-    return agents.length > 0 && agents.every((agent) => agent.status === "success");
+    return agents.length > 0 && agents.every((agent) => agent.status === "completed");
   }
 
   private async reconcileTaskCompletionAfterAgentSettles(taskId: string) {
@@ -1404,7 +1404,7 @@ export class Orchestrator {
       return;
     }
 
-    if (!this.haveAllTaskAgentsSucceeded(taskId)) {
+    if (!this.haveAllTaskAgentsCompleted(taskId)) {
       return;
     }
 
@@ -1430,7 +1430,7 @@ export class Orchestrator {
 
     const participatingSucceeded = agents
       .filter((agent) => participatingAgents.has(agent.name))
-      .every((agent) => agent.status === "success");
+      .every((agent) => agent.status === "completed");
     if (!participatingSucceeded) {
       return false;
     }
@@ -2114,6 +2114,24 @@ export class Orchestrator {
     }
 
     const completedAt = status === "finished" || status === "failed" ? new Date().toISOString() : null;
+    if (status === "finished") {
+      for (const agent of this.store.listTaskAgents(taskId)) {
+        if (agent.status === "completed") {
+          continue;
+        }
+        this.store.updateTaskAgentStatus(taskId, agent.name, "completed");
+        this.emit({
+          type: "agent-status-changed",
+          projectId: agent.projectId,
+          payload: {
+            taskId,
+            agentId: agent.name,
+            status: "completed",
+            runCount: agent.runCount,
+          },
+        });
+      }
+    }
     this.store.updateTaskStatus(taskId, status, completedAt);
     const snapshot = this.hydrateTask(taskId);
     const completionMessage: MessageRecord = {

@@ -41,7 +41,7 @@
 - 拓扑边分为三种关系：`association` 表示当前 Agent 正常完成本轮任务后直接传递下游；`review_pass` 表示当前 Agent 输出“【DECISION】检查通过”后才传递下游；`review_fail` 表示当前 Agent 输出“【DECISION】需要修改”后才传递下游；同一对上下游只允许三选一
 - 审视 Agent 不再固定硬编码回流到 `Build`；审视通过后传给谁、审视不通过后传给谁，完全由当前拓扑里的 `review_pass / review_fail` 边决定
 - 若当前节点执行完成后，拓扑里不存在可自动继续推进的下游节点，Task 会进入 `waiting` 状态；左侧 Task 列表与群聊系统消息都必须同步反映这个状态
-- 当当前 Task 下的全部 Agent 都进入 `✅/已完成` 状态时，Task 必须自动切换为 `finished`，并在聊天区追加一条“任务已经结束”的系统消息
+- 当当前 Task 下的全部 Agent 都进入 `✅/已完成` 状态时，Task 必须自动切换为 `finished`，并在聊天区追加一条“任务已经结束”的系统消息；Agent 运行态成功码统一使用 `completed`，Task 结束时要把当前 Task 下全部 Agent 一并收口到 `completed`
 - 每个 Agent 都会按名称自动分配一套稳定配色；聊天记录里会使用对应的浅色底、描边与标签色来区分不同 Agent
 - 左侧 Task 列表支持右键删除 Task；删除时会同时清理该 Task 对应的 Zellij session
 - 左侧 Task 列表会定期与 Zellij session 状态同步；如果对应 session 已被外部删除，或只剩 `EXITED - attach to resurrect` 这类非活跃残留，关联 Task 会从列表中自动移除

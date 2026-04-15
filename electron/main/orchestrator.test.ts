@@ -348,7 +348,7 @@ permission:
       updateTaskAgentStatus: (
         taskId: string,
         agentName: string,
-        status: "idle" | "success" | "failed" | "running" | "needs_revision",
+        status: "idle" | "completed" | "failed" | "running" | "needs_revision",
       ) => void;
     };
   };
@@ -613,7 +613,7 @@ test("旧运行数据里悬空 idle Agent 不会阻止 Task 自动收口", async
   const typed = orchestrator as unknown as Orchestrator & {
     store: {
       updateTaskStatus: (taskId: string, status: "running" | "finished" | "waiting" | "failed", completedAt: string | null) => void;
-      updateTaskAgentStatus: (taskId: string, agentName: string, status: "idle" | "success" | "failed" | "running" | "needs_revision") => void;
+      updateTaskAgentStatus: (taskId: string, agentName: string, status: "idle" | "completed" | "failed" | "running" | "needs_revision") => void;
     };
   };
 
@@ -630,16 +630,27 @@ test("旧运行数据里悬空 idle Agent 不会阻止 Task 自动收口", async
   const task = await orchestrator.initializeTask({ projectId: project.project.id, title: "demo" });
 
   typed.store.updateTaskStatus(task.task.id, "running", null);
-  typed.store.updateTaskAgentStatus(task.task.id, "BA", "success");
-  typed.store.updateTaskAgentStatus(task.task.id, "Build", "success");
-  typed.store.updateTaskAgentStatus(task.task.id, "UnitTest", "success");
-  typed.store.updateTaskAgentStatus(task.task.id, "TaskReview", "success");
-  typed.store.updateTaskAgentStatus(task.task.id, "CodeReview", "success");
+  typed.store.updateTaskAgentStatus(task.task.id, "BA", "completed");
+  typed.store.updateTaskAgentStatus(task.task.id, "Build", "completed");
+  typed.store.updateTaskAgentStatus(task.task.id, "UnitTest", "completed");
+  typed.store.updateTaskAgentStatus(task.task.id, "TaskReview", "completed");
+  typed.store.updateTaskAgentStatus(task.task.id, "CodeReview", "completed");
   typed.store.updateTaskAgentStatus(task.task.id, "IntegrationTest", "idle");
 
   const snapshot = await orchestrator.getTaskSnapshot(task.task.id);
   assert.equal(snapshot.task.status, "finished");
   assert.notEqual(snapshot.task.completedAt, null);
+  assert.deepEqual(
+    snapshot.agents.map((agent) => [agent.name, agent.status]),
+    [
+      ["BA", "completed"],
+      ["Build", "completed"],
+      ["CodeReview", "completed"],
+      ["IntegrationTest", "completed"],
+      ["TaskReview", "completed"],
+      ["UnitTest", "completed"],
+    ],
+  );
   assert.equal(
     snapshot.messages.some(
       (message) =>

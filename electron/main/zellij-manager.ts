@@ -30,7 +30,7 @@ interface ZellijPaneInfo {
 interface AgentPaneSpec {
   name: string;
   opencodeSessionId: string | null;
-  status?: "idle" | "running" | "success" | "failed" | "needs_revision";
+  status?: "idle" | "running" | "completed" | "failed" | "needs_revision";
 }
 
 interface AgentTerminalSpec {

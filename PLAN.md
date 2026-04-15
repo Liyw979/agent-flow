@@ -131,7 +131,7 @@ Task 是用户真正协作和观察的基本容器，也是围绕一个工作目
 - 展示当前 Project 的所有 Agent
 - 展示名称、模型、角色摘要、当前状态
 - 状态是“该 Agent 在当前选中 Task 中的状态”，而不是一个全局状态
-- 状态至少包括 `idle / running / success / failed`
+- 状态至少包括 `idle / running / completed / failed`
 - 用户点击某个 Agent 时，弹出该 Agent 的编辑窗
 - 这里的点击行为只负责编辑 Agent config 文件，不负责修改拓扑关系
 

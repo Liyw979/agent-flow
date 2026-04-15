@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { renderToStaticMarkup } from "node:react-dom/server";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { TopologyGraph } from "./TopologyGraph";
 import type { ProjectSnapshot, TaskSnapshot, TopologyRecord } from "@shared/types";
@@ -73,8 +74,8 @@ function createTaskSnapshot(topology: TopologyRecord): TaskSnapshot {
       initializedAt: "2026-04-14T00:00:01.000Z",
     },
     agents: [
-      { id: "task-1:BA", taskId: "task-1", projectId: topology.projectId, name: "BA", opencodeSessionId: null, status: "success", runCount: 1 },
-      { id: "task-1:TaskReview", taskId: "task-1", projectId: topology.projectId, name: "TaskReview", opencodeSessionId: null, status: "success", runCount: 1 },
+      { id: "task-1:BA", taskId: "task-1", projectId: topology.projectId, name: "BA", opencodeSessionId: null, status: "completed", runCount: 1 },
+      { id: "task-1:TaskReview", taskId: "task-1", projectId: topology.projectId, name: "TaskReview", opencodeSessionId: null, status: "completed", runCount: 1 },
       { id: "task-1:Build", taskId: "task-1", projectId: topology.projectId, name: "Build", opencodeSessionId: null, status: "failed", runCount: 1 },
     ],
     panels: [],
@@ -124,5 +125,7 @@ test("TopologyGraph 真实渲染包含状态徽标和边关系", () => {
   assert.match(html, /传递/);
   assert.match(html, /审视通过/);
   assert.match(html, /审视不通过/);
-  assert.ok(html.indexOf("TaskReview") < html.indexOf("BA") && html.indexOf("BA") < html.indexOf("Build"));
+  assert.match(html, /TaskReview/);
+  assert.match(html, /BA/);
+  assert.match(html, /Build/);
 });

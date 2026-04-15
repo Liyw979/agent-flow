@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type MouseEvent } from "react";
+import React, { useEffect, useMemo, useRef, useState, type ComponentType, type MouseEvent } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import {
@@ -145,7 +145,7 @@ function getAgentCardAppearance(
         color: agentColor.text,
         shadow: REJECTION_CARD_SHADOW,
       };
-    case "success":
+    case "completed":
       return {
         borderColor: agentColor.border,
         background: agentColor.soft,
@@ -267,12 +267,12 @@ function getAgentStatusBadge(
         effectClassName: "topology-status-badge-running",
         icon: "running",
       };
-    case "success":
+    case "completed":
       return {
         label: reviewAgent ? "审视通过" : "已完成",
         className: "border border-[#2c4a3f]/18 bg-[#edf5f0] text-[#2c4a3f]",
         effectClassName: "",
-        icon: "success",
+        icon: "completed",
       };
     case "failed":
       return {
@@ -342,7 +342,7 @@ function renderAgentStatusIcon(statusBadge: ReturnType<typeof getAgentStatusBadg
           <path d="M10.8 2.7H13v2.2" />
         </svg>
       ) : null}
-      {statusBadge.icon === "success" ? (
+      {statusBadge.icon === "completed" ? (
         <svg
           viewBox="0 0 16 16"
           className="h-3.5 w-3.5"
@@ -729,7 +729,7 @@ function getAgentHistoryFromMessages(messages: MessageRecord[], agentId: string)
       const status =
         message.meta?.reviewDecision === "needs_revision"
           ? "needs_revision"
-          : message.meta?.status ?? "success";
+          : message.meta?.status ?? "completed";
       const appearance = getHistoryAppearance(status);
       return {
         id: message.id,
