@@ -94,7 +94,7 @@ type AgentExecutionPrompt =
       from: string;
       userMessage?: string;
       agentMessage?: string;
-      requirement?: string;
+      gitDiffSummary?: string;
     };
 
 interface AgentRunBehaviorOptions {
@@ -837,7 +837,7 @@ export class Orchestrator {
         sessionId: agentSessionId,
         content: dispatchedContent,
         agent: agentName,
-        system: this.createSystemPrompt(latestAgentFile, topology),
+        system: this.createSystemPrompt(latestAgentFile, topology, prompt),
       });
 
       if (response.status === "error") {
@@ -1132,10 +1132,6 @@ export class Orchestrator {
         }
 
         const forwardedContext = this.buildDownstreamForwardedContext(taskId, sourceContent);
-        const forwardedRequirement = this.buildAgentHandoffRequirement(
-        "请结合 [User Message] 与 [@来源 Agent Message] 中的上下文继续推进当前任务，并只关注你当前负责的部分。",
-          gitDiffSummary,
-        );
         const signature = this.buildTriggerSignature(
           topology,
           completed,
@@ -1148,7 +1144,7 @@ export class Orchestrator {
           from: sourceAgentId,
           userMessage: forwardedContext.userMessage,
           agentMessage: forwardedContext.agentMessage,
-          requirement: targetName === BUILD_AGENT_NAME ? undefined : forwardedRequirement,
+          gitDiffSummary: targetName === BUILD_AGENT_NAME ? undefined : gitDiffSummary,
         });
       }),
     );
@@ -1225,12 +1221,7 @@ export class Orchestrator {
           from: sourceAgentId,
           userMessage: forwardedContext.userMessage,
           agentMessage: forwardedContext.agentMessage,
-          requirement: targetName === BUILD_AGENT_NAME
-            ? undefined
-            : this.buildAgentHandoffRequirement(
-                "请结合 [User Message] 与 [@来源 Agent Message] 中的上下文继续推进当前任务，并只关注你当前负责的部分。",
-                gitDiffSummary,
-              ),
+          gitDiffSummary: targetName === BUILD_AGENT_NAME ? undefined : gitDiffSummary,
         });
       }),
     );
@@ -1263,10 +1254,6 @@ export class Orchestrator {
       : undefined;
     const currentTask = this.store.getTask(taskId);
     const gitDiffSummary = await this.buildProjectGitDiffSummary(currentTask.cwd);
-    const forwardedRequirement = this.buildAgentHandoffRequirement(
-      "请结合 [User Message] 与 [@来源 Agent Message] 继续响应当前问题。你可以澄清、补充证据、提出反驳、给出实现方案或直接修改，但必须明确表达你自己的判断，不要只回复空泛结论。",
-      gitDiffSummary,
-    );
 
     for (const targetName of reviewTargets) {
       const remediationBody = `审视不通过，请回应以下内容。\n\n回应：\n${opinion}`;
@@ -1316,7 +1303,7 @@ export class Orchestrator {
             from: sourceAgent.name,
             userMessage,
             agentMessage: reviewContent,
-            requirement: targetName === BUILD_AGENT_NAME ? undefined : forwardedRequirement,
+            gitDiffSummary: targetName === BUILD_AGENT_NAME ? undefined : gitDiffSummary,
           },
         );
       }),
@@ -1715,14 +1702,6 @@ export class Orchestrator {
     return [...lines.slice(0, maxLines), `... 共 ${lines.length} 行，仅展示前 ${maxLines} 行`];
   }
 
-  private buildAgentHandoffRequirement(baseRequirement: string, gitDiffSummary: string): string {
-    return [baseRequirement, gitDiffSummary]
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .join("\n\n")
-      .trim();
-  }
-
   private buildAgentExecutionPrompt(prompt: AgentExecutionPrompt): string {
     if (prompt.mode === "raw") {
       const content = prompt.content.trim();
@@ -1735,17 +1714,22 @@ export class Orchestrator {
       sections.push(`[User Message]\n${prompt.userMessage.trim()}`);
     }
     if (prompt.agentMessage?.trim()) {
-      sections.push(`[@来源 Agent Message]\n${prompt.agentMessage.trim()}`);
+      sections.push(`${this.buildSourceAgentMessageSection(prompt.from)}\n${prompt.agentMessage.trim()}`);
     }
     if (sections.length === 0) {
       sections.push("[User Message]\n（无）");
     }
-    if (prompt.requirement?.trim()) {
-      sections.push(`[Requeirement]\n${prompt.requirement.trim()}`);
+    if (prompt.gitDiffSummary?.trim()) {
+      sections.push(`[Project Git Diff Summary]\n${prompt.gitDiffSummary.trim()}`);
     }
     return sections
       .join("\n\n")
       .trim();
+  }
+
+  private buildSourceAgentMessageSection(sourceAgentName: string): string {
+    const displayName = this.getAgentDisplayName(sourceAgentName.trim() || "来源 Agent");
+    return `[${displayName} Message]`;
   }
 
   private resolveAgentContextContent(
@@ -2015,13 +1999,18 @@ export class Orchestrator {
   private createSystemPrompt(
     agent: AgentFileRecord,
     topology: Pick<TopologyRecord, "edges">,
+    prompt: AgentExecutionPrompt,
   ): string {
     const reviewAgent = this.isReviewAgent(agent, topology);
     if (!reviewAgent) {
       return "";
     }
 
-    return buildAgentSystemPrompt(agent, reviewAgent);
+    const sourceSectionLabel = prompt.mode === "structured"
+      ? this.buildSourceAgentMessageSection(prompt.from)
+      : undefined;
+
+    return buildAgentSystemPrompt(agent, reviewAgent, sourceSectionLabel);
   }
 
   private createTaskTitle(content: string): string {

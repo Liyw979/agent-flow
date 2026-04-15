@@ -36,7 +36,7 @@
 - 群聊落库与 Agent 间转发只使用 OpenCode 返回消息里的公开 `text` part；`reasoning`、步骤和工具调用不会混入群聊正文或下游 Prompt
 - 这类批量 `agent -> agent` 派发消息仅用于群聊展示给人看；Agent 自动派发下游时，不再补充任何群聊历史，但会携带完整用户消息与当前这一次的上游结果；若上游结果已完整包含用户消息，会自动去重
 - 用户在 Task 群聊里直接 `@Agent` 时，群聊展示仍保留原始 `@Agent` 文本；底层以 `raw` 方式转发给目标 Agent 的消息会统一封装成单行 `[发送者] <正文>`，并自动去掉仅用于寻址的开头或结尾 `@Agent`
-- Agent 自动派发下游时会拆成结构化段落：用户原始需求放入 `[User Message]`，来源消息放入带真实 Agent 名称的 `[<AgentName> Message]` 段；对非 `Build` 下游，系统会把当前 Project Git Diff 的精简摘要附加到转发 Prompt 的 `[Requeirement]` 段；发给 `Build` 时不再附带 `[Requeirement]`
+- Agent 自动派发下游时会拆成结构化段落：用户原始需求放入 `[User Message]`，来源消息放入带真实 Agent 名称的 `[<AgentName> Message]` 段；对非 `Build` 下游，系统会把当前 Project Git Diff 的精简摘要附加到转发 Prompt 的 `[Project Git Diff Summary]` 段；发给 `Build` 时不再附带该摘要段
 - 每个 Agent 都会按名称自动分配一套稳定配色；聊天记录里会使用对应的浅色底、描边与标签色来区分不同 Agent
 - 右下角团队成员列表支持直接调整 Agent 顺序；该顺序会持久化到拓扑配置，并直接决定右上角拓扑图从左到右的节点排列
 - 团队成员面板顶部仅展示当前 Task 的 panel 绑定摘要，不再额外显示最后一条群聊消息预览
