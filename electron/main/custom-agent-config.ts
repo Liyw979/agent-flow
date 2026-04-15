@@ -52,6 +52,10 @@ function createEmptyUserAgentConfig(): UserAgentConfig {
 }
 
 function resolveWritableAgentName(config: UserAgentConfig): string | null {
+  const builtinWritableAgentName = Object.keys(config.agents).find((name) => usesOpenCodeBuiltinPrompt(name));
+  if (builtinWritableAgentName) {
+    return builtinWritableAgentName;
+  }
   const explicitWritableNames = Object.keys(config.agents).filter(
     (name) => config.agents[name]?.writable === true,
   );
