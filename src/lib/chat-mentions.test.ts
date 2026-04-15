@@ -1,16 +1,31 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 
-import { getMentionOptions } from "./chat-mentions";
+import { getMentionContext, getMentionOptions } from "./chat-mentions";
 
-test("mention 候选列表保持当前项目 Agent 顺序", () => {
-  const options = getMentionOptions(["Build", "安全负责人", "漏洞分析人员"], "");
+test("getMentionOptions preserves the configured agent order", () => {
+  const options = getMentionOptions(["Build", "Security", "CodeReview"], "");
 
-  assert.deepEqual(options, ["Build", "安全负责人", "漏洞分析人员"]);
+  assert.deepEqual(options, ["Build", "Security", "CodeReview"]);
 });
 
-test("mention 候选列表筛选时保持原有顺序而不重排", () => {
-  const options = getMentionOptions(["Build", "安全负责人", "漏洞分析人员"], "人");
+test("getMentionOptions filters without reordering the original list", () => {
+  const options = getMentionOptions(["Build", "Security", "CodeReview"], "view");
 
-  assert.deepEqual(options, ["安全负责人", "漏洞分析人员"]);
+  assert.deepEqual(options, ["CodeReview"]);
+});
+
+test("getMentionContext only returns a context while editing an @mention", () => {
+  assert.equal(getMentionContext("", 0), null);
+  assert.equal(getMentionContext("@BA implement add", "@BA implement add".length), null);
+  assert.deepEqual(getMentionContext("@BA", 3), {
+    start: 0,
+    end: 3,
+    query: "BA",
+  });
+  assert.deepEqual(getMentionContext("ask @CodeReview", "ask @CodeReview".length), {
+    start: 4,
+    end: "ask @CodeReview".length,
+    query: "CodeReview",
+  });
 });

@@ -3,7 +3,7 @@ import type { ProjectSnapshot, TaskSnapshot } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { getAgentColorToken } from "@/lib/agent-colors";
 import { mergeTaskChatMessages, type ChatMessageItem } from "@/lib/chat-messages";
-import { getMentionOptions } from "@/lib/chat-mentions";
+import { getMentionContext, getMentionOptions, type MentionContext } from "@/lib/chat-mentions";
 
 interface ChatWindowProps {
   project: ProjectSnapshot | undefined;
@@ -11,12 +11,6 @@ interface ChatWindowProps {
   availableAgents: string[];
   onSubmit: (payload: { content: string; mentionAgent?: string }) => Promise<void>;
   onOpenTaskSession?: () => Promise<void>;
-}
-
-interface MentionContext {
-  start: number;
-  end: number;
-  query: string;
 }
 
 const MENTION_MENU_WIDTH = 224;
@@ -33,25 +27,6 @@ function getAgentDisplayName(name: string) {
     return SYSTEM_SENDER_LABEL;
   }
   return name;
-}
-
-function getMentionContext(value: string, caret: number): MentionContext | null {
-  const prefix = value.slice(0, caret);
-  const match = prefix.match(/(?:^|\s)@([^\s@]*)$/);
-  if (!match) {
-    return null;
-  }
-
-  const start = prefix.lastIndexOf("@");
-  if (start < 0) {
-    return null;
-  }
-
-  return {
-    start,
-    end: caret,
-    query: match[1] ?? "",
-  };
 }
 
 function getCaretCoordinates(textarea: HTMLTextAreaElement, position: number) {
@@ -328,16 +303,6 @@ export function ChatWindow({
     });
   }
 
-  function openAgentMenuAtCursor(textarea: HTMLTextAreaElement) {
-    const caret = textarea.selectionStart ?? draft.length;
-    setMentionContext({
-      start: caret,
-      end: caret,
-      query: "",
-    });
-    updateMenuPosition(textarea, caret, availableAgents.length);
-  }
-
   function updateMentionState(nextDraft: string, caret: number) {
     const nextContext = getMentionContext(nextDraft, caret);
     setMentionContext(nextContext);
@@ -476,21 +441,11 @@ export function ChatWindow({
               }}
               onClick={(event) => {
                 const textarea = event.currentTarget;
-                const nextContext = getMentionContext(textarea.value, textarea.selectionStart ?? 0);
-                if (nextContext) {
-                  updateMentionState(textarea.value, textarea.selectionStart ?? 0);
-                  return;
-                }
-                openAgentMenuAtCursor(textarea);
+                updateMentionState(textarea.value, textarea.selectionStart ?? 0);
               }}
               onFocus={(event) => {
                 const textarea = event.currentTarget;
-                const nextContext = getMentionContext(textarea.value, textarea.selectionStart ?? 0);
-                if (nextContext) {
-                  updateMentionState(textarea.value, textarea.selectionStart ?? 0);
-                  return;
-                }
-                openAgentMenuAtCursor(textarea);
+                updateMentionState(textarea.value, textarea.selectionStart ?? 0);
               }}
               onBlur={() => {
                 requestAnimationFrame(() => {
