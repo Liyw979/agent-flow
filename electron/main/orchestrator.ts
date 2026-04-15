@@ -713,10 +713,10 @@ export class Orchestrator {
     return `@${targetAgentId} ${trimmed}`;
   }
 
-  private getLatestUserMessageContent(taskId: string): string {
+  private getInitialUserMessageContent(taskId: string): string {
     const task = this.store.getTask(taskId);
     const messages = this.store.listMessages(task.projectId, taskId);
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
+    for (let index = 0; index < messages.length; index += 1) {
       const message = messages[index];
       if (message?.sender === "user") {
         const rawContent = message.content.trim();
@@ -1248,9 +1248,9 @@ export class Orchestrator {
     const opinion = parsedReview.opinion?.trim()
       || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
     const reviewContent = `回应：\n${opinion}`.trim();
-    const latestUserContent = this.getLatestUserMessageContent(taskId);
-    const userMessage = latestUserContent && !this.contentContainsNormalized(reviewContent, latestUserContent)
-      ? latestUserContent
+    const initialUserContent = this.getInitialUserMessageContent(taskId);
+    const userMessage = initialUserContent && !this.contentContainsNormalized(reviewContent, initialUserContent)
+      ? initialUserContent
       : undefined;
     const currentTask = this.store.getTask(taskId);
     const gitDiffSummary = await this.buildProjectGitDiffSummary(currentTask.cwd);
@@ -1711,13 +1711,13 @@ export class Orchestrator {
 
     const sections: string[] = [];
     if (prompt.userMessage?.trim()) {
-      sections.push(`[User Message]\n${prompt.userMessage.trim()}`);
+      sections.push(`[Initial Task]\n${prompt.userMessage.trim()}`);
     }
     if (prompt.agentMessage?.trim()) {
       sections.push(`${this.buildSourceAgentMessageSection(prompt.from)}\n${prompt.agentMessage.trim()}`);
     }
     if (sections.length === 0) {
-      sections.push("[User Message]\n（无）");
+      sections.push("[Initial Task]\n（无）");
     }
     if (prompt.gitDiffSummary?.trim()) {
       sections.push(`[Project Git Diff Summary]\n${prompt.gitDiffSummary.trim()}`);
@@ -1729,7 +1729,7 @@ export class Orchestrator {
 
   private buildSourceAgentMessageSection(sourceAgentName: string): string {
     const displayName = this.getAgentDisplayName(sourceAgentName.trim() || "来源 Agent");
-    return `[${displayName} Message]`;
+    return `[From ${displayName} Agent]`;
   }
 
   private resolveAgentContextContent(
@@ -1750,12 +1750,12 @@ export class Orchestrator {
     taskId: string,
     sourceContent: string,
   ): { userMessage?: string; agentMessage: string } {
-    const latestUserContent = this.getLatestUserMessageContent(taskId);
+    const initialUserContent = this.getInitialUserMessageContent(taskId);
     const latestSourceContent = sourceContent.trim();
     return {
       userMessage:
-        latestUserContent && !this.contentContainsNormalized(latestSourceContent, latestUserContent)
-          ? latestUserContent
+        initialUserContent && !this.contentContainsNormalized(latestSourceContent, initialUserContent)
+          ? initialUserContent
           : undefined,
       agentMessage: latestSourceContent || "（该上游 Agent 未返回可继续流转的正文。）",
     };

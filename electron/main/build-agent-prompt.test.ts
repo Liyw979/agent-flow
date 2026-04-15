@@ -16,9 +16,9 @@ test("Build agent 完全不注入 system prompt", () => {
 test("存在审视边的 agent 才注入回应协议", () => {
   const prompt = buildAgentSystemPrompt({
     name: "TaskReview",
-  }, true, "[BA Message]");
+  }, true, "[From BA Agent]");
 
-  assert.match(prompt, /你需要对 `\[BA Message\]` 做出回应。/);
+  assert.match(prompt, /你需要对 `\[From BA Agent\]` 做出回应。/);
   assert.doesNotMatch(prompt, /\[@来源 Agent Message\]/);
   assert.match(prompt, /回应：/);
   assert.doesNotMatch(prompt, /下一个 Agent/);
@@ -65,10 +65,10 @@ test("存在审视边的 agent 请求体继续携带 system 字段", () => {
     content: "请审视交付结果",
     system: buildAgentSystemPrompt({
       name: "TaskReview",
-    }, true, "[Build Message]"),
+    }, true, "[From Build Agent]"),
   });
 
   assert.equal(typeof body.system, "string");
-  assert.match(String(body.system), /\[Build Message\]/);
+  assert.match(String(body.system), /\[From Build Agent\]/);
   assert.match(String(body.system), /回应：/);
 });

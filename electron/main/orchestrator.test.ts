@@ -288,7 +288,7 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
   );
 });
 
-test("下游结构化 prompt 会使用真实来源 Agent 名称作为段标题", async () => {
+test("下游结构化 prompt 会使用 Initial Task 与真实来源 Agent 段标题", async () => {
   const orchestrator = new Orchestrator({
     userDataPath: createTempDir(),
     enableEventStream: false,
@@ -312,10 +312,90 @@ test("下游结构化 prompt 会使用真实来源 Agent 名称作为段标题",
     gitDiffSummary: "当前项目 Git Diff 精简摘要：\n工作区状态：\nM electron/main/orchestrator.ts",
   });
 
-  assert.match(prompt, /\[BA Message\]/);
+  assert.match(prompt, /\[Initial Task\]/);
+  assert.match(prompt, /\[From BA Agent\]/);
   assert.doesNotMatch(prompt, /\[@来源 Agent Message\]/);
   assert.match(prompt, /\[Project Git Diff Summary\]/);
   assert.doesNotMatch(prompt, /\[Requeirement\]/);
+});
+
+test("下游结构化 prompt 的 [Initial Task] 使用首条用户任务而不是最新用户消息", async () => {
+  const userDataPath = createTempDir();
+  const projectPath = createTempDir();
+  const orchestrator = new Orchestrator({
+    userDataPath,
+    enableEventStream: false,
+    zellijManager: {
+      isAvailable: async () => true,
+      createTaskSession: async () => "oap-project-task",
+      createPanelBindings: () => [],
+      materializePanelBindings: async () => [],
+      openTaskSession: async () => undefined,
+      deleteTaskSession: async () => undefined,
+      setOpenCodeAttachBaseUrl: () => undefined,
+    } as never,
+  });
+
+  const typed = orchestrator as unknown as Orchestrator & {
+    createUserMessage: (
+      projectId: string,
+      taskId: string,
+      taskTitle: string,
+      content: string,
+      targetAgentId: string,
+    ) => {
+      id: string;
+      projectId: string;
+      taskId: string;
+      content: string;
+      sender: string;
+      timestamp: string;
+      meta?: Record<string, string>;
+    };
+    buildDownstreamForwardedContext: (
+      taskId: string,
+      sourceContent: string,
+    ) => { userMessage?: string; agentMessage: string };
+    store: {
+      insertMessage: (record: {
+        id: string;
+        projectId: string;
+        taskId: string;
+        content: string;
+        sender: string;
+        timestamp: string;
+        meta?: Record<string, string>;
+      }) => void;
+    };
+  };
+
+  let project = await orchestrator.createProject({ path: projectPath });
+  project = await addBuiltinAgents(orchestrator, project.project.id, ["Build"]);
+  const task = await orchestrator.initializeTask({ projectId: project.project.id, title: "demo" });
+
+  typed.store.insertMessage(
+    typed.createUserMessage(
+      project.project.id,
+      task.task.id,
+      task.task.title,
+      "@Build 初始任务：实现加法工具",
+      "Build",
+    ),
+  );
+  typed.store.insertMessage(
+    typed.createUserMessage(
+      project.project.id,
+      task.task.id,
+      task.task.title,
+      "@Build 追问：顺便补一份使用说明",
+      "Build",
+    ),
+  );
+
+  const forwarded = typed.buildDownstreamForwardedContext(task.task.id, "Build 已完成实现，等待下游继续处理。");
+
+  assert.equal(forwarded.userMessage, "初始任务：实现加法工具");
+  assert.equal(forwarded.agentMessage, "Build 已完成实现，等待下游继续处理。");
 });
 
 test("审视类 system prompt 会使用真实来源 Agent 名称", () => {
@@ -361,7 +441,7 @@ test("审视类 system prompt 会使用真实来源 Agent 名称", () => {
     },
   );
 
-  assert.match(systemPrompt, /你需要对 `\[BA Message\]` 做出回应。/);
+  assert.match(systemPrompt, /你需要对 `\[From BA Agent\]` 做出回应。/);
   assert.doesNotMatch(systemPrompt, /\[@来源 Agent Message\]/);
 });
 
@@ -497,7 +577,7 @@ test("群聊保留 @Agent，但下游转发读取的用户消息会去掉寻址 
         meta?: Record<string, string>;
       }) => void;
     };
-    getLatestUserMessageContent: (taskId: string) => string;
+    getInitialUserMessageContent: (taskId: string) => string;
   };
 
   typed.store.insertMessage({
@@ -514,7 +594,7 @@ test("群聊保留 @Agent，但下游转发读取的用户消息会去掉寻址 
     },
   });
 
-  const forwardedUserContent = typed.getLatestUserMessageContent(task.task.id);
+  const forwardedUserContent = typed.getInitialUserMessageContent(task.task.id);
   assert.equal(forwardedUserContent.includes("@BA"), false);
   assert.equal(forwardedUserContent.includes("返回c"), true);
 
