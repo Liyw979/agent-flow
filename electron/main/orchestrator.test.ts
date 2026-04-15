@@ -284,7 +284,7 @@ test("Task 启动后不允许再修改 Agent 配置或内置模板", async () =>
   );
 });
 
-test("审视通过但没有可展示高层结果时返回简洁兜底文案", () => {
+test("审视通过但没有可展示结果正文时返回简洁兜底文案", () => {
   const orchestrator = new Orchestrator({
     userDataPath: createTempDir(),
     enableEventStream: false,

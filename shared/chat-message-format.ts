@@ -26,7 +26,7 @@ export function stripLeadingMentions(content: string): string {
   return trimmed.replace(/^(?:@\S+\s+)+/u, "").trim();
 }
 
-export function formatHighLevelTriggerContent(_content: string, targetAgentIds: string[]): string {
+export function formatAgentDispatchContent(_content: string, targetAgentIds: string[]): string {
   const mentionSuffix = buildMentionSuffix(targetAgentIds);
   return mentionSuffix.trim();
 }

@@ -40,7 +40,7 @@ import {
   isReviewAgentInTopology,
 } from "@shared/types";
 import {
-  formatHighLevelTriggerContent,
+  formatAgentDispatchContent,
   formatRevisionRequestContent,
   parseTargetAgentIds,
 } from "@shared/chat-message-format";
@@ -1099,16 +1099,16 @@ export class Orchestrator {
 
     const triggerTargets = [...readyTargets, ...queuedTargets];
 
-    if (!this.shouldSuppressDuplicateHighLevelTrigger(project.id, taskId, sourceAgentId, triggerTargets)) {
+    if (!this.shouldSuppressDuplicateDispatchMessage(project.id, taskId, sourceAgentId, triggerTargets)) {
       const triggerMessage: MessageRecord = {
         id: randomUUID(),
         projectId: project.id,
         taskId,
         sender: sourceAgentId,
         timestamp: new Date().toISOString(),
-        content: this.buildHighLevelTriggerMessageContent(triggerTargets, sourceContent),
+        content: this.buildDispatchMessageContent(triggerTargets, sourceContent),
         meta: {
-          kind: "high-level-trigger",
+          kind: "agent-dispatch",
           sourceAgentId,
           targetAgentIds: triggerTargets.join(","),
         },
@@ -1185,16 +1185,16 @@ export class Orchestrator {
     }
 
     const uniqueTargets = [...new Set(readyTargets)];
-    if (!this.shouldSuppressDuplicateHighLevelTrigger(project.id, taskId, sourceAgentId, uniqueTargets)) {
+    if (!this.shouldSuppressDuplicateDispatchMessage(project.id, taskId, sourceAgentId, uniqueTargets)) {
       const triggerMessage: MessageRecord = {
         id: randomUUID(),
         projectId: project.id,
         taskId,
         sender: sourceAgentId,
         timestamp: new Date().toISOString(),
-        content: this.buildHighLevelTriggerMessageContent(uniqueTargets, sourceContent),
+        content: this.buildDispatchMessageContent(uniqueTargets, sourceContent),
         meta: {
-          kind: "high-level-trigger",
+          kind: "agent-dispatch",
           sourceAgentId,
           targetAgentIds: uniqueTargets.join(","),
         },
@@ -1325,7 +1325,7 @@ export class Orchestrator {
     return reviewTargets.length;
   }
 
-  private shouldSuppressDuplicateHighLevelTrigger(
+  private shouldSuppressDuplicateDispatchMessage(
     projectId: string,
     taskId: string,
     sourceAgentId: string,
@@ -1346,7 +1346,7 @@ export class Orchestrator {
       if (message.sender === sourceAgentId && message.meta?.kind === "agent-final") {
         return false;
       }
-      if (message.sender !== sourceAgentId || message.meta?.kind !== "high-level-trigger") {
+      if (message.sender !== sourceAgentId || message.meta?.kind !== "agent-dispatch") {
         continue;
       }
 
@@ -1471,7 +1471,7 @@ export class Orchestrator {
       if (message.sender === "user" && typeof targetAgentId === "string" && targetAgentId.trim()) {
         seeds.add(targetAgentId.trim());
       }
-      if (message.meta?.kind === "high-level-trigger") {
+      if (message.meta?.kind === "agent-dispatch") {
         for (const targetName of parseTargetAgentIds(message.meta.targetAgentIds)) {
           seeds.add(targetName);
         }
@@ -1777,8 +1777,8 @@ export class Orchestrator {
     };
   }
 
-  private buildHighLevelTriggerMessageContent(targetAgentIds: string[], content: string): string {
-    return formatHighLevelTriggerContent(content, targetAgentIds);
+  private buildDispatchMessageContent(targetAgentIds: string[], content: string): string {
+    return formatAgentDispatchContent(content, targetAgentIds);
   }
 
   private extractAgentDisplayContent(content: string): string {
@@ -1827,12 +1827,12 @@ export class Orchestrator {
     }
 
     if (parsedReview.decision === "needs_revision") {
-      return "（该 Agent 已给出需要响应的结论，但未返回可展示的高层结果。）";
+      return "（该 Agent 已给出需要响应的结论，但未返回可展示的结果正文。）";
     }
     if (parsedReview.decision === "pass") {
       return "通过";
     }
-    return "（该 Agent 未返回可展示的高层结果。）";
+    return "（该 Agent 未返回可展示的结果正文。）";
   }
 
   private async ensureAgentSession(

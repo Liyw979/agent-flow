@@ -1,7 +1,7 @@
 import type { MessageRecord } from "@shared/types";
 import {
   buildMentionSuffix,
-  formatHighLevelTriggerContent,
+  formatAgentDispatchContent,
   formatRevisionRequestContent,
   parseTargetAgentIds,
 } from "@shared/chat-message-format";
@@ -141,17 +141,17 @@ function buildMergedAgentFinalTriggerContent(previous: ChatMessageItem, current:
   return [base, buildMentionSuffix(targets)].filter(Boolean).join("\n\n");
 }
 
-function shouldMergeHighLevelTrigger(previous: ChatMessageItem, current: MessageRecord) {
+function shouldMergeAgentDispatch(previous: ChatMessageItem, current: MessageRecord) {
   return (
-    previous.kinds.at(-1) === "high-level-trigger" &&
-    current.meta?.kind === "high-level-trigger"
+    previous.kinds.at(-1) === "agent-dispatch" &&
+    current.meta?.kind === "agent-dispatch"
   );
 }
 
-function shouldMergeAgentFinalWithTrigger(previous: ChatMessageItem, current: MessageRecord) {
+function shouldMergeAgentFinalWithDispatch(previous: ChatMessageItem, current: MessageRecord) {
   return (
     previous.kinds.at(-1) === "agent-final" &&
-    current.meta?.kind === "high-level-trigger"
+    current.meta?.kind === "agent-dispatch"
   );
 }
 
@@ -169,8 +169,8 @@ function shouldMergeMessages(previous: ChatMessageItem | undefined, current: Mes
   }
 
   return (
-    shouldMergeHighLevelTrigger(previous, current) ||
-    shouldMergeAgentFinalWithTrigger(previous, current) ||
+    shouldMergeAgentDispatch(previous, current) ||
+    shouldMergeAgentFinalWithDispatch(previous, current) ||
     shouldMergeRevisionRequest(previous, current)
   );
 }
@@ -179,8 +179,8 @@ function getDisplayContent(message: MessageRecord): string {
   if (message.meta?.kind === "agent-final") {
     return extractAgentFinalDisplayContent(message);
   }
-  if (message.meta?.kind === "high-level-trigger") {
-    return formatHighLevelTriggerContent(
+  if (message.meta?.kind === "agent-dispatch") {
+    return formatAgentDispatchContent(
       message.content,
       parseTargetAgentIds(message.meta?.targetAgentIds),
     );
@@ -203,7 +203,7 @@ export function mergeTaskChatMessages(messages: MessageRecord[]): ChatMessageIte
       last.content =
         message.meta?.kind === "revision-request"
           ? buildMergedRevisionRequestContent(last, message)
-          : message.meta?.kind === "high-level-trigger" && last.kinds.at(-1) === "agent-final"
+          : message.meta?.kind === "agent-dispatch" && last.kinds.at(-1) === "agent-final"
             ? buildMergedAgentFinalTriggerContent(last, message)
           : [last.content, getDisplayContent(message)].filter(Boolean).join("\n\n");
       last.kinds.push(message.meta?.kind ?? "");

@@ -50,7 +50,7 @@ Task 是用户真正协作和观察的基本容器，也是围绕一个工作目
 - 创建或推进 Task
 - 创建并维护 `panel <-> agent` 运行时映射
 - 更新 Task 与 Project Agent 在对应 Task 下的状态
-- 把高层结果写回当前 Task 群聊
+- 把结果正文写回当前 Task 群聊
 
 ### 2. 关键建模：Talk 属于 Task；Agent 与拓扑属于 Project
 这是本次方案里最重要的约束。
@@ -72,7 +72,7 @@ Task 是用户真正协作和观察的基本容器，也是围绕一个工作目
 - Talk 存在于 Task 维度
 - 一个 Task 对应一个群聊 Talk
 - 用户在这个 Task 群聊里 `@Agent`
-- Agent 间的高层协作消息也回到这个 Task 群聊
+- Agent 间的协作消息也回到这个 Task 群聊
 - Agent 始终是 Project 级资源，不随 Task 复制出独立集合
 - 拓扑始终是 Project 级配置，所有 Task 都读取同一份当前拓扑
 - Project 负责承载 Task 列表，不承载统一聊天主视图
@@ -141,7 +141,7 @@ Task 是用户真正协作和观察的基本容器，也是围绕一个工作目
 Task 群聊中至少要出现三类消息：
 
 - 用户发给某个 Agent 的消息
-- 展示为“Agent -> Agent”的高层协作消息
+- 展示为“Agent -> Agent”的协作消息
 - Agent 或系统回写的阶段性结果 / 最终结果
 
 典型样子应当类似：
@@ -163,7 +163,7 @@ Task 群聊中至少要出现三类消息：
 - “Build @ TaskReview” 这类消息是协作可视化
 - 底层真正的调度动作由 Orchestrator 统一完成
 - Agent 在执行中产生的大量工具调用、搜索、grep、编辑等 low-level 过程，不默认进入 Task 群聊
-- Task 群聊默认只展示对用户有意义的高层消息，尤其是该 Agent 本轮任务的最终回复
+- Task 群聊默认只展示对用户有意义的消息，尤其是该 Agent 本轮任务的最终回复
 
 ### 6. 输入框 `@` 自动补全
 中间聊天输入框必须支持 `@` 自动补全。
@@ -213,7 +213,7 @@ Task 群聊中至少要出现三类消息：
 - 某个 Agent 完成当前阶段工作
 - Orchestrator 读取这个 Agent 的完成结果
 - Orchestrator 再读取当前 Project 拓扑里这个 Agent 被配置允许触发的下游 Agent
-- 如果满足触发条件，Orchestrator 代为生成一条高层消息，展示成“这个 Agent @ 了其他 Agent”
+- 如果满足触发条件，Orchestrator 代为生成一条协作消息，展示成“这个 Agent @ 了其他 Agent”
 - 随后由 Orchestrator 真正向下游 Agent 发送消息并启动执行
 
 也就是说，前端看到的可能是：
@@ -349,8 +349,8 @@ Orchestrator 的职责分为“群聊反馈”和“执行调度”两部分。
 
 - 向前端暴露当前 Project 的 Agent 名单与当前拓扑数据
 - 权威解析用户消息中的 `@AgentName`
-- 在 Agent 完成后，根据 trigger 配置生成“Agent @ Agent”的高层可视化消息
-- 把这些高层消息回推到当前 Task 群聊
+- 在 Agent 完成后，根据 trigger 配置生成“Agent @ Agent”的协作可视化消息
+- 把这些协作消息回推到当前 Task 群聊
 - 推送 Agent 状态变化事件
 
 执行调度职责：
@@ -406,7 +406,7 @@ Orchestrator 的职责分为“群聊反馈”和“执行调度”两部分。
 - Task 群聊默认不展示工具调用细节
 - Task 群聊默认不展示 grep、搜索、读写文件、命令执行等低层轨迹
 - Task 群聊默认只展示该轮任务的最终回复
-- 如果需要展示中间结果，也只能展示被 Orchestrator 提炼过的高层阶段消息，而不是原始工具日志
+- 如果需要展示中间结果，也只能展示被 Orchestrator 提炼过的阶段消息，而不是原始工具日志
 
 换句话说：
 
@@ -498,7 +498,7 @@ Orchestrator 至少应依赖以下能力：
 - `finalMessage`
   这是唯一必须稳定产出的字段，默认由 OpenCode 会话中的最后一条 assistant 消息映射而来，也是默认展示到 Task 群聊里的 Agent 回复
 - `progressSummary`
-  这是可选字段，只在确实需要的时候，才由 Orchestrator 基于状态事件提炼出一两条高层阶段消息
+  这是可选字段，只在确实需要的时候，才由 Orchestrator 基于状态事件提炼出一两条阶段消息
 
 明确禁止：
 
@@ -569,7 +569,7 @@ Orchestrator 至少应依赖以下能力：
 16. 启动新 Task 时，系统会先扫描 Project 下全部已配置 Agent，建立当前 Task 的 `panel <-> agent` 运行时映射。
 17. Orchestrator 能通过 Zellij 会话准确定位到目标 Agent 对应的 pane，并向其下发任务。
 18. Orchestrator 能稳定收到目标 Agent 本轮任务的结构化最终结果，至少包含 `status` 与 `finalMessage`，并回写到当前 Task 群聊。
-19. Task 群聊默认不展示 Agent 的低层工具调用过程，只展示高层阶段消息和最终回复。
+19. Task 群聊默认不展示 Agent 的低层工具调用过程，只展示阶段消息和最终回复。
 
 ### 22. 直接落地方向
 基于本版计划，后续实现优先级应当调整为：

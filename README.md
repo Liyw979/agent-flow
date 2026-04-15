@@ -14,7 +14,7 @@
 
 ## 当前实现范围
 
-- Project / Task 两层结构：Project 作为高层协作容器，Task 作为最小执行单元
+- Project / Task 两层结构：Project 作为任务协作容器，Task 作为最小执行单元
 - 左侧固定为 `Project + Task` 垂直面板，中间主区域始终展示当前 Task 群聊
 - 左侧 Task 列表支持右键删除 Task；删除时会同时清理该 Task 对应的 Zellij session
 - 左侧 Task 列表会定期与 Zellij session 状态同步；如果对应 session 已被外部删除，或只剩 `EXITED - attach to resurrect` 这类非活跃残留，关联 Task 会自动从列表中移除
@@ -27,11 +27,11 @@
 - 右下角团队成员面板里，每个 Agent 名称旁都会提供“打开 Pane”按钮；点击后会优先补齐当前 Task 的 pane 绑定，并直接打开该 Agent 自己的 OpenCode attach 独立终端窗口，不会带出完整 Zellij session 网格
 - macOS / Linux 仍要求本机可执行 `zellij`；Windows 会直接使用项目内置的 `download/zellij.exe`，打包后对应应用内的 `resources/bin/zellij.exe`
 - Task 群聊支持 `@AgentName` 提交任务，输入 `@` 会弹出候选 Agent 列表，支持方向键、鼠标和 `Tab` 自动补全
-- 群聊中同时展示 `user -> agent`、`agent -> agent` 高层协作消息，以及 Agent 最终回复
+- 群聊中同时展示 `user -> agent`、`agent -> agent` 协作消息，以及 Agent 最终回复
 - 当一个 Agent 同时向多个下游 Agent 传递时，群聊会合并展示为一条批量 `agent -> agent` 派发消息，而不是拆成多条重复消息
 - 同一个 Agent 的最终回复后若紧接着自动向下游传递，群聊会把“最终回复 + 下游派发提示”合并成同一条消息；合并后只追加 `@目标Agent` 标记，避免连续出现两条重复的同名 Agent 卡片
 - 同一个上游 Agent 在收到回流意见后再次成功交付时，会重新派发当前拓扑里满足条件的全部下游 Agent；不会因为某个下游在上一轮已成功执行过，就被静默跳过
-- 审视 Agent 给出需要继续响应的 `回应：...` 尾段后，群聊会把该 Agent 的高层结果与发给下游的回应请求合并展示成同一条消息；默认先展示高层结果与回应内容，再在消息末尾统一追加 `@目标Agent` 标记
+- 审视 Agent 给出需要继续响应的 `回应：...` 尾段后，群聊会把该 Agent 的结果正文与发给下游的回应请求合并展示成同一条消息；默认先展示结果正文与回应内容，再在消息末尾统一追加 `@目标Agent` 标记
 - Agent 最终回复写入群聊时，只会在命中“正式结果 / 最终回复 / 最终交付 / 结论”等明确交付标题时提取对应尾部章节展示；像 BA 这类先分析再给正式结果的回复，群聊会优先展示最后的正式交付内容，不展示前面的自我分析过程；若只是普通结构化文档而不存在这类标题，则保留完整正文，避免误截断到“备注”等附录章节
 - 群聊落库与 Agent 间转发只使用 OpenCode 返回消息里的公开 `text` part；`reasoning`、步骤和工具调用不会混入群聊正文或下游 Prompt
 - 这类批量 `agent -> agent` 派发消息仅用于群聊展示给人看；Agent 自动派发下游时，不再补充任何群聊历史，但会携带完整用户消息与当前这一次的上游结果；若上游结果已完整包含用户消息，会自动去重
@@ -190,7 +190,7 @@ CLI 能力分组：
 - 对于首次初始化、尚无托管 pane 的 Task，Zellij 会优先生成“先横向后换行”的 tiled grid 初始布局，并限制最多两排；pane 会严格按当前保存的 Agent 顺序排布
 - Session 创建对齐官方 `POST /session`
 - 消息发送对齐官方 `POST /session/:id/message`，body 使用 `parts` 数组
-- 前端不嵌入终端，不复刻 Zellij PANEL，只展示 Task 级 high level 聊天流、拓扑和 Agent 状态
+- 前端不嵌入终端，不复刻 Zellij PANEL，只展示 Task 级聊天流、拓扑和 Agent 状态
 - Zellij pane 不再根据运行中的 Agent 动态调整位置；如需调整顺序，直接在前端拖拽 Agent 顺序并保存即可
 - CLI 只支持当前 Agent 名称（来自用户自定义配置）
 - `task debug-info` 默认读取当前 Project 最新 Task，并只输出聊天区里实际展示的合并消息；追加 `--full` 后，才会输出 `zellijSessionId`、`opencodeSessionId`、panel 打开命令和完整运行态数据；也可以显式传入 `taskId`
@@ -199,6 +199,6 @@ CLI 能力分组：
 
 ## 后续建议
 
-- 把高层聊天消息做得更接近 “Agent @ Agent” 的可视化协作流
+- 把协作消息做得更接近 “Agent @ Agent” 的可视化协作流
 - 为 `.agentflow/state.json` 增加更明确的 schema version 与升级策略
 - 补充集成测试

@@ -132,7 +132,7 @@ function MessageBubble({
   const isUser = message.sender === "user";
   const isSystem = message.sender === "system";
   const isAgent = !isUser && !isSystem;
-  const hasHighLevelTrigger = message.kinds.includes("high-level-trigger");
+  const hasAgentDispatch = message.kinds.includes("agent-dispatch");
   const hasTaskCreated = message.kinds.includes("task-created");
   const hasTaskCompleted = message.kinds.includes("task-completed");
   const hasRevisionRequest = message.kinds.includes("revision-request");
@@ -184,7 +184,7 @@ function MessageBubble({
         "max-w-[88%] rounded-[8px] px-3 py-2 whitespace-pre-wrap",
         isUser && "ml-auto bg-primary text-primary-foreground",
         isAgent && "border",
-        hasHighLevelTrigger && !isAgent && "border border-accent/60 bg-accent/35 text-foreground",
+        hasAgentDispatch && !isAgent && "border border-accent/60 bg-accent/35 text-foreground",
         hasTaskCreated && "border border-border/70 bg-muted/70 text-foreground",
         hasTaskCompleted && "border border-primary/20 bg-primary/10 text-foreground",
         hasRevisionRequest && "border border-secondary/60 bg-secondary/15 text-foreground",
