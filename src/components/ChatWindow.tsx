@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { getAgentColorToken } from "@/lib/agent-colors";
 import { mergeTaskChatMessages, type ChatMessageItem } from "@/lib/chat-messages";
 import { getMentionContext, getMentionOptions, type MentionContext } from "@/lib/chat-mentions";
+import { getPanelHeaderActionButtonClass } from "@/lib/panel-header-action-button";
 
 interface ChatWindowProps {
   project: ProjectSnapshot | undefined;
@@ -390,7 +391,7 @@ export function ChatWindow({
             onClick={() => {
               void handleOpenTaskSession();
             }}
-            className="no-drag rounded-[8px] border border-border bg-card px-3 py-1 text-xs font-semibold text-foreground transition hover:border-primary"
+            className={getPanelHeaderActionButtonClass("no-drag")}
           >
             打开 Zellij
           </button>

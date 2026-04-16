@@ -4,6 +4,7 @@ import { ChatWindow } from "./components/ChatWindow";
 import { SidebarList } from "./components/SidebarList";
 import { TopologyGraph } from "./components/TopologyGraph";
 import { getAgentColorToken } from "./lib/agent-colors";
+import { getPanelHeaderActionButtonClass } from "./lib/panel-header-action-button";
 import { useAgentFlowStore } from "./store/useAgentFlowStore";
 import { resolveTopologyAgentOrder, usesOpenCodeBuiltinPrompt } from "@shared/types";
 import type {
@@ -537,7 +538,7 @@ function App() {
                         setAgentConfigPath(NEW_AGENT_DRAFT_PATH);
                         setAgentConfigOpen(true);
                       }}
-                      className="rounded-[8px] border border-border bg-white/70 px-3 py-1.5 text-xs font-medium text-foreground/85 transition hover:border-accent"
+                      className={getPanelHeaderActionButtonClass()}
                     >
                       配置 Agent
                     </button>

@@ -14,6 +14,7 @@ import {
   type Node,
 } from "@xyflow/react";
 import { getAgentColorToken } from "@/lib/agent-colors";
+import { getPanelHeaderActionButtonClass } from "@/lib/panel-header-action-button";
 import { isReviewAgentInTopology, resolveTopologyAgentOrder } from "@shared/types";
 import type {
   AgentRole,
@@ -1614,7 +1615,7 @@ export function TopologyGraph({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                className="rounded-[8px] border border-border bg-card px-3 py-1 text-xs font-semibold text-foreground transition hover:border-primary"
+                className={getPanelHeaderActionButtonClass()}
                 onClick={() => {
                   setExpandedOpen(true);
                 }}
