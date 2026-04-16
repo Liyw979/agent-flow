@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { TopologyGraph } from "./TopologyGraph";
 import type { ProjectSnapshot, TaskSnapshot, TopologyRecord } from "@shared/types";
+import { REVIEW_RESPONSE_END_LABEL, REVIEW_RESPONSE_LABEL } from "@shared/review-response";
 
 function createProjectSnapshot(topology: TopologyRecord): ProjectSnapshot {
   return {
@@ -35,7 +36,10 @@ function createProjectSnapshot(topology: TopologyRecord): ProjectSnapshot {
   };
 }
 
-function createTaskSnapshot(topology: TopologyRecord): TaskSnapshot {
+function createTaskSnapshot(
+  topology: TopologyRecord,
+  messages: TaskSnapshot["messages"] = [],
+): TaskSnapshot {
   return {
     task: {
       id: "task-1",
@@ -56,12 +60,12 @@ function createTaskSnapshot(topology: TopologyRecord): TaskSnapshot {
       { id: "task-1:Build", taskId: "task-1", projectId: topology.projectId, name: "Build", opencodeSessionId: null, status: "failed", runCount: 1 },
     ],
     panels: [],
-    messages: [],
+    messages,
     topology,
   };
 }
 
-function getTopologyHtml() {
+function getTopologyHtml(messages: TaskSnapshot["messages"] = []) {
   const topology: TopologyRecord = {
     projectId: "project-1",
     startAgentId: "BA",
@@ -82,7 +86,7 @@ function getTopologyHtml() {
   return renderToStaticMarkup(
     <TopologyGraph
       project={createProjectSnapshot(topology)}
-      task={createTaskSnapshot(topology)}
+      task={createTaskSnapshot(topology, messages)}
       selectedAgentId={null}
       onSelectAgent={() => undefined}
       onSaveTopology={async () => undefined}
@@ -105,4 +109,28 @@ test("TopologyGraph 真实渲染包含状态徽标和边关系", () => {
   assert.match(html, /TaskReview/);
   assert.match(html, /BA/);
   assert.match(html, /Build/);
+});
+
+test("TopologyGraph 历史记录会去掉 revision_request 标签", () => {
+  const html = getTopologyHtml([
+    {
+      id: "message-1",
+      projectId: "project-1",
+      taskId: "task-1",
+      sender: "TaskReview",
+      timestamp: "2026-04-14T00:05:00.000Z",
+      content: `审视不通过。\n\n${REVIEW_RESPONSE_LABEL}请继续补充实现依据。${REVIEW_RESPONSE_END_LABEL}`,
+      meta: {
+        kind: "agent-final",
+        status: "failed",
+        reviewDecision: "needs_revision",
+        finalMessage: `审视不通过。\n\n${REVIEW_RESPONSE_LABEL}请继续补充实现依据。${REVIEW_RESPONSE_END_LABEL}`,
+      },
+    },
+  ]);
+
+  assert.match(html, /审视不通过。/);
+  assert.match(html, /请继续补充实现依据。/);
+  assert.doesNotMatch(html, /&lt;revision_request&gt;/);
+  assert.doesNotMatch(html, /&lt;\/revision_request&gt;/);
 });

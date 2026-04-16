@@ -15,6 +15,7 @@ import {
 } from "@xyflow/react";
 import { getAgentColorToken } from "@/lib/agent-colors";
 import { getPanelHeaderActionButtonClass } from "@/lib/panel-header-action-button";
+import { stripReviewResponseMarkup } from "@shared/review-response";
 import { isReviewAgentInTopology, resolveTopologyAgentOrder } from "@shared/types";
 import type {
   AgentRole,
@@ -631,7 +632,7 @@ function toShortTime(timestamp: string | null | undefined) {
 }
 
 function summarizeHistoryText(content: string | null | undefined) {
-  const normalized = (content ?? "").replace(/\s+/g, " ").trim();
+  const normalized = stripReviewResponseMarkup(content ?? "").replace(/\s+/g, " ").trim();
   if (!normalized) {
     return "暂无详细记录";
   }
@@ -639,7 +640,7 @@ function summarizeHistoryText(content: string | null | undefined) {
 }
 
 function normalizeFullHistoryText(content: string | null | undefined) {
-  const normalized = (content ?? "").trim();
+  const normalized = stripReviewResponseMarkup(content ?? "").trim();
   return normalized || "暂无详细记录";
 }
 
