@@ -14,8 +14,8 @@ export interface AssociationDispatchBatchState {
   sourceAgentId: string;
   sourceContent: string;
   targets: string[];
-  nextTargetIndex: number;
-  pendingTarget: string | null;
+  pendingTargets: string[];
+  respondedTargets: string[];
   sourceRevision: number;
   failedTargets: string[];
 }
@@ -43,7 +43,7 @@ export interface SchedulerBatchContinuation {
   matchedBatch: boolean;
   sourceAgentId: string;
   sourceContent: string;
-  nextTargetToDispatch: string | null;
+  pendingTargets: string[];
   repairReviewerAgentId: string | null;
   redispatchTargets: string[];
 }
@@ -127,29 +127,26 @@ export class OrchestratorScheduler {
       sourceAgentId,
       sourceContent,
       targets: targetNames,
-      nextTargetIndex: 0,
-      pendingTarget: null,
+      pendingTargets: [],
+      respondedTargets: [],
       sourceRevision: sourceState.currentRevision,
       failedTargets: [],
     };
 
-    const firstTarget = this.claimNextBatchTarget(batch, completed, agentStates);
-    if (!firstTarget) {
+    const dispatchTargets = this.claimBatchTargets(batch, completed, agentStates);
+    if (dispatchTargets.readyTargets.length === 0 && dispatchTargets.queuedTargets.length === 0) {
       return null;
     }
 
     this.runtime.activeAssociationBatchBySource.set(sourceAgentId, batch);
-    if (this.runtime.runningAgents.has(firstTarget)) {
-      this.runtime.queuedAgents.add(firstTarget);
-    }
 
     return {
       sourceAgentId,
       sourceContent,
       displayTargets: targetNames,
       triggerTargets: [...targetNames],
-      readyTargets: this.runtime.runningAgents.has(firstTarget) ? [] : [firstTarget],
-      queuedTargets: this.runtime.runningAgents.has(firstTarget) ? [firstTarget] : [],
+      readyTargets: dispatchTargets.readyTargets,
+      queuedTargets: dispatchTargets.queuedTargets,
     };
   }
 
@@ -196,9 +193,8 @@ export class OrchestratorScheduler {
     outcome: "pass" | "fail",
     agentStates: SchedulerAgentState[],
   ): SchedulerBatchContinuation | null {
-    const completed = new Set(this.runtime.completedEdges);
     for (const [sourceAgentId, batch] of this.runtime.activeAssociationBatchBySource.entries()) {
-      if (batch.pendingTarget !== responderAgentId) {
+      if (!batch.pendingTargets.includes(responderAgentId)) {
         continue;
       }
 
@@ -208,18 +204,17 @@ export class OrchestratorScheduler {
       } else if (!batch.failedTargets.includes(responderAgentId)) {
         batch.failedTargets.push(responderAgentId);
       }
-      batch.pendingTarget = null;
+      batch.pendingTargets = batch.pendingTargets.filter((targetName) => targetName !== responderAgentId);
+      if (!batch.respondedTargets.includes(responderAgentId)) {
+        batch.respondedTargets.push(responderAgentId);
+      }
 
-      const nextTarget = this.claimNextBatchTarget(batch, completed, agentStates);
-      if (nextTarget) {
-        if (this.runtime.runningAgents.has(nextTarget)) {
-          this.runtime.queuedAgents.add(nextTarget);
-        }
+      if (batch.pendingTargets.length > 0) {
         return {
           matchedBatch: true,
           sourceAgentId,
           sourceContent: batch.sourceContent,
-          nextTargetToDispatch: nextTarget,
+          pendingTargets: [...batch.pendingTargets],
           repairReviewerAgentId: null,
           redispatchTargets: [],
         };
@@ -231,8 +226,8 @@ export class OrchestratorScheduler {
           matchedBatch: true,
           sourceAgentId,
           sourceContent: batch.sourceContent,
-          nextTargetToDispatch: null,
-          repairReviewerAgentId: batch.failedTargets[0] ?? null,
+          pendingTargets: [],
+          repairReviewerAgentId: batch.targets.find((targetName) => batch.failedTargets.includes(targetName)) ?? null,
           redispatchTargets: [],
         };
       }
@@ -245,7 +240,7 @@ export class OrchestratorScheduler {
           matchedBatch: true,
           sourceAgentId,
           sourceContent: batch.sourceContent,
-          nextTargetToDispatch: null,
+          pendingTargets: [],
           repairReviewerAgentId: null,
           redispatchTargets: staleTargets,
         };
@@ -255,7 +250,7 @@ export class OrchestratorScheduler {
         matchedBatch: true,
         sourceAgentId,
         sourceContent: batch.sourceContent,
-        nextTargetToDispatch: null,
+        pendingTargets: [],
         repairReviewerAgentId: null,
         redispatchTargets: [],
       };
@@ -276,26 +271,41 @@ export class OrchestratorScheduler {
     return outgoingEdges.every((edge) => this.runtime.completedEdges.has(getTopologyEdgeId(edge)));
   }
 
-  private claimNextBatchTarget(
+  private claimBatchTargets(
     batch: AssociationDispatchBatchState,
     completedEdges: Set<string>,
     agentStates: SchedulerAgentState[],
-  ): string | null {
-    const nextTarget = batch.targets[batch.nextTargetIndex];
-    if (!nextTarget) {
-      return null;
-    }
-    if (!this.canScheduleTarget(completedEdges, nextTarget, agentStates)) {
-      return null;
+  ): {
+    readyTargets: string[];
+    queuedTargets: string[];
+  } {
+    const readyTargets: string[] = [];
+    const queuedTargets: string[] = [];
+
+    for (const targetName of batch.targets) {
+      if (!this.canScheduleTarget(completedEdges, targetName, agentStates)) {
+        continue;
+      }
+
+      this.runtime.lastSignatureByAgent.set(
+        targetName,
+        this.buildTriggerSignature(completedEdges, targetName),
+      );
+      if (!batch.pendingTargets.includes(targetName)) {
+        batch.pendingTargets.push(targetName);
+      }
+
+      if (this.runtime.runningAgents.has(targetName)) {
+        queuedTargets.push(targetName);
+      } else {
+        readyTargets.push(targetName);
+      }
     }
 
-    batch.pendingTarget = nextTarget;
-    batch.nextTargetIndex += 1;
-    this.runtime.lastSignatureByAgent.set(
-      nextTarget,
-      this.buildTriggerSignature(completedEdges, nextTarget),
-    );
-    return nextTarget;
+    return {
+      readyTargets,
+      queuedTargets,
+    };
   }
 
   private getOrCreateSourceRevisionState(sourceAgentId: string): SourceRevisionState {

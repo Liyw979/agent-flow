@@ -928,7 +928,7 @@ export class Orchestrator {
         this.store.updateTaskStatus(
           task.id,
           agentStatus === "failed" && reviewFailureTargets.length > 0
-            ? batchContinuation?.nextTargetToDispatch
+            ? (batchContinuation?.pendingTargets.length ?? 0) > 0
               ? "running"
               : "needs_revision"
             : agentStatus === "failed" && directTargets.length > 0 && !reviewAgent
@@ -1173,12 +1173,16 @@ export class Orchestrator {
       gitDiffSummary,
     });
 
-    const firstTarget = plan.readyTargets[0] ?? plan.queuedTargets[0];
-    if (!firstTarget) {
+    const dispatchTargets = [...plan.readyTargets, ...plan.queuedTargets];
+    if (dispatchTargets.length === 0) {
       return 0;
     }
 
-    await this.dispatchAssociationBatchTarget(project, taskId, sourceAgentId, firstTarget);
+    await Promise.all(
+      dispatchTargets.map(async (targetName) => {
+        await this.dispatchAssociationBatchTarget(project, taskId, sourceAgentId, targetName);
+      }),
+    );
 
     return plan.triggerTargets.length;
   }
@@ -1381,13 +1385,8 @@ export class Orchestrator {
       );
     }
 
-    if (continuation.nextTargetToDispatch) {
-      return this.dispatchAssociationBatchTarget(
-        project,
-        taskId,
-        continuation.sourceAgentId,
-        continuation.nextTargetToDispatch,
-      );
+    if (continuation.pendingTargets.length > 0) {
+      return 0;
     }
 
     if (continuation.repairReviewerAgentId) {

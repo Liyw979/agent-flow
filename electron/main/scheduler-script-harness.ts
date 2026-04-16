@@ -130,12 +130,13 @@ export async function assertSchedulerScript(
     const currentBatch = activeBatches[activeBatches.length - 1] ?? null;
 
     if (currentBatch) {
-      const expectedTarget = currentBatch.remainingTargets.shift();
-      assert.equal(
-        agentName,
-        expectedTarget,
-        `${agentName} 的回应顺序不等于当前批次的 @ 顺序`,
+      const responderIndex = currentBatch.remainingTargets.indexOf(agentName);
+      assert.notEqual(
+        responderIndex,
+        -1,
+        `${agentName} 不是当前批次 ${currentBatch.source} 等待中的 reviewer`,
       );
+      currentBatch.remainingTargets.splice(responderIndex, 1);
     } else {
       const sourceState = sourceStates.get(agentName);
       assert.notEqual(sourceState, undefined, `缺少 SourceState：${agentName}`);
@@ -240,7 +241,8 @@ export async function assertSchedulerScript(
   while (actualScript.length < parsed.normalizedScript.length) {
     const currentBatch = activeBatches[activeBatches.length - 1] ?? null;
     if (currentBatch) {
-      const nextAgent = currentBatch.remainingTargets[0];
+      const nextLine = parsed.lines[actualScript.length];
+      const nextAgent = nextLine?.sender;
       assert.notEqual(nextAgent, undefined, `批次 ${currentBatch.source} 缺少下一个回应者`);
       processReplyLine(nextAgent);
       continue;
