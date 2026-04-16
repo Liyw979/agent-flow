@@ -16,7 +16,11 @@ class StubZellijManager extends ZellijManager {
   public failListSessions = false;
   public failApplyAgentGridLayout = false;
   public runPaneStdoutQueue: string[] = [];
-  public useDetachedBackgroundSession = false;
+  public hostPlatform: NodeJS.Platform = "linux";
+
+  protected override getHostPlatform(): NodeJS.Platform {
+    return this.hostPlatform;
+  }
 
   async isAvailable(): Promise<boolean> {
     this.calls.push({ method: "isAvailable", args: [] });
@@ -81,7 +85,11 @@ class StubZellijManager extends ZellijManager {
     }
     this.panes = agents.map((agent, index) => ({
       id: `${index + 1}`,
-      title: agent.name,
+      title: this.hostPlatform === "win32" ? "OpenCode" : agent.name,
+      pane_command:
+        this.hostPlatform === "win32"
+          ? `cmd.exe /d /s /c ${cwd}\\.agentflow\\opencode-pane-runtime\\${sessionName}\\${agent.name}\\launch-pane.cmd`
+          : null,
       is_plugin: false,
       exited: false,
       is_focused: index === 0,
@@ -98,11 +106,6 @@ class StubZellijManager extends ZellijManager {
   protected override async ensureSessionActive(sessionName: string): Promise<void> {
     this.calls.push({ method: "ensureSessionActive", args: [sessionName] });
   }
-
-  protected override usesDetachedBackgroundSession(): boolean {
-    return this.useDetachedBackgroundSession;
-  }
-
   protected override async ensureSessionLayout(sessionName: string, targetPaneId?: string): Promise<void> {
     this.calls.push({ method: "ensureSessionLayout", args: [sessionName, targetPaneId ?? null] });
   }
@@ -113,6 +116,11 @@ class StubZellijManager extends ZellijManager {
 
   protected override async openCommandInTerminal(cwd: string, terminalCommand: string): Promise<void> {
     this.calls.push({ method: "openCommandInTerminal", args: [cwd, terminalCommand] });
+  }
+
+  protected override async waitForOpenCodeAttachReady(): Promise<boolean> {
+    this.calls.push({ method: "waitForOpenCodeAttachReady", args: [] });
+    return true;
   }
 
   protected override async openMacTerminalCommand(cwd: string, terminalCommand: string): Promise<void> {
@@ -199,12 +207,19 @@ class CaptureWindowsTerminalManager extends ZellijManager {
     await this.openCommandInTerminal(cwd, terminalCommand);
   }
 
-  async runOpenWindowsCmdSession(cwd: string, terminalCommand: string): Promise<boolean> {
+  async runOpenWindowsCmdSession(
+    cwd: string,
+    terminalCommand: { command: string; args: string[] },
+  ): Promise<boolean> {
     return this.openWindowsCmdSession(cwd, terminalCommand);
   }
 
   protected override getHostPlatform(): NodeJS.Platform {
     return "win32";
+  }
+
+  protected override async waitForOpenCodeAttachReady(): Promise<boolean> {
+    return true;
   }
 
   protected override async spawnDetachedProcess(command: string, args: string[]): Promise<boolean> {
@@ -428,6 +443,7 @@ test("buildAgentGridLayout 生成的布局会按 Agent 顺序横向优先排布"
   assert.ok(baIndex >= 0);
   assert.ok(buildIndex > baIndex);
   assert.ok(unitTestIndex > buildIndex);
+  assert.match(normalizedLayout, /start_suspended false;/);
 });
 
 test("buildAgentGridLayout 会把当前 OpenCode attach 地址写入 pane 命令", () => {
@@ -454,21 +470,25 @@ test("deleteTaskSession 在 kill 失败时会回退到 delete-session", async ()
   assert.equal(commands.includes("delete-session"), true);
 });
 
-test("createTaskSession uses a bootstrap pane when detached session startup is enabled", async () => {
+test("createTaskSession starts a minimized attached client on Windows", async () => {
   const manager = new StubZellijManager();
-  manager.useDetachedBackgroundSession = true;
+  manager.hostPlatform = "win32";
 
   const session = await manager.createTaskSession("project-1", "task-1");
 
   assert.equal(session, "oap-projec-task-1");
   assert.equal(
     manager.calls.some(
-      (item) =>
-        item.method === "spawnDetachedProcess"
-        && Array.isArray(item.args[1])
-        && item.args[1][0] === "attach"
-        && item.args[1][1] === "--create-background"
-        && item.args[1][2] === "oap-projec-task-1",
+        (item) =>
+          item.method === "spawnDetachedProcess"
+          && item.args[0] === "cmd.exe"
+          && Array.isArray(item.args[1])
+          && item.args[1][0] === "/c"
+          && item.args[1][1] === "start"
+          && item.args[1][3] === "/min"
+          && item.args[1][5] === "attach"
+          && item.args[1][6] === "oap-projec-task-1"
+          && item.args[1][7] === "--create",
     ),
     true,
   );
@@ -479,7 +499,8 @@ test("createTaskSession uses a bootstrap pane when detached session startup is e
         && Array.isArray(item.args)
         && item.args[0] === "-s"
         && item.args[1] === "oap-projec-task-1"
-        && item.args[2] === "run",
+        && item.args[2] === "action"
+        && item.args[3] === "list-panes",
     ),
     true,
   );
@@ -508,12 +529,38 @@ test("openCommandInTerminal on Windows uses wt maximized new-tab syntax with sta
   ]);
 });
 
+test("openCommandInTerminal on Windows runs pane launcher scripts directly in the terminal", async () => {
+  const manager = new CaptureWindowsTerminalManager();
+
+  await manager.runOpenCommandInTerminal(
+    "D:\\empty",
+    "cmd.exe /d /s /c \"D:\\empty\\.agentflow\\opencode-pane-runtime\\session-1\\Build\\launch-pane.cmd\"",
+  );
+
+  assert.equal(manager.spawnCalls.length, 1);
+  assert.equal(manager.spawnCalls[0]?.command, "wt");
+  assert.deepEqual(manager.spawnCalls[0]?.args, [
+    "--maximized",
+    "-w",
+    "-1",
+    "new-tab",
+    "-d",
+    "D:\\empty",
+    "cmd.exe",
+    "/k",
+    "D:\\empty\\.agentflow\\opencode-pane-runtime\\session-1\\Build\\launch-pane.cmd",
+  ]);
+});
+
 test("openWindowsCmdSession on Windows uses maximized fallback without fullscreen", async () => {
   const manager = new CaptureWindowsTerminalManager();
 
   const opened = await manager.runOpenWindowsCmdSession(
     "D:\\empty",
-    "\"D:\\agent-flow\\download\\zellij.exe\" \"attach\" \"session-1\" \"--create\"",
+    {
+      command: "cmd.exe",
+      args: ["/k", "\"D:\\agent-flow\\download\\zellij.exe\" \"attach\" \"session-1\" \"--create\""],
+    },
   );
 
   assert.equal(opened, true);
@@ -523,6 +570,32 @@ test("openWindowsCmdSession on Windows uses maximized fallback without fullscree
   assert.equal(serializedArgs.includes("WindowStyle Maximized"), true);
   assert.equal(serializedArgs.includes("System.Windows.Forms"), false);
   assert.equal(serializedArgs.includes("F11"), false);
+});
+
+test("openAgentTerminal on Windows opens the launcher script instead of nesting cmd wrappers", async () => {
+  const manager = new CaptureWindowsTerminalManager();
+  manager.setOpenCodeAttachBaseUrl("http://127.0.0.1:61023");
+
+  await manager.openAgentTerminal({
+    sessionName: "session-1",
+    cwd: "D:\\empty",
+    agentName: "Build",
+    opencodeSessionId: "session-123",
+  });
+
+  assert.equal(manager.spawnCalls.length, 1);
+  assert.equal(manager.spawnCalls[0]?.command, "wt");
+  assert.deepEqual(manager.spawnCalls[0]?.args, [
+    "--maximized",
+    "-w",
+    "-1",
+    "new-tab",
+    "-d",
+    "D:\\empty",
+    "cmd.exe",
+    "/k",
+    "D:\\empty\\.agentflow\\opencode-pane-runtime\\session-1\\Build\\launch-pane.cmd",
+  ]);
 });
 
 test("canQuerySession treats session listing output as not ready", async () => {
@@ -560,5 +633,47 @@ test("materializePanelBindings retries pane creation when run returns a session 
         && item.args[2] === "run",
     ).length,
     2,
+  );
+});
+
+test("buildAgentGridLayout uses launcher command panes on Windows", () => {
+  const manager = new StubZellijManager();
+  manager.hostPlatform = "win32";
+
+  const layout = manager.inspectBuildAgentGridLayout("session-1", "D:\\empty", [
+    { name: "Build", opencodeSessionId: "session-123" },
+  ]);
+
+  assert.match(layout ?? "", /pane command="cmd\.exe" name="Build"/);
+  assert.match(layout ?? "", /args "\/d" "\/s" "\/c" "D:\\\\empty\\\\\.agentflow\\\\opencode-pane-runtime\\\\session-1\\\\Build\\\\launch-pane\.cmd"/);
+  assert.match(layout ?? "", /start_suspended false;/);
+});
+
+test("materializePanelBindings keeps agent bindings when Windows command panes rename themselves", async () => {
+  const manager = new StubZellijManager();
+  manager.hostPlatform = "win32";
+  manager.sessionNames.add("session-1");
+  manager.panes = [];
+
+  const bindings = await manager.materializePanelBindings({
+    projectId: "project-1",
+    taskId: "task-1",
+    sessionName: "session-1",
+    cwd: "D:\\empty",
+    agents: [{ name: "Build", opencodeSessionId: "session-123", status: "idle" }],
+  });
+
+  assert.equal(bindings.length, 1);
+  assert.equal(bindings[0]?.agentName, "Build");
+  assert.equal(bindings[0]?.paneId, "terminal_1");
+  assert.equal(
+    manager.calls.some(
+      (item) =>
+        item.method === "execZellij"
+        && Array.isArray(item.args)
+        && item.args[2] === "action"
+        && item.args[3] === "write-chars",
+    ),
+    false,
   );
 });

@@ -27,6 +27,27 @@ interface ShellLaunchSpec {
   args: string[];
 }
 
+function buildWindowsOpencodeCommand(options: OpencodePaneCommandOptions): string {
+  if (options.opencodeSessionId) {
+    return [
+      "opencode",
+      "attach",
+      quoteWindowsArg(options.attachBaseUrl),
+      "--session",
+      quoteWindowsArg(options.opencodeSessionId),
+      "--dir",
+      quoteWindowsArg(options.cwd),
+    ].join(" ");
+  }
+
+  return [
+    "opencode",
+    ".",
+    "--agent",
+    quoteWindowsArg(options.opencodeAgentName),
+  ].join(" ");
+}
+
 function quotePosixArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -44,6 +65,10 @@ function quotePortableArg(value: string): string {
 
 function escapeWindowsEnvValue(value: string): string {
   return value.replace(/%/g, "%%");
+}
+
+function normalizeWindowsEnvPath(value: string): string {
+  return value.replace(/\\/g, "/");
 }
 
 export function quoteInlineCommandArg(
@@ -98,6 +123,25 @@ export function buildCliAttachSessionCommand(
   return `${renderedCommand} attach ${quotePortableShellArg(sessionName)} --create`;
 }
 
+export function buildWindowsOpencodePaneScript(
+  options: OpencodePaneCommandOptions,
+): string {
+  const runtimeDirForEnv = normalizeWindowsEnvPath(options.runtimeDir);
+  const dbPathForEnv = normalizeWindowsEnvPath(options.dbPath);
+
+  return [
+    "@echo off",
+    `if not exist ${quoteWindowsArg(options.runtimeDir)} mkdir ${quoteWindowsArg(options.runtimeDir)}`,
+    `cd /d ${quoteWindowsArg(options.cwd)}`,
+    `set "OPENCODE_CONFIG_DIR=${escapeWindowsEnvValue(runtimeDirForEnv)}"`,
+    `set "OPENCODE_DB=${escapeWindowsEnvValue(dbPathForEnv)}"`,
+    `set "OPENCODE_DISABLE_PROJECT_CONFIG=true"`,
+    `set "OPENCODE_CLIENT=agentflow-zellij"`,
+    buildWindowsOpencodeCommand(options),
+    "",
+  ].join("\r\n");
+}
+
 export function buildOpencodePaneCommand(
   options: OpencodePaneCommandOptions,
 ): {
@@ -107,6 +151,8 @@ export function buildOpencodePaneCommand(
   const platform = options.platform ?? process.platform;
 
   if (platform === "win32") {
+    const runtimeDirForEnv = normalizeWindowsEnvPath(options.runtimeDir);
+    const dbPathForEnv = normalizeWindowsEnvPath(options.dbPath);
     const opencodeCommand = options.opencodeSessionId
       ? buildInlineCommand({
           command: "opencode",
@@ -129,8 +175,9 @@ export function buildOpencodePaneCommand(
     const shellCommand = [
       `if not exist ${quoteWindowsArg(options.runtimeDir)} mkdir ${quoteWindowsArg(options.runtimeDir)}`,
       `cd /d ${quoteWindowsArg(options.cwd)}`,
-      `set "OPENCODE_CONFIG_DIR=${escapeWindowsEnvValue(options.runtimeDir)}"`,
-      `set "OPENCODE_DB=${escapeWindowsEnvValue(options.dbPath)}"`,
+      // OpenCode's Windows TUI attach path works reliably with POSIX-style paths.
+      `set "OPENCODE_CONFIG_DIR=${escapeWindowsEnvValue(runtimeDirForEnv)}"`,
+      `set "OPENCODE_DB=${escapeWindowsEnvValue(dbPathForEnv)}"`,
       `set "OPENCODE_DISABLE_PROJECT_CONFIG=true"`,
       `set "OPENCODE_CLIENT=agentflow-zellij"`,
       opencodeCommand,
