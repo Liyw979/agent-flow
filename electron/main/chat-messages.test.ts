@@ -8,7 +8,6 @@ import { formatRevisionRequestContent } from "../../shared/chat-message-format";
 import {
   REVIEW_RESPONSE_END_LABEL,
   REVIEW_RESPONSE_LABEL,
-  formatReviewResponseBlock,
 } from "../../shared/review-response";
 
 function createMessage(overrides: Partial<MessageRecord>): MessageRecord {
@@ -28,7 +27,7 @@ test("合并回应消息时只保留一份回应与一份 mention", () => {
     `${REVIEW_RESPONSE_LABEL}暂无进一步结论，因为尚未完成润色工作。请先完成需求润色，然后再回应实现是否成立。`
     + REVIEW_RESPONSE_END_LABEL;
   const remediationMessage = formatRevisionRequestContent(
-    `审视不通过，请回应以下内容。\n\n${formatReviewResponseBlock("暂无进一步结论，因为尚未完成润色工作。请先完成需求润色，然后再回应实现是否成立。")}`,
+    "暂无进一步结论，因为尚未完成润色工作。请先完成需求润色，然后再回应实现是否成立。",
     "Build",
   );
 
@@ -74,7 +73,7 @@ test("合并回应消息时保留结果正文并追加一份回应", () => {
     createMessage({
       id: "revision-request",
       content: formatRevisionRequestContent(
-        `审视不通过，请回应以下内容。\n\n${formatReviewResponseBlock("请补充实现依据，并说明验证为何足以支持当前结论。")}`,
+        "请补充实现依据，并说明验证为何足以支持当前结论。",
         "Build",
       ),
       meta: {
@@ -96,7 +95,7 @@ test("revision-request 单独展示时会移除标签后再追加 mention", () =
     createMessage({
       id: "revision-request",
       content: formatRevisionRequestContent(
-        `审视不通过，请回应以下内容。\n\n${REVIEW_RESPONSE_LABEL}请补充实现依据。`,
+        "请补充实现依据。",
         "Build",
       ),
       meta: {
@@ -109,7 +108,7 @@ test("revision-request 单独展示时会移除标签后再追加 mention", () =
   assert.equal(merged.length, 1);
   assert.equal(
     merged[0]?.content,
-    "审视不通过，请回应以下内容。\n\n请补充实现依据。\n\n@Build",
+    "请补充实现依据。\n\n@Build",
   );
 });
 
