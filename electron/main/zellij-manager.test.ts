@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -290,23 +291,33 @@ test("openTaskSession 会先校验可用性再补 session 与布局", async () =
   ]);
 });
 
-test("openMacTerminalCommand 不会先 reopen Terminal 造成额外空窗", async () => {
+test("openMacTerminalCommand 在 macOS 会先打开 Terminal 启动脚本，再单独做窗口最大化", async () => {
   const manager = new CaptureMacTerminalManager();
 
   await manager.runOpenMacTerminalCommand("/tmp/demo", "zellij attach session-1 --create");
 
-  assert.equal(manager.spawnCalls.length, 1);
-  assert.equal(manager.spawnCalls[0]?.command, "osascript");
-  assert.equal(manager.spawnCalls[0]?.args.includes("reopen"), false);
-  const scriptLines = manager.spawnCalls[0]?.args.filter((arg) => arg !== "-e") ?? [];
-  assert.equal(
-    scriptLines.some((line) => line.startsWith('do script "cd ')),
-    true,
+  assert.deepEqual(
+    manager.spawnCalls.map((call) => call.command),
+    ["open", "osascript"],
   );
-  assert.equal(
-    scriptLines.some((line) => line.includes("zellij attach session-1 --create")),
-    true,
-  );
+  assert.deepEqual(manager.spawnCalls[0]?.args.slice(0, 2), ["-a", "Terminal"]);
+  const launchScriptPath = manager.spawnCalls[0]?.args[2] ?? "";
+  assert.equal(launchScriptPath.endsWith(".command"), true);
+  assert.equal(fs.existsSync(launchScriptPath), true);
+  const launchScript = fs.readFileSync(launchScriptPath, "utf8");
+  assert.equal(launchScript.includes("zellij attach session-1 --create"), true);
+});
+
+test("openMacTerminalCommand 不会生成空白 Terminal 窗口脚本", async () => {
+  const manager = new CaptureMacTerminalManager();
+
+  await manager.runOpenMacTerminalCommand("/tmp/demo", "zellij attach session-1 --create");
+
+  assert.equal(manager.spawnCalls.length, 2);
+  const scriptLines = manager.spawnCalls[1]?.args.filter((arg) => arg !== "-e") ?? [];
+  assert.equal(scriptLines.some((line) => line.includes("do script")), false);
+  assert.equal(scriptLines.some((line) => line === "make new window"), false);
+  assert.equal(scriptLines.some((line) => line === "make new tab"), false);
 });
 
 test("materializePanelBindings 首次创建时返回面板绑定", async () => {

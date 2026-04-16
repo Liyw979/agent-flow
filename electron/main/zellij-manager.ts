@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { execFile, spawn, type SpawnOptions } from "node:child_process";
@@ -823,15 +824,30 @@ export class ZellijManager {
   }
 
   protected async openMacTerminalCommand(cwd: string, terminalCommand: string) {
-    const startupCommand = `cd ${this.shellQuote(cwd)}; exec /bin/sh -lc ${this.shellQuote(terminalCommand)}`;
+    const launchScriptPath = this.writeMacTerminalLaunchScript(cwd, terminalCommand);
+    const opened = await this.spawnDetachedProcess(
+      "open",
+      ["-a", "Terminal", launchScriptPath],
+      { cwd },
+    );
+    if (!opened) {
+      throw new Error("无法打开 Terminal 启动 Zellij 会话");
+    }
+
     const appleScript = [
       'tell application "Terminal"',
-      // `do script` already opens a fresh Terminal window. Calling `reopen`
-      // first leaves an extra login shell window behind when Terminal had no
-      // front window, which looks like an empty popup before Zellij attaches.
-      `do script ${JSON.stringify(startupCommand)}`,
       "activate",
       "end tell",
+      "repeat 100 times",
+      'tell application "System Events"',
+      'tell process "Terminal"',
+      "if (exists front window) then",
+      "exit repeat",
+      "end if",
+      "end tell",
+      "end tell",
+      "delay 0.05",
+      "end repeat",
       "delay 0.25",
       "set desktopBounds to missing value",
       "try",
@@ -880,6 +896,20 @@ export class ZellijManager {
       "end if",
     ];
     await this.spawnDetachedProcess("osascript", appleScript.flatMap((line) => ["-e", line]));
+  }
+
+  protected writeMacTerminalLaunchScript(cwd: string, terminalCommand: string): string {
+    const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-terminal-"));
+    const scriptPath = path.join(scriptDir, "launch.command");
+    const scriptContent = [
+      "#!/bin/sh",
+      `cd ${this.shellQuote(cwd)}`,
+      `exec /bin/sh -lc ${this.shellQuote(terminalCommand)}`,
+      "",
+    ].join("\n");
+    fs.writeFileSync(scriptPath, scriptContent, "utf8");
+    fs.chmodSync(scriptPath, 0o755);
+    return scriptPath;
   }
 
   protected async openWindowsCmdSession(
