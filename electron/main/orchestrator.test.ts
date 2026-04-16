@@ -6,10 +6,6 @@ import os from "node:os";
 import path from "node:path";
 
 import { DEFAULT_BUILTIN_AGENT_TEMPLATES } from "@shared/types";
-import {
-  REVIEW_RESPONSE_END_LABEL,
-  REVIEW_RESPONSE_LABEL,
-} from "@shared/review-response";
 import { Orchestrator } from "./orchestrator";
 
 function createTempDir() {
@@ -870,7 +866,7 @@ test("当前 Project 缺少 Build Agent 时禁止发送任务", async () => {
   );
 });
 
-test("审查回流再次派发时不会重复携带 [Initial Task]", async () => {
+test("审查失败会直接结束 Task，且不会再向 Build 二次派发", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = createTestOrchestrator({
@@ -935,17 +931,13 @@ test("审查回流再次派发时不会重复携带 [Initial Task]", async () =>
       return completedResponse(agent, count, "需求已澄清，交给 Build 继续实现。");
     }
     if (agent === "Build") {
-      return count === 1
-        ? completedResponse(agent, count, "构建已完成，交给 CodeReview 审查。")
-        : completedResponse(agent, count, "已根据审查意见修复完成。");
+      return completedResponse(agent, count, "构建已完成，交给 CodeReview 审查。");
     }
-    return count === 1
-      ? completedResponse(
-          agent,
-          count,
-          "审查未通过。\n\n<revision_request> 请修复构建结果。</revision_request>",
-        )
-      : completedResponse(agent, count, "审查通过。");
+    return completedResponse(
+      agent,
+      count,
+      "审查未通过。\n\n<revision_request> 请修复构建结果。</revision_request>",
+    );
   };
 
   let project = await orchestrator.createProject({ path: projectPath });
@@ -981,21 +973,19 @@ test("审查回流再次派发时不会重复携带 [Initial Task]", async () =>
     content: "@BA 请实现 add 方法，并准备审查修复。",
   });
 
-  await waitForTaskSnapshot(
+  const snapshot = await waitForTaskSnapshot(
     orchestrator,
     submittedTask.task.id,
     () =>
-      (promptByAgent.get("Build")?.length ?? 0) >= 2
-      && (promptByAgent.get("CodeReview")?.length ?? 0) >= 1,
+      (promptByAgent.get("Build")?.length ?? 0) === 1
+      && (promptByAgent.get("CodeReview")?.length ?? 0) === 1,
   );
 
+  assert.equal(snapshot.task.status, "failed");
   assert.match(promptByAgent.get("Build")?.[0] ?? "", /\[Initial Task\]/u);
   assert.doesNotMatch(promptByAgent.get("CodeReview")?.[0] ?? "", /\[Initial Task\]/u);
   assert.match(promptByAgent.get("CodeReview")?.[0] ?? "", /\[From Build Agent\]/u);
-  assert.doesNotMatch(promptByAgent.get("Build")?.[1] ?? "", /\[Initial Task\]/u);
-  assert.match(promptByAgent.get("Build")?.[1] ?? "", /\[From CodeReview Agent\]/u);
-  assert.doesNotMatch(promptByAgent.get("Build")?.[1] ?? "", new RegExp(REVIEW_RESPONSE_LABEL, "u"));
-  assert.doesNotMatch(promptByAgent.get("Build")?.[1] ?? "", new RegExp(REVIEW_RESPONSE_END_LABEL, "u"));
+  assert.equal(promptByAgent.get("Build")?.length, 1);
 });
 
 test("审查 Agent 的结构化 prompt 不会混入 Project Git Diff Summary", async () => {
@@ -1129,7 +1119,7 @@ test("审查 Agent 的结构化 prompt 不会混入 Project Git Diff Summary", a
   assert.equal(promptByAgent.get("Ops")?.length, 1);
 });
 
-test("Build 会并发触发首轮 reviewer，并在批次未收齐前不提前进入下一轮修复", async () => {
+test("审查 Agent 返回 revision_request 后会直接结束当前 Task，且不会自动回流到 Build", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = createTestOrchestrator({
@@ -1278,24 +1268,43 @@ test("Build 会并发触发首轮 reviewer，并在批次未收齐前不提前�
   assert.equal(codeReviewStarted, true);
 
   releaseUnitTest?.();
-  await new Promise((resolve) => setTimeout(resolve, 30));
-
+  const failedSnapshot = await waitForTaskSnapshot(
+    orchestrator,
+    submittedTask.task.id,
+    (snapshot) =>
+      snapshot.task.status === "failed"
+      && snapshot.messages.some(
+        (message) =>
+          message.sender === "system"
+          && message.meta?.kind === "task-completed"
+          && message.meta?.status === "failed",
+      ),
+  );
+  assert.equal(failedSnapshot.task.status, "failed");
   assert.equal(buildRunCount, 1);
 
   releaseTaskReview?.();
   releaseCodeReview?.();
 
-  const finishedSnapshot = await waitForTaskSnapshot(
+  const settledSnapshot = await waitForTaskSnapshot(
     orchestrator,
     submittedTask.task.id,
     (snapshot) =>
-      buildRunCount >= 2
-      && unitTestRunCount >= 2
-      && taskReviewRunCount >= 2
-      && codeReviewRunCount >= 2
-      && snapshot.task.status === "finished",
+      unitTestRunCount === 1
+      && taskReviewRunCount === 1
+      && codeReviewRunCount === 1
+      && snapshot.messages.some(
+        (message) => message.sender === "TaskReview" && message.meta?.kind === "agent-final",
+      )
+      && snapshot.messages.some(
+        (message) => message.sender === "CodeReview" && message.meta?.kind === "agent-final",
+      ),
   );
-  assert.equal(finishedSnapshot.task.status, "finished");
+  assert.equal(settledSnapshot.task.status, "failed");
+  assert.equal(buildRunCount, 1);
+  assert.equal(unitTestRunCount, 1);
+  assert.equal(taskReviewRunCount, 1);
+  assert.equal(codeReviewRunCount, 1);
 });
 
 test("审视类 system prompt 会使用真实来源 Agent 名称", () => {
@@ -1735,6 +1744,165 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
     ),
     true,
   );
+});
+
+test("并发审查失败时只追加一条任务结束系统消息", async () => {
+  const userDataPath = createTempDir();
+  const projectPath = createTempDir();
+
+  let releaseUnitTest: (() => void) | null = null;
+  const unitTestGate = new Promise<void>((resolve) => {
+    releaseUnitTest = resolve;
+  });
+  let releaseTaskReview: (() => void) | null = null;
+  const taskReviewGate = new Promise<void>((resolve) => {
+    releaseTaskReview = resolve;
+  });
+  let unitTestStarted = false;
+  let taskReviewStarted = false;
+
+  const orchestrator = createTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+    zellijManager: {
+      isAvailable: async () => true,
+      createTaskSession: async () => "oap-project-task",
+      createPanelBindings: () => [],
+      materializePanelBindings: async () => [],
+      openTaskSession: async () => undefined,
+      deleteTaskSession: async () => undefined,
+      setOpenCodeAttachBaseUrl: () => undefined,
+    } as never,
+  });
+
+  const typed = orchestrator as unknown as Orchestrator & {
+    opencodeClient: {
+      createSession: (projectPath: string, title: string) => Promise<string>;
+      reloadConfig: () => Promise<void>;
+    };
+    opencodeRunner: {
+      run: (payload: { agent: string }) => Promise<{
+        status: "completed";
+        finalMessage: string;
+        fallbackMessage: null;
+        messageId: string;
+        timestamp: string;
+        rawMessage: {
+          content: string;
+          error: string | null;
+        };
+      }>;
+    };
+  };
+  stubOpenCodeAttachBaseUrl(orchestrator);
+
+  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.reloadConfig = async () => undefined;
+  typed.opencodeRunner.run = async ({ agent }) => {
+    if (agent === "Build") {
+      return {
+        status: "completed",
+        finalMessage: "Build 已完成",
+        fallbackMessage: null,
+        messageId: "message:Build",
+        timestamp: "2026-04-17T00:00:00.000Z",
+        rawMessage: {
+          content: "Build 已完成",
+          error: null,
+        },
+      };
+    }
+
+    if (agent === "UnitTest") {
+      unitTestStarted = true;
+      await unitTestGate;
+      return {
+        status: "completed",
+        finalMessage: "UnitTest 未通过。\n\n<revision_request>请修复 UnitTest。</revision_request>",
+        fallbackMessage: null,
+        messageId: "message:UnitTest",
+        timestamp: "2026-04-17T00:00:01.000Z",
+        rawMessage: {
+          content: "UnitTest 未通过。\n\n<revision_request>请修复 UnitTest。</revision_request>",
+          error: null,
+        },
+      };
+    }
+
+    taskReviewStarted = true;
+    await taskReviewGate;
+    return {
+      status: "completed",
+      finalMessage: "TaskReview 未通过。\n\n<revision_request>请修复 TaskReview。</revision_request>",
+      fallbackMessage: null,
+      messageId: "message:TaskReview",
+      timestamp: "2026-04-17T00:00:02.000Z",
+      rawMessage: {
+        content: "TaskReview 未通过。\n\n<revision_request>请修复 TaskReview。</revision_request>",
+        error: null,
+      },
+    };
+  };
+
+  let project = await orchestrator.createProject({ path: projectPath });
+  project = await addBuiltinAgents(orchestrator, project.project.id, ["Build", "UnitTest", "TaskReview"]);
+  await orchestrator.saveTopology({
+    projectId: project.project.id,
+    topology: {
+      ...project.topology,
+      startAgentId: "Build",
+      nodes: ["Build", "UnitTest", "TaskReview"],
+      edges: [
+        { source: "Build", target: "UnitTest", triggerOn: "association" },
+        { source: "Build", target: "TaskReview", triggerOn: "association" },
+        { source: "UnitTest", target: "Build", triggerOn: "review_fail" },
+        { source: "TaskReview", target: "Build", triggerOn: "review_fail" },
+      ],
+    },
+  });
+
+  const submittedTask = await orchestrator.submitTask({
+    projectId: project.project.id,
+    content: "@Build 请完成这个需求。",
+  });
+
+  await waitForTaskSnapshot(
+    orchestrator,
+    submittedTask.task.id,
+    () => unitTestStarted && taskReviewStarted,
+  );
+
+  releaseUnitTest?.();
+  await waitForTaskSnapshot(
+    orchestrator,
+    submittedTask.task.id,
+    (snapshot) =>
+      snapshot.messages.filter(
+        (message) =>
+          message.sender === "system"
+          && message.meta?.kind === "task-completed"
+          && message.meta?.status === "failed",
+      ).length === 1,
+  );
+
+  releaseTaskReview?.();
+
+  const finishedSnapshot = await waitForTaskSnapshot(
+    orchestrator,
+    submittedTask.task.id,
+    (snapshot) =>
+      snapshot.messages.some(
+        (message) => message.sender === "TaskReview" && message.meta?.kind === "agent-final",
+      ),
+  );
+
+  const failedCompletionMessages = finishedSnapshot.messages.filter(
+    (message) =>
+      message.sender === "system"
+      && message.meta?.kind === "task-completed"
+      && message.meta?.status === "failed",
+  );
+  assert.equal(failedCompletionMessages.length, 1);
 });
 
 test("bootstrap does not delete unfinished tasks when zellij sessions are missing", async () => {
