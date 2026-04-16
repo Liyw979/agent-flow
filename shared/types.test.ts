@@ -63,6 +63,14 @@ test("存在 review 出边时 isReviewAgentInTopology 返回 true", () => {
   assert.equal(isReviewAgentInTopology(topology, "Build"), false);
 });
 
+test("BA 默认模板要求结合当前代码现状给出实施建议", () => {
+  const template = DEFAULT_BUILTIN_AGENT_TEMPLATES.find((item) => item.name === "BA");
+
+  assert.notEqual(template, undefined);
+  assert.match(template.prompt, /根据.*代码|结合.*代码|阅读.*代码/u);
+  assert.match(template.prompt, /实施建议|落地建议|推进建议/u);
+});
+
 test("UnitTest 默认模板使用单元测试审查文案", () => {
   const template = DEFAULT_BUILTIN_AGENT_TEMPLATES.find((item) => item.name === "UnitTest");
 
