@@ -36,6 +36,7 @@ import {
   type TaskPanelRecord,
   type TaskRecord,
   type TaskSnapshot,
+  type TopologyEdge,
   type TopologyRecord,
   type UpdateTopologyPayload,
   isReviewAgentInTopology,
@@ -56,6 +57,13 @@ import { OpenCodeClient } from "./opencode-client";
 import { OpenCodeRunner } from "./opencode-runner";
 import { StoreService } from "./store";
 import { ZellijManager } from "./zellij-manager";
+import {
+  OrchestratorScheduler,
+  createSchedulerRuntimeState,
+  type SchedulerAgentState,
+  type SchedulerBatchContinuation,
+  type SchedulerDispatchPlan,
+} from "./orchestrator-scheduler";
 
 const execFileAsync = promisify(execFile);
 
@@ -81,7 +89,7 @@ interface ParsedReview {
 
 interface GitSummaryCommandResult {
   stdout: string;
-  gitMissing: boolean;
+  unavailable: boolean;
 }
 
 interface TaskRuntimeState {
@@ -92,6 +100,12 @@ interface TaskRuntimeState {
   runningAgents: Set<string>;
   queuedAgents: Set<string>;
   queuedPromptsByAgent: Map<string, AgentExecutionPrompt>;
+  associationBatchPromptBySource: Map<string, {
+    userMessage?: string;
+    agentMessage?: string;
+    gitDiffSummary?: string;
+  }>;
+  pendingFailedReviewsByAgent: Map<string, ParsedReview>;
 }
 
 type AgentExecutionPrompt =
@@ -647,13 +661,11 @@ export class Orchestrator {
     }
 
     this.taskRuntime.set(taskId, {
-      completedEdges: new Set(),
-      edgeTriggerVersion: new Map(),
-      lastSignatureByAgent: new Map(),
+      ...createSchedulerRuntimeState(),
       hasForwardedInitialTask: false,
-      runningAgents: new Set(),
-      queuedAgents: new Set(),
       queuedPromptsByAgent: new Map(),
+      associationBatchPromptBySource: new Map(),
+      pendingFailedReviewsByAgent: new Map(),
     });
 
     const snapshot = this.hydrateTask(taskId);
@@ -935,11 +947,22 @@ export class Orchestrator {
           : [];
       const agentStatus = parsedReview.decision === "needs_revision" ? "failed" : "completed";
       this.store.updateTaskAgentStatus(task.id, agentName, agentStatus);
+      const scheduler = this.createScheduler(task.id, topology);
+      const batchContinuation = scheduler.recordAssociationBatchResponse(
+        agentName,
+        parsedReview.decision === "needs_revision" ? "fail" : "pass",
+        this.buildSchedulerAgentStates(task.id),
+      );
+      if (parsedReview.decision === "needs_revision" && reviewFailureTargets.length > 0) {
+        runtime.pendingFailedReviewsByAgent.set(agentName, parsedReview);
+      }
       if (behavior.updateTaskStatusOnStart ?? true) {
         this.store.updateTaskStatus(
           task.id,
           agentStatus === "failed" && reviewFailureTargets.length > 0
-            ? "needs_revision"
+            ? batchContinuation?.nextTargetToDispatch
+              ? "running"
+              : "needs_revision"
             : agentStatus === "failed" && directTargets.length > 0 && !reviewAgent
               ? "running"
               : agentStatus === "failed"
@@ -978,15 +1001,17 @@ export class Orchestrator {
 
       const signal = this.parseSignal(response.finalMessage);
       if (parsedReview.decision === "needs_revision") {
-        const reviewTriggered =
+        const reviewTriggered = await this.continueAfterAssociationBatchResponse(
+          project,
+          task.id,
+          batchContinuation,
           reviewFailureTargets.length > 0
-            ? await this.triggerReviewDownstream(
-                project,
-                task.id,
-                latestAgentFile,
-                parsedReview,
-              )
-            : 0;
+            ? {
+                agent: latestAgentFile,
+                review: parsedReview,
+              }
+            : undefined,
+        );
         if (reviewTriggered === 0 && (behavior.completeTaskOnFinish ?? true)) {
           await this.completeTask(task.id, "failed");
         }
@@ -1004,6 +1029,12 @@ export class Orchestrator {
             ? await this.triggerReviewPassDownstream(project, task.id, agentName, agentContextContent)
             : await this.triggerAssociationDownstream(project, task.id, agentName, agentContextContent, signal)
           : 0;
+      const batchTriggered = await this.continueAfterAssociationBatchResponse(
+        project,
+        task.id,
+        batchContinuation,
+      );
+      const totalTriggered = triggered + batchTriggered;
       const hasOtherRunningAgents = [...runtime.runningAgents].some((runningAgent) => runningAgent !== agentName);
       const hasQueuedAgents = runtime.queuedAgents.size > 0;
 
@@ -1014,7 +1045,7 @@ export class Orchestrator {
           (!hasOtherRunningAgents && !hasQueuedAgents && this.haveAllTaskAgentsCompleted(task.id)) ||
           (!hasOtherRunningAgents &&
             !hasQueuedAgents &&
-            triggered === 0 &&
+            totalTriggered === 0 &&
             this.hasSatisfiedIncomingAssociation(topology, runtime.completedEdges, agentName) &&
             this.hasSatisfiedOutgoingAssociation(topology, runtime.completedEdges, agentName))
         )
@@ -1024,7 +1055,7 @@ export class Orchestrator {
         (behavior.completeTaskOnFinish ?? true) &&
         !hasOtherRunningAgents &&
         !hasQueuedAgents &&
-        triggered === 0
+        totalTriggered === 0
       ) {
         this.moveTaskToWaiting(project.id, task.id, agentName);
       }
@@ -1114,59 +1145,40 @@ export class Orchestrator {
     sourceAgentId: string,
     sourceContent: string,
     _signal: ParsedSignal,
-    excludeTargets = new Set<string>(),
+    options: {
+      excludeTargets?: Set<string>;
+      restrictTargets?: Set<string>;
+      advanceSourceRevision?: boolean;
+      suppressSourceContentInDispatchMessage?: boolean;
+    } = {},
   ): Promise<number> {
-    const runtime = this.getRuntime(taskId);
     const topology = this.store.getTopology(project.id);
-    const agents = this.store.listTaskAgents(taskId);
-    const outgoing = this.getOutgoingEdges(topology, sourceAgentId, "association");
-    const completed = new Set(runtime.completedEdges);
-
-    for (const edge of outgoing) {
-      completed.add(edge.id);
-      runtime.completedEdges.add(edge.id);
-      runtime.edgeTriggerVersion.set(edge.id, (runtime.edgeTriggerVersion.get(edge.id) ?? 0) + 1);
-    }
-
-    const targetNames = new Set<string>();
-    for (const edge of outgoing) {
-      if (excludeTargets.has(edge.target)) {
-        continue;
-      }
-      targetNames.add(edge.target);
-    }
-
-    const readyTargets: string[] = [];
-    const queuedTargets = new Set<string>();
-    for (const targetName of targetNames) {
-      if (runtime.runningAgents.has(targetName)) {
-        runtime.queuedAgents.add(targetName);
-        queuedTargets.add(targetName);
-        continue;
-      }
-      if (this.canTriggerTarget(taskId, topology, completed, targetName, runtime)) {
-        readyTargets.push(targetName);
-      }
-    }
-
-    if (readyTargets.length === 0 && queuedTargets.size === 0) {
+    const scheduler = this.createScheduler(taskId, topology);
+    const plan = scheduler.planAssociationDispatch(
+      sourceAgentId,
+      sourceContent,
+      this.buildSchedulerAgentStates(taskId),
+      options,
+    );
+    if (!plan) {
       return 0;
     }
 
-    const triggerTargets = [...readyTargets, ...queuedTargets];
-
-    if (!this.shouldSuppressDuplicateDispatchMessage(project.id, taskId, sourceAgentId, triggerTargets)) {
+    if (!this.shouldSuppressDuplicateDispatchMessage(project.id, taskId, sourceAgentId, plan.triggerTargets)) {
       const triggerMessage: MessageRecord = {
         id: randomUUID(),
         projectId: project.id,
         taskId,
         sender: sourceAgentId,
         timestamp: new Date().toISOString(),
-        content: this.buildDispatchMessageContent(triggerTargets, sourceContent),
+        content: this.buildDispatchMessageContent(
+          plan.displayTargets,
+          options.suppressSourceContentInDispatchMessage ? "" : sourceContent,
+        ),
         meta: {
           kind: "agent-dispatch",
           sourceAgentId,
-          targetAgentIds: triggerTargets.join(","),
+          targetAgentIds: plan.triggerTargets.join(","),
         },
       };
       this.store.insertMessage(triggerMessage);
@@ -1182,31 +1194,21 @@ export class Orchestrator {
     const includeInitialTask = this.consumeInitialTaskForwardingAllowance(taskId);
     const forwardedContext = this.buildDownstreamForwardedContext(taskId, sourceContent, includeInitialTask);
 
-    await Promise.all(
-      readyTargets.map(async (targetName) => {
-        const targetAgent = agents.find((item) => item.name === targetName);
-        if (!targetAgent) {
-          return;
-        }
+    const runtime = this.getRuntime(taskId);
+    runtime.associationBatchPromptBySource.set(sourceAgentId, {
+      userMessage: forwardedContext.userMessage,
+      agentMessage: forwardedContext.agentMessage,
+      gitDiffSummary,
+    });
 
-        const signature = this.buildTriggerSignature(
-          topology,
-          completed,
-          targetName,
-          runtime.edgeTriggerVersion,
-        );
-        runtime.lastSignatureByAgent.set(targetName, signature);
-        await this.dispatchAgentRun(project, taskId, targetName, {
-          mode: "structured",
-          from: sourceAgentId,
-          userMessage: forwardedContext.userMessage,
-          agentMessage: forwardedContext.agentMessage,
-          gitDiffSummary: targetName === BUILD_AGENT_NAME ? undefined : gitDiffSummary,
-        });
-      }),
-    );
+    const firstTarget = plan.readyTargets[0] ?? plan.queuedTargets[0];
+    if (!firstTarget) {
+      return 0;
+    }
 
-    return triggerTargets.length;
+    await this.dispatchAssociationBatchTarget(project, taskId, sourceAgentId, firstTarget);
+
+    return plan.triggerTargets.length;
   }
 
   private async triggerReviewPassDownstream(
@@ -1215,76 +1217,61 @@ export class Orchestrator {
     sourceAgentId: string,
     sourceContent: string,
   ): Promise<number> {
-    const runtime = this.getRuntime(taskId);
     const topology = this.store.getTopology(project.id);
-    const outgoing = this.getOutgoingEdges(topology, sourceAgentId, "review_pass");
-    const completed = new Set(runtime.completedEdges);
-
-    for (const edge of outgoing) {
-      completed.add(edge.id);
-      runtime.completedEdges.add(edge.id);
-      runtime.edgeTriggerVersion.set(edge.id, (runtime.edgeTriggerVersion.get(edge.id) ?? 0) + 1);
+    const scheduler = this.createScheduler(taskId, topology);
+    const agentStates = this.buildSchedulerAgentStates(taskId);
+    const plans: SchedulerDispatchPlan[] = [];
+    const selfPlan = scheduler.planReviewPassDispatch(sourceAgentId, sourceContent, agentStates);
+    if (selfPlan) {
+      plans.push(selfPlan);
     }
 
-    const readyTargets: string[] = [];
-    for (const edge of outgoing) {
-      if (this.canTriggerTarget(taskId, topology, completed, edge.target, runtime)) {
-        readyTargets.push(edge.target);
-      }
-    }
-
-    if (readyTargets.length === 0) {
-      return 0;
-    }
-
-    const uniqueTargets = [...new Set(readyTargets)];
-    if (!this.shouldSuppressDuplicateDispatchMessage(project.id, taskId, sourceAgentId, uniqueTargets)) {
-      const triggerMessage: MessageRecord = {
-        id: randomUUID(),
-        projectId: project.id,
-        taskId,
-        sender: sourceAgentId,
-        timestamp: new Date().toISOString(),
-        content: this.buildDispatchMessageContent(uniqueTargets, sourceContent),
-        meta: {
-          kind: "agent-dispatch",
-          sourceAgentId,
-          targetAgentIds: uniqueTargets.join(","),
-        },
-      };
-      this.store.insertMessage(triggerMessage);
-      this.emit({
-        type: "message-created",
-        projectId: project.id,
-        payload: triggerMessage,
-      });
-    }
-
-    const currentTask = this.store.getTask(taskId);
-    const gitDiffSummary = await this.buildProjectGitDiffSummary(currentTask.cwd);
-    const includeInitialTask = this.consumeInitialTaskForwardingAllowance(taskId);
-    const forwardedContext = this.buildDownstreamForwardedContext(taskId, sourceContent, includeInitialTask);
-
-    await Promise.all(
-      uniqueTargets.map(async (targetName) => {
-        const signature = this.buildTriggerSignature(
-          topology,
-          completed,
-          targetName,
-          runtime.edgeTriggerVersion,
-        );
-        runtime.lastSignatureByAgent.set(targetName, signature);
-        await this.dispatchAgentRun(project, taskId, targetName, {
-          mode: "structured",
-          from: sourceAgentId,
-          userMessage: forwardedContext.userMessage,
-          agentMessage: forwardedContext.agentMessage,
-          gitDiffSummary: targetName === BUILD_AGENT_NAME ? undefined : gitDiffSummary,
+    const runPlan = async (plan: SchedulerDispatchPlan) => {
+      if (!this.shouldSuppressDuplicateDispatchMessage(project.id, taskId, plan.sourceAgentId, plan.triggerTargets)) {
+        const triggerMessage: MessageRecord = {
+          id: randomUUID(),
+          projectId: project.id,
+          taskId,
+          sender: plan.sourceAgentId,
+          timestamp: new Date().toISOString(),
+          content: this.buildDispatchMessageContent(plan.displayTargets, plan.sourceContent),
+          meta: {
+            kind: "agent-dispatch",
+            sourceAgentId: plan.sourceAgentId,
+            targetAgentIds: plan.triggerTargets.join(","),
+          },
+        };
+        this.store.insertMessage(triggerMessage);
+        this.emit({
+          type: "message-created",
+          projectId: project.id,
+          payload: triggerMessage,
         });
-      }),
-    );
+      }
 
-    return uniqueTargets.length;
+      const currentTask = this.store.getTask(taskId);
+      const gitDiffSummary = await this.buildProjectGitDiffSummary(currentTask.cwd);
+      const includeInitialTask = this.consumeInitialTaskForwardingAllowance(taskId);
+      const forwardedContext = this.buildDownstreamForwardedContext(taskId, plan.sourceContent, includeInitialTask);
+
+      await Promise.all(
+        plan.readyTargets.map(async (targetName) => {
+          await this.dispatchAgentRun(project, taskId, targetName, {
+            mode: "structured",
+            from: plan.sourceAgentId,
+            userMessage: forwardedContext.userMessage,
+            agentMessage: forwardedContext.agentMessage,
+            gitDiffSummary: this.shouldAttachGitDiffSummary(topology, targetName) ? gitDiffSummary : undefined,
+          });
+        }),
+      );
+    };
+
+    for (const plan of plans) {
+      await runPlan(plan);
+    }
+
+    return plans.reduce((total, plan) => total + plan.triggerTargets.length, 0);
   }
 
   private async triggerReviewDownstream(
@@ -1363,13 +1350,100 @@ export class Orchestrator {
             from: sourceAgent.name,
             userMessage,
             agentMessage: reviewContent,
-            gitDiffSummary: targetName === BUILD_AGENT_NAME ? undefined : gitDiffSummary,
+            gitDiffSummary: this.shouldAttachGitDiffSummary(topology, targetName) ? gitDiffSummary : undefined,
           },
         );
       }),
     );
 
     return reviewTargets.length;
+  }
+
+  private async dispatchAssociationBatchTarget(
+    project: ProjectRecord,
+    taskId: string,
+    sourceAgentId: string,
+    targetName: string,
+  ): Promise<number> {
+    const task = this.store.getTask(taskId);
+    const topology = this.store.getTopology(project.id);
+    const prompt = this.getRuntime(taskId).associationBatchPromptBySource.get(sourceAgentId);
+    if (!prompt) {
+      return 0;
+    }
+
+    await this.dispatchAgentRun(project, taskId, targetName, {
+      mode: "structured",
+      from: sourceAgentId,
+      userMessage: prompt.userMessage,
+      agentMessage: prompt.agentMessage,
+      gitDiffSummary: this.shouldAttachGitDiffSummary(topology, targetName) ? prompt.gitDiffSummary : undefined,
+    });
+
+    return 1;
+  }
+
+  private async continueAfterAssociationBatchResponse(
+    project: ProjectRecord,
+    taskId: string,
+    continuation: SchedulerBatchContinuation | null,
+    fallbackFailedReviewer?: {
+      agent: Pick<AgentFileRecord, "name">;
+      review: ParsedReview;
+    },
+  ): Promise<number> {
+    if (!continuation) {
+      if (!fallbackFailedReviewer) {
+        return 0;
+      }
+      return this.triggerReviewDownstream(
+        project,
+        taskId,
+        fallbackFailedReviewer.agent,
+        fallbackFailedReviewer.review,
+      );
+    }
+
+    if (continuation.nextTargetToDispatch) {
+      return this.dispatchAssociationBatchTarget(
+        project,
+        taskId,
+        continuation.sourceAgentId,
+        continuation.nextTargetToDispatch,
+      );
+    }
+
+    if (continuation.repairReviewerAgentId) {
+      const runtime = this.getRuntime(taskId);
+      const storedReview = runtime.pendingFailedReviewsByAgent.get(continuation.repairReviewerAgentId);
+      if (!storedReview) {
+        return 0;
+      }
+      runtime.pendingFailedReviewsByAgent.delete(continuation.repairReviewerAgentId);
+      return this.triggerReviewDownstream(
+        project,
+        taskId,
+        { name: continuation.repairReviewerAgentId },
+        storedReview,
+      );
+    }
+
+    if (continuation.redispatchTargets.length > 0) {
+      return this.triggerAssociationDownstream(
+        project,
+        taskId,
+        continuation.sourceAgentId,
+        continuation.sourceContent,
+        { done: false },
+        {
+          restrictTargets: new Set(continuation.redispatchTargets),
+          advanceSourceRevision: false,
+          suppressSourceContentInDispatchMessage: true,
+        },
+      );
+    }
+
+    return 0;
   }
 
   private shouldSuppressDuplicateDispatchMessage(
@@ -1410,62 +1484,11 @@ export class Orchestrator {
     return false;
   }
 
-  private canTriggerTarget(
-    taskId: string,
+  private shouldAttachGitDiffSummary(
     topology: TopologyRecord,
-    completedEdges: Set<string>,
-    targetName: string,
-    runtime: TaskRuntimeState,
+    targetAgentName: string,
   ): boolean {
-    if (runtime.runningAgents.has(targetName)) {
-      return false;
-    }
-
-    const agents = this.store.listTaskAgents(taskId);
-    const agent = agents.find((item) => item.name === targetName);
-    if (!agent) {
-      return false;
-    }
-
-    const incomingSuccessEdges = this.getIncomingEdges(topology, targetName, "association")
-      .concat(this.getIncomingEdges(topology, targetName, "review_pass"));
-    if (incomingSuccessEdges.some((edge) => !completedEdges.has(edge.id))) {
-      return false;
-    }
-
-    const signature = this.buildTriggerSignature(
-      topology,
-      completedEdges,
-      targetName,
-      runtime.edgeTriggerVersion,
-    );
-    if (
-      runtime.lastSignatureByAgent.get(targetName) === signature &&
-      agent.status !== "failed" &&
-      agent.status !== "needs_revision"
-    ) {
-      return false;
-    }
-
-    return true;
-  }
-
-  private buildTriggerSignature(
-    topology: TopologyRecord,
-    completedEdges: Set<string>,
-    targetName: string,
-    edgeTriggerVersion = new Map<string, number>(),
-  ): string {
-    const relevantEdgeIds = topology.edges
-      .filter(
-        (edge) =>
-          edge.target === targetName &&
-          (edge.triggerOn === "association" || edge.triggerOn === "review_pass") &&
-          completedEdges.has(edge.id),
-      )
-      .map((edge) => `${edge.id}@${edgeTriggerVersion.get(edge.id) ?? 0}`)
-      .sort();
-    return relevantEdgeIds.join("|") || `direct:${targetName}`;
+    return targetAgentName !== BUILD_AGENT_NAME && !this.isReviewAgent({ name: targetAgentName }, topology);
   }
 
   private hasSatisfiedIncomingAssociation(
@@ -1489,16 +1512,9 @@ export class Orchestrator {
   }
 
   private invalidateDownstreamTriggerSignatures(taskId: string, agentName: string) {
-    const runtime = this.getRuntime(taskId);
     const task = this.store.getTask(taskId);
     const topology = this.store.getTopology(task.projectId);
-    const downstreamTargets = this.getOutgoingEdges(topology, agentName, "association")
-      .concat(this.getOutgoingEdges(topology, agentName, "review_pass"))
-      .map((edge) => edge.target);
-
-    for (const targetName of downstreamTargets) {
-      runtime.lastSignatureByAgent.delete(targetName);
-    }
+    this.createScheduler(taskId, topology).invalidateDownstreamTriggerSignatures(agentName);
   }
 
   private getPersistedCompletionSeedAgentNames(taskId: string): string[] {
@@ -1691,7 +1707,7 @@ export class Orchestrator {
         this.runGitSummaryCommand(cwd, ["diff", "--stat", "--compact-summary"]),
       ]);
 
-      if (statusResult.gitMissing || stagedStatResult.gitMissing || unstagedStatResult.gitMissing) {
+      if (statusResult.unavailable || stagedStatResult.unavailable || unstagedStatResult.unavailable) {
         return "";
       }
 
@@ -1746,20 +1762,42 @@ export class Orchestrator {
       });
       return {
         stdout: result.stdout,
-        gitMissing: false,
+        unavailable: false,
       };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      if (this.isGitSummaryUnavailableError(error)) {
         return {
           stdout: "",
-          gitMissing: true,
+          unavailable: true,
         };
       }
       return {
         stdout: "",
-        gitMissing: false,
+        unavailable: false,
       };
     }
+  }
+
+  private isGitSummaryUnavailableError(error: unknown): boolean {
+    const errnoError = error as NodeJS.ErrnoException | undefined;
+    if (errnoError?.code === "ENOENT") {
+      return true;
+    }
+
+    const stderr = typeof (error as { stderr?: unknown } | undefined)?.stderr === "string"
+      ? (error as { stderr: string }).stderr
+      : "";
+    if (!stderr) {
+      return false;
+    }
+
+    return [
+      /not a git repository/i,
+      /cannot change to ['"].*['"]/i,
+      /不是 git 仓库/i,
+      /无法切换到 ['"].*['"]/i,
+      /不是一个 git 仓库/i,
+    ].some((pattern) => pattern.test(stderr));
   }
 
   private limitGitSummaryLines(lines: string[], maxLines: number): string[] {
@@ -2366,17 +2404,26 @@ export class Orchestrator {
     let runtime = this.taskRuntime.get(taskId);
     if (!runtime) {
       runtime = {
-        completedEdges: new Set(),
-        edgeTriggerVersion: new Map(),
-        lastSignatureByAgent: new Map(),
+        ...createSchedulerRuntimeState(),
         hasForwardedInitialTask: false,
-        runningAgents: new Set(),
-        queuedAgents: new Set(),
         queuedPromptsByAgent: new Map(),
+        associationBatchPromptBySource: new Map(),
+        pendingFailedReviewsByAgent: new Map(),
       };
       this.taskRuntime.set(taskId, runtime);
     }
     return runtime;
+  }
+
+  private createScheduler(taskId: string, topology: TopologyRecord): OrchestratorScheduler {
+    return new OrchestratorScheduler(topology, this.getRuntime(taskId));
+  }
+
+  private buildSchedulerAgentStates(taskId: string): SchedulerAgentState[] {
+    return this.store.listTaskAgents(taskId).map((agent) => ({
+      name: agent.name,
+      status: agent.status,
+    }));
   }
 
   private getOutgoingEdges(

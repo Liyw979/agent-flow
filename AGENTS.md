@@ -75,6 +75,7 @@
 ### 3.3 拓扑与调度
 
 - 拓扑边只保留一种触发语义：`success`，表示当前 Agent 审查通过或执行完成后自动触发下游。
+- 当某个 Agent 存在“直接下游通过 `association` 触发、且该下游会用 `review_fail` 直接回流给自己、同时该下游没有 `review_pass` 下游”的审查回路时，系统会先只放行这类直接审查回路；只有这些回路全部通过后，才会继续放行该 Agent 其余直接 `association` 下游，避免 Build 与单个审查 Agent 多轮对话时反复提前触发无关下游。
 - 团队成员列表支持直接调整 Agent 顺序；该顺序会持久化到拓扑配置，并直接决定拓扑图从左到右的节点排列。
 - 拓扑图中的 Agent 节点顺序是稳定的：未显式保存顺序时，默认优先取当前列表首个 Agent 作为最左侧起点。
 - 拓扑节点顶部直接展示 Agent 当前状态徽标，包括 `未启动 / 运行中 / 已完成 / 执行失败`；审查类 Agent 则显示 `审查通过 / 审查不通过`。
@@ -89,7 +90,7 @@
 - 当一个 Agent 同时触发多个下游 Agent 时，聊天区会合并展示为一条批量 `Agent -> Agent` 派发消息，而不是拆成多条重复消息。
 - 这类批量 `Agent -> Agent` 派发消息仅用于聊天区展示给人看，不会作为“尚未收到的群聊历史”再次转发给下游 Agent。
 - Agent 自动触发下游 Agent 时，只有首次自动流转会封装 `[Initial Task]` 与 `[From <AgentName> Agent]` 结构化段落；后续 Agent 间继续流转时只保留 `[From <AgentName> Agent]`，其中 `[Initial Task]` 固定承载当前 Task 的首条用户任务。
-- 对非 `Build` 下游，系统会在 `[Project Git Diff Summary]` 段附带当前 Project Git Diff 的精简摘要，帮助下游 Agent 快速感知最新改动；发给 `Build` 时不附带该段。
+- 对非 `Build` 且非审查类的下游，系统会在 `[Project Git Diff Summary]` 段附带当前 Project Git Diff 的精简摘要，帮助下游 Agent 快速感知最新改动；发给 `Build` 或审查类 Agent 时不附带该段，避免把辅助上下文误判为待审正文。
 - Agent 自动派发下游时，不会额外补充整段群聊历史，但会携带本轮需要的首条用户任务与当前上游结果；若上游结果已完整包含用户消息，会自动去重。
 - 群聊落库与 Agent 间转发只使用 OpenCode 返回消息里的公开 `text` part；`reasoning`、步骤和工具调用不会混入群聊正文或下游 prompt。
 - 同一个 Agent 的最终回复后若紧接着自动向下游传递，群聊会把“最终回复 + 下游派发提示”合并成同一条消息；合并后只追加 `@目标Agent` 标记，避免连续出现两条重复的同名 Agent 卡片。
