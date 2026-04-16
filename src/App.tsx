@@ -6,7 +6,14 @@ import { TopologyGraph } from "./components/TopologyGraph";
 import { getAgentColorToken } from "./lib/agent-colors";
 import { useAgentFlowStore } from "./store/useAgentFlowStore";
 import { resolveTopologyAgentOrder, usesOpenCodeBuiltinPrompt } from "@shared/types";
-import type { AgentRuntimeSnapshot, MessageRecord, TaskSnapshot, TopologyRecord } from "@shared/types";
+import type {
+  AgentRuntimeSnapshot,
+  MessageRecord,
+  ProjectSnapshot,
+  RuntimeUpdatedEventPayload,
+  TaskSnapshot,
+  TopologyRecord,
+} from "@shared/types";
 
 interface OptimisticSubmission {
   id: string;
@@ -67,14 +74,33 @@ function App() {
   const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, AgentRuntimeSnapshot>>(
     {},
   );
+  const [runtimeRefreshToken, setRuntimeRefreshToken] = useState(0);
   const [draggingAgentId, setDraggingAgentId] = useState<string | null>(null);
   const [dragOverAgentId, setDragOverAgentId] = useState<string | null>(null);
   const [openingAgentPaneId, setOpeningAgentPaneId] = useState<string | null>(null);
   const [agentPaneActionError, setAgentPaneActionError] = useState<string | null>(null);
   const suppressNextAgentCardClickRef = useRef(false);
+  const runtimeEventContextRef = useRef<{
+    projects: ProjectSnapshot[];
+    selectedProjectId: string | null;
+    selectedTaskId: string | null;
+  }>({
+    projects: [],
+    selectedProjectId: null,
+    selectedTaskId: null,
+  });
+
+  useEffect(() => {
+    runtimeEventContextRef.current = {
+      projects,
+      selectedProjectId,
+      selectedTaskId,
+    };
+  }, [projects, selectedProjectId, selectedTaskId]);
 
   useEffect(() => {
     let cancelled = false;
+    let pendingRuntimeRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
     const refreshProjects = async () => {
       const snapshots = await window.agentFlow.bootstrap();
@@ -85,6 +111,38 @@ function App() {
 
     void refreshProjects();
     const unsubscribe = window.agentFlow.onAgentFlowEvent((event) => {
+      const {
+        projects: currentProjects,
+        selectedProjectId: currentSelectedProjectId,
+        selectedTaskId: currentSelectedTaskId,
+      } = runtimeEventContextRef.current;
+
+      if (event.type === "runtime-updated" && event.projectId === currentSelectedProjectId) {
+        const payload = event.payload as RuntimeUpdatedEventPayload;
+        const currentProject = currentProjects.find(
+          (project) => project.project.id === currentSelectedProjectId,
+        );
+        const currentTask = currentProject?.tasks.find((task) => task.task.id === currentSelectedTaskId);
+        const activeSessionIds = new Set(
+          currentTask?.agents
+            .map((agent) => agent.opencodeSessionId)
+            .filter((sessionId): sessionId is string => Boolean(sessionId)),
+        );
+
+        if (payload.sessionId && activeSessionIds.size > 0 && !activeSessionIds.has(payload.sessionId)) {
+          return;
+        }
+
+        if (pendingRuntimeRefreshTimer) {
+          globalThis.clearTimeout(pendingRuntimeRefreshTimer);
+        }
+        pendingRuntimeRefreshTimer = globalThis.setTimeout(() => {
+          if (!cancelled) {
+            setRuntimeRefreshToken((current) => current + 1);
+          }
+          pendingRuntimeRefreshTimer = null;
+        }, 120);
+      }
       applyEvent(event);
     });
 
@@ -94,6 +152,9 @@ function App() {
 
     return () => {
       cancelled = true;
+      if (pendingRuntimeRefreshTimer) {
+        globalThis.clearTimeout(pendingRuntimeRefreshTimer);
+      }
       globalThis.clearInterval(timer);
       unsubscribe();
     };
@@ -242,7 +303,7 @@ function App() {
     if (activeTaskView.agents.some((agent) => agent.opencodeSessionId)) {
       timer = globalThis.setInterval(() => {
         void loadRuntime();
-      }, 1500);
+      }, 1000);
     }
 
     return () => {
@@ -251,7 +312,7 @@ function App() {
         globalThis.clearInterval(timer);
       }
     };
-  }, [activeProject, activeTaskView, runtimePollKey]);
+  }, [activeProject, activeTaskView, runtimePollKey, runtimeRefreshToken]);
 
   async function saveAgentOrder(nextOrderIds: string[]) {
     if (!activeProject) {

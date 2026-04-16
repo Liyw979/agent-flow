@@ -248,6 +248,60 @@ test("zellij 不可用时会追加系统提醒", async () => {
   assert.equal(task.messages.some((message) => message.meta?.kind === "zellij-missing"), true);
 });
 
+test("OpenCode 事件会触发 runtime-updated 前端事件", async () => {
+  const userDataPath = createTempDir();
+  const projectPath = createTempDir();
+  const orchestrator = createTestOrchestrator({
+    userDataPath,
+    enableEventStream: true,
+  });
+  const sentEvents: unknown[] = [];
+  orchestrator.attachWindow({
+    webContents: {
+      send: (_channel: string, event: unknown) => {
+        sentEvents.push(event);
+      },
+    },
+  } as never);
+
+  let eventHandler: ((event: unknown) => void) | null = null;
+  const typed = orchestrator as unknown as Orchestrator & {
+    opencodeClient: {
+      connectEvents: (projectPath: string, onEvent: (event: unknown) => void) => Promise<void>;
+    };
+  };
+  typed.opencodeClient.connectEvents = async (_projectPath, onEvent) => {
+    eventHandler = onEvent;
+  };
+
+  const project = await orchestrator.createProject({ path: projectPath });
+  assert.notEqual(eventHandler, null);
+
+  eventHandler?.({
+    type: "session.updated",
+    properties: {
+      sessionID: "session-build-1",
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 220));
+
+  const runtimeUpdatedEvent = sentEvents.find(
+    (event) =>
+      typeof event === "object" &&
+      event !== null &&
+      "type" in event &&
+      (event as { type?: string }).type === "runtime-updated",
+  ) as {
+    type: string;
+    projectId: string;
+    payload?: { sessionId?: string | null };
+  } | undefined;
+
+  assert.notEqual(runtimeUpdatedEvent, undefined);
+  assert.equal(runtimeUpdatedEvent?.projectId, project.project.id);
+  assert.equal(runtimeUpdatedEvent?.payload?.sessionId, "session-build-1");
+});
+
 test("内置模板可按 Project 单独覆盖且不会直接写入 agentFiles", async () => {
   const userDataPath = createTempDir();
   const projectAPath = createTempDir();

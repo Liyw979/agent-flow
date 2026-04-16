@@ -262,6 +262,11 @@ export interface DeleteAgentPayload {
   agentName: string;
 }
 
+export interface RuntimeUpdatedEventPayload {
+  sessionId: string | null;
+  timestamp: string;
+}
+
 export interface AgentFlowEvent {
   type:
     | "project-created"
@@ -269,7 +274,8 @@ export interface AgentFlowEvent {
     | "task-created"
     | "task-updated"
     | "message-created"
-    | "agent-status-changed";
+    | "agent-status-changed"
+    | "runtime-updated";
   projectId: string;
   payload: unknown;
 }

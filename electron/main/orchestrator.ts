@@ -123,6 +123,8 @@ export class Orchestrator {
   private readonly autoOpenTaskSession: boolean;
   private readonly enableEventStream: boolean;
   private readonly connectedEventProjects = new Set<string>();
+  private readonly pendingRuntimeRefreshProjects = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pendingEventReconnects = new Map<string, ReturnType<typeof setTimeout>>();
   private window: BrowserWindow | null = null;
 
   constructor(options: OrchestratorOptions) {
@@ -152,6 +154,10 @@ export class Orchestrator {
   }
 
   async dispose() {
+    this.pendingRuntimeRefreshProjects.forEach((timer) => clearTimeout(timer));
+    this.pendingRuntimeRefreshProjects.clear();
+    this.pendingEventReconnects.forEach((timer) => clearTimeout(timer));
+    this.pendingEventReconnects.clear();
     await this.opencodeClient.shutdown();
   }
 
@@ -2375,9 +2381,84 @@ export class Orchestrator {
     return name;
   }
 
+  private asRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  }
+
+  private findProjectRecordByPath(projectPath: string): ProjectRecord | null {
+    const normalized = path.resolve(projectPath);
+    return (
+      this.store.listProjects().find((project) => path.resolve(project.path) === normalized) ?? null
+    );
+  }
+
+  private extractSessionIdFromOpenCodeEvent(event: unknown): string | null {
+    const record = this.asRecord(event);
+    const properties = this.asRecord(record.properties);
+    const payload = this.asRecord(record.payload);
+    const candidates = [
+      record.sessionID,
+      record.sessionId,
+      properties.sessionID,
+      properties.sessionId,
+      payload.sessionID,
+      payload.sessionId,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim()) {
+        return candidate.trim();
+      }
+    }
+
+    return null;
+  }
+
+  private scheduleRuntimeRefresh(projectPath: string, sessionId: string | null) {
+    const project = this.findProjectRecordByPath(projectPath);
+    if (!project) {
+      return;
+    }
+
+    const existing = this.pendingRuntimeRefreshProjects.get(project.id);
+    if (existing) {
+      clearTimeout(existing);
+    }
+
+    const timer = setTimeout(() => {
+      this.pendingRuntimeRefreshProjects.delete(project.id);
+      this.emit({
+        type: "runtime-updated",
+        projectId: project.id,
+        payload: {
+          sessionId,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }, 120);
+    this.pendingRuntimeRefreshProjects.set(project.id, timer);
+  }
+
+  private scheduleEventStreamReconnect(projectPath: string) {
+    const normalized = path.resolve(projectPath);
+    if (this.pendingEventReconnects.has(normalized)) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this.pendingEventReconnects.delete(normalized);
+      if (!this.findProjectRecordByPath(normalized)) {
+        return;
+      }
+      void this.ensureEventStream(normalized);
+    }, 1000);
+    this.pendingEventReconnects.set(normalized, timer);
+  }
+
   private emit(event: AgentFlowEvent) {
     this.events.emit("agentflow-event", event);
   }
+
   private async ensureEventStream(projectPath?: string) {
     if (!this.enableEventStream) {
       return;
@@ -2389,7 +2470,14 @@ export class Orchestrator {
         return;
       }
       this.connectedEventProjects.add(normalized);
-      void this.opencodeClient.connectEvents(normalized, () => undefined);
+      void this.opencodeClient.connectEvents(normalized, (event) => {
+        this.scheduleRuntimeRefresh(normalized, this.extractSessionIdFromOpenCodeEvent(event));
+      })
+        .catch(() => undefined)
+        .finally(() => {
+          this.connectedEventProjects.delete(normalized);
+          this.scheduleEventStreamReconnect(normalized);
+        });
       return;
     }
 
