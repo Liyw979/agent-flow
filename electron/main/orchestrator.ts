@@ -940,7 +940,7 @@ export class Orchestrator {
         runtime.pendingFailedReviewsByAgent.set(agentName, parsedReview);
       }
       if (behavior.updateTaskStatusOnStart ?? true) {
-        this.store.updateTaskStatus(
+        this.updateTaskStatusIfActive(
           task.id,
           agentStatus === "failed" && reviewFailureTargets.length > 0
             ? (batchContinuation?.pendingTargets.length ?? 0) > 0
@@ -984,18 +984,7 @@ export class Orchestrator {
 
       const signal = this.parseSignal(response.finalMessage);
       if (parsedReview.decision === "needs_revision") {
-        const reviewTriggered = await this.continueAfterAssociationBatchResponse(
-          project,
-          task.id,
-          batchContinuation,
-          reviewFailureTargets.length > 0
-            ? {
-                agent: latestAgentFile,
-                review: parsedReview,
-              }
-            : undefined,
-        );
-        if (reviewTriggered === 0 && (behavior.completeTaskOnFinish ?? true)) {
+        if (behavior.completeTaskOnFinish ?? true) {
           await this.completeTask(task.id, "failed");
         }
         this.emit({
@@ -1058,7 +1047,7 @@ export class Orchestrator {
       const associationTargets = this.getOutgoingEdges(topology, agentName, "association");
       const reviewAgent = this.isReviewAgent({ name: agentName }, topology);
       if (behavior.updateTaskStatusOnStart ?? true) {
-        this.store.updateTaskStatus(
+        this.updateTaskStatusIfActive(
           task.id,
           associationTargets.length > 0 && !reviewAgent
             ? "running"
@@ -1321,7 +1310,7 @@ export class Orchestrator {
       });
     }
 
-    this.store.updateTaskStatus(taskId, "needs_revision", null);
+    this.updateTaskStatusIfActive(taskId, "needs_revision", null);
     this.emit({
       type: "task-updated",
       projectId: project.id,
@@ -1388,6 +1377,10 @@ export class Orchestrator {
       review: ParsedReview;
     },
   ): Promise<number> {
+    if (this.isTaskTerminal(taskId)) {
+      return 0;
+    }
+
     const action = resolveFailedReviewContinuationAction({
       continuation,
       hasFallbackFailedReviewer: Boolean(fallbackFailedReviewer),
@@ -1513,6 +1506,22 @@ export class Orchestrator {
   private haveAllTaskAgentsCompleted(taskId: string): boolean {
     const agents = this.store.listTaskAgents(taskId);
     return agents.length > 0 && agents.every((agent) => agent.status === "completed");
+  }
+
+  private isTaskTerminal(taskId: string): boolean {
+    return isTerminalTaskStatus(this.store.getTask(taskId).status);
+  }
+
+  private updateTaskStatusIfActive(
+    taskId: string,
+    status: TaskRecord["status"],
+    completedAt: string | null = null,
+  ): boolean {
+    if (this.isTaskTerminal(taskId)) {
+      return false;
+    }
+    this.store.updateTaskStatus(taskId, status, completedAt);
+    return true;
   }
 
   private async reconcileTaskCompletionAfterAgentSettles(taskId: string) {
@@ -2268,7 +2277,9 @@ export class Orchestrator {
       return;
     }
 
-    this.store.updateTaskStatus(taskId, "waiting", null);
+    if (!this.updateTaskStatusIfActive(taskId, "waiting", null)) {
+      return;
+    }
     const waitingMessage = {
       id: randomUUID(),
       projectId,
