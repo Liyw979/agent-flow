@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getMentionContext, getMentionOptions } from "./chat-mentions";
+import { getMentionContext, getMentionOptions, getMentionOptionItems } from "./chat-mentions";
 
 test("getMentionOptions preserves the configured agent order", () => {
   const options = getMentionOptions(["Build", "Security", "CodeReview"], "");
@@ -28,4 +28,16 @@ test("getMentionContext only returns a context while editing an @mention", () =>
     end: "ask @CodeReview".length,
     query: "CodeReview",
   });
+});
+
+test("getMentionOptionItems returns the labels needed by the mention menu", () => {
+  const items = getMentionOptionItems(["Build", "Security", "CodeReview"], "view");
+
+  assert.deepEqual(items, [
+    {
+      agentName: "CodeReview",
+      displayName: "CodeReview",
+      mentionLabel: "@CodeReview",
+    },
+  ]);
 });

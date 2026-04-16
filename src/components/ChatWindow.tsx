@@ -3,7 +3,11 @@ import { resolveBuildAgentName, type ProjectSnapshot, type TaskSnapshot } from "
 import { cn } from "@/lib/utils";
 import { getAgentColorToken } from "@/lib/agent-colors";
 import { mergeTaskChatMessages, type ChatMessageItem } from "@/lib/chat-messages";
-import { getMentionContext, getMentionOptions, type MentionContext } from "@/lib/chat-mentions";
+import {
+  getMentionContext,
+  getMentionOptionItems,
+  type MentionContext,
+} from "@/lib/chat-mentions";
 import { getPanelHeaderActionButtonClass } from "@/lib/panel-header-action-button";
 import { formatChatTranscript, getChatSenderLabel } from "@/lib/chat-transcript";
 
@@ -229,11 +233,13 @@ export function ChatWindow({
     if (mentionQuery === null) {
       return [];
     }
-    return getMentionOptions(availableAgents, mentionQuery);
+    return getMentionOptionItems(availableAgents, mentionQuery);
   }, [availableAgents, mentionQuery]);
 
   useEffect(() => {
-    const defaultIndex = defaultAgentName ? mentionOptions.indexOf(defaultAgentName) : -1;
+    const defaultIndex = defaultAgentName
+      ? mentionOptions.findIndex((option) => option.agentName === defaultAgentName)
+      : -1;
     setActiveIndex(defaultIndex >= 0 ? defaultIndex : 0);
   }, [defaultAgentName, mentionOptions]);
 
@@ -313,7 +319,7 @@ export function ChatWindow({
 
     const textarea = textareaRef.current;
     if (nextContext && textarea) {
-      const matchingOptions = getMentionOptions(availableAgents, nextContext.query);
+      const matchingOptions = getMentionOptionItems(availableAgents, nextContext.query);
       updateMenuPosition(textarea, caret, matchingOptions.length);
     }
   }
@@ -531,12 +537,16 @@ export function ChatWindow({
                   }
                   if (event.key === "Tab") {
                     event.preventDefault();
-                    applyMention(mentionOptions[activeIndex] ?? mentionOptions[0]);
+                    applyMention(
+                      mentionOptions[activeIndex]?.agentName ?? mentionOptions[0]?.agentName ?? "",
+                    );
                     return;
                   }
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
-                    applyMention(mentionOptions[activeIndex] ?? mentionOptions[0]);
+                    applyMention(
+                      mentionOptions[activeIndex]?.agentName ?? mentionOptions[0]?.agentName ?? "",
+                    );
                     return;
                   }
                   if (event.key === "Escape") {
@@ -581,23 +591,23 @@ export function ChatWindow({
                   Agents
                 </p>
                 <div className="space-y-1">
-                  {mentionOptions.map((agentName, index) => (
+                  {mentionOptions.map((option, index) => (
                     <button
-                      key={agentName}
+                      key={option.agentName}
                       type="button"
                       onMouseDown={(event) => {
                         event.preventDefault();
-                        applyMention(agentName);
+                        applyMention(option.agentName);
                       }}
                       className={cn(
                         "no-drag w-full rounded-[6px] px-3 py-2 text-left text-sm transition",
                         index === activeIndex
                           ? "bg-primary text-primary-foreground"
                           : "hover:bg-muted",
-                      )}
+                        )}
                     >
-                      <span className="font-medium">{getAgentDisplayName(agentName)}</span>
-                      <span className="ml-2 text-xs opacity-70">@{agentName}</span>
+                      <span className="font-medium">{option.displayName}</span>
+                      <span className="ml-2 text-xs opacity-70">{option.mentionLabel}</span>
                     </button>
                   ))}
                 </div>

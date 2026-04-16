@@ -4,6 +4,12 @@ export interface MentionContext {
   query: string;
 }
 
+export interface MentionOptionItem {
+  agentName: string;
+  displayName: string;
+  mentionLabel: string;
+}
+
 export function getMentionContext(value: string, caret: number): MentionContext | null {
   const prefix = value.slice(0, caret);
   const match = prefix.match(/(?:^|\s)@([^\s@]*)$/);
@@ -30,4 +36,12 @@ export function getMentionOptions(availableAgents: string[], query: string): str
   }
 
   return availableAgents.filter((name) => name.toLowerCase().includes(normalizedQuery));
+}
+
+export function getMentionOptionItems(availableAgents: string[], query: string): MentionOptionItem[] {
+  return getMentionOptions(availableAgents, query).map((agentName) => ({
+    agentName,
+    displayName: agentName,
+    mentionLabel: `@${agentName}`,
+  }));
 }
