@@ -1,6 +1,6 @@
 import type { ChatMessageItem } from "./chat-messages";
 
-export const SYSTEM_SENDER_LABEL = "Ocustrater";
+export const SYSTEM_SENDER_LABEL = "Orchestrator";
 
 interface FormatChatTranscriptOptions {
   locale?: string;

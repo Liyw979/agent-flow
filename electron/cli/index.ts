@@ -38,7 +38,7 @@ interface CliContext {
   customAgentConfigPath: string;
 }
 
-const SYSTEM_SENDER_LABEL = "Ocustrater";
+const SYSTEM_SENDER_LABEL = "Orchestrator";
 
 function parseArgv(argv: string[]): ParsedArgv {
   const positionals: string[] = [];

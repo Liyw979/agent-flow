@@ -1637,16 +1637,6 @@ export class Orchestrator {
   private parseReview(content: string, reviewAgent: boolean): ParsedReview {
     const signalMatch = extractTrailingReviewSignalBlock(content);
     if (!signalMatch) {
-      if (reviewAgent) {
-        return {
-          cleanContent: this.stripStructuredSignals(content),
-          decision: "invalid",
-          opinion: null,
-          rawDecisionBlock: null,
-          validationError: "（该审查结果无效：必须显式包含 <chalenge> 或 <agree> 标签，右侧结束标签可选。）",
-        };
-      }
-
       return {
         cleanContent: this.stripStructuredSignals(content),
         decision: "pass",

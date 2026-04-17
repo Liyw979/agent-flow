@@ -32,7 +32,7 @@ test("formatChatTranscript 会把聊天消息整理成可复制的对话记录",
   assert.equal(
     transcript,
     [
-      "Ocustrater",
+      "Orchestrator",
       "2026/4/16 16:31:59",
       "Task 已创建并完成初始化, Zellij Session: oap-d82886-552138",
       "",
