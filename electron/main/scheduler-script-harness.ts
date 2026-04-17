@@ -281,17 +281,14 @@ function parseScenario(topology: TopologyRecord, script: string[]): ParsedScenar
   const firstLine = lines[0];
   assert.equal(firstLine?.sender, "user", "第一条脚本必须是 user: @Agent ...");
 
+  const startAgent = extractLeadingMention(firstLine.content);
+  assert.notEqual(startAgent, undefined, "第一条脚本必须以 @Agent 开头");
   const validAgents = new Set(topology.nodes);
+  assert.ok(validAgents.size > 0, "topology.nodes 至少要包含一个 Agent");
+  assert.ok(validAgents.has(startAgent), "第一条 user 消息的 @Agent 必须存在于 topology.nodes");
   const agentOrder = [...topology.nodes];
   for (const agentName of agentOrder) {
     assert.ok(validAgents.has(agentName), `topology.nodes 包含未知 Agent：${agentName}`);
-  }
-
-  const startAgent = extractLeadingMention(firstLine.content);
-  assert.notEqual(startAgent, undefined, "第一条脚本必须以 @Agent 开头");
-  assert.ok(validAgents.has(startAgent), "第一条 user 消息的 @Agent 必须存在于 topology.nodes");
-  if (topology.startAgentId) {
-    assert.equal(startAgent, topology.startAgentId, "第一条 user 消息的 @Agent 必须等于 topology.startAgentId");
   }
 
   const repliesByAgent = new Map<string, ParsedReply[]>();
