@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import { AgentConfigModal, NEW_AGENT_DRAFT_PATH } from "./components/AgentConfigModal";
 import { ChatWindow } from "./components/ChatWindow";
 import { SidebarList } from "./components/SidebarList";
@@ -466,16 +467,15 @@ function App() {
                       if (!activeProject) {
                         return;
                       }
-                      const defaultBuildAgent = resolveBuildAgentName(activeProject.agentFiles);
-                      if (!defaultBuildAgent) {
-                        throw new Error("当前 Project 缺少 Build Agent，禁止发送任务。请先在团队成员中写入 Build。");
+                      const resolution = resolveTaskSubmissionTarget({
+                        content,
+                        mentionAgent,
+                        availableAgents: activeProject.agentFiles.map((agent) => agent.name),
+                      });
+                      if (!resolution.ok) {
+                        throw new Error(resolution.message);
                       }
-                      const resolvedMentionAgent =
-                        mentionAgent ||
-                        defaultBuildAgent;
-                      if (!resolvedMentionAgent) {
-                        throw new Error("当前 Project 还没有可用 Agent，请先配置团队成员。");
-                      }
+                      const resolvedMentionAgent = resolution.targetAgent;
                       let optimisticId: string | null = null;
                       if (activeTask) {
                         const optimisticContent = buildUserHistoryContent(content, resolvedMentionAgent);

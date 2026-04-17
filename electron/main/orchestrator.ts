@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { IPC_CHANNELS } from "@shared/ipc";
+import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import {
   type AgentFlowEvent,
   type AgentRuntimeSnapshot,
@@ -455,17 +456,15 @@ export class Orchestrator {
     const agentFiles = this.listProjectAgents(project);
     this.customAgentConfig.validateProjectAgents(project.path);
     this.syncTopology(project, agentFiles);
-    const defaultBuildAgent = resolveBuildAgentName(agentFiles);
-    if (!defaultBuildAgent) {
-      throw new Error("当前 Project 缺少 Build Agent，禁止发送任务。请先在团队成员中写入 Build。");
+    const resolution = resolveTaskSubmissionTarget({
+      content: payload.content,
+      mentionAgent: payload.mentionAgent,
+      availableAgents: agentFiles.map((agent) => agent.name),
+    });
+    if (!resolution.ok) {
+      throw new Error(resolution.message);
     }
-    const mentionName =
-      payload.mentionAgent ||
-      extractMentionPure(payload.content) ||
-      defaultBuildAgent;
-    if (!mentionName) {
-      throw new Error("当前没有可用的目标 Agent。");
-    }
+    const mentionName = resolution.targetAgent;
 
     if (payload.taskId) {
       return this.continueTask(project, payload.taskId, payload.content, mentionName, agentFiles);

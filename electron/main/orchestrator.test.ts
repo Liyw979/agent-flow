@@ -836,7 +836,7 @@ test("只有第一次 Agent 间传递会携带 [Initial Task]", async () => {
   assert.doesNotMatch(promptByAgent.get("QA")?.[0] ?? "", /\[Initial Task\]/u);
 });
 
-test("当前 Project 缺少 Build Agent 时禁止发送任务", async () => {
+test("当前 Project 缺少 Build Agent 时，显式 @ 其他 Agent 仍可发送，但 @Build 会被拒绝", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = createTestOrchestrator({
@@ -852,18 +852,28 @@ test("当前 Project 缺少 Build Agent 时禁止发送任务", async () => {
       setOpenCodeAttachBaseUrl: () => undefined,
     } as never,
   });
+  stubOpenCodeSessions(orchestrator);
 
   let project = await orchestrator.createProject({ path: projectPath });
   project = await addCustomAgent(orchestrator, project.project.id, "BA", "你是 BA。");
 
-  await assert.rejects(
-    () =>
-      orchestrator.submitTask({
-        projectId: project.project.id,
-        content: "@BA 请先整理需求。",
-      }),
-    /缺少 Build Agent/u,
-  );
+  const submittedTask = await orchestrator.submitTask({
+    projectId: project.project.id,
+    content: "@BA 请先整理需求。",
+  });
+
+  const firstUserMessage = submittedTask.messages.find((message) => message.sender === "user");
+  assert.equal(firstUserMessage?.meta?.targetAgentId, "BA");
+
+  await assert.rejects(async () => orchestrator.submitTask({
+    projectId: project.project.id,
+    content: "请先整理需求。",
+  }), /请使用 @ 指定一个已写入 Agent/u);
+
+  await assert.rejects(async () => orchestrator.submitTask({
+    projectId: project.project.id,
+    content: "@Build 请先实现需求。",
+  }), /@Build 不可用/u);
 });
 
 test("单 reviewer 审查失败后会把 revision_request 回流给 Build", async () => {

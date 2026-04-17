@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { resolveBuildAgentName, type ProjectSnapshot, type TaskSnapshot } from "@shared/types";
+import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import { cn } from "@/lib/utils";
 import { getAgentColorToken } from "@/lib/agent-colors";
 import { mergeTaskChatMessages, type ChatMessageItem } from "@/lib/chat-messages";
@@ -85,11 +86,6 @@ function getCaretCoordinates(textarea: HTMLTextAreaElement, position: number) {
 
   document.body.removeChild(div);
   return result;
-}
-
-function extractFirstMention(content: string): string | undefined {
-  const match = content.match(/@([^\s]+)/);
-  return match?.[1];
 }
 
 function getDefaultAgentName(agents: string[]): string | undefined {
@@ -346,17 +342,17 @@ export function ChatWindow({
     if (!content || !project || submitting) {
       return;
     }
-    if (!hasAvailableAgents) {
-      setSubmitError("当前 Project 还没有可用 Agent，请先到右侧团队成员里配置并添加模板。");
-      return;
-    }
-    if (!defaultAgentName) {
-      setSubmitError("当前 Project 缺少 Build Agent，请先写入 Build，暂不允许发送任务。");
+    const resolution = resolveTaskSubmissionTarget({
+      content,
+      availableAgents,
+    });
+    if (!resolution.ok) {
+      setSubmitError(resolution.message);
       return;
     }
 
     const submitted = draft;
-    const mentionAgent = extractFirstMention(content) ?? defaultAgentName;
+    const mentionAgent = resolution.targetAgent;
 
     setSubmitting(true);
     setSubmitError(null);
@@ -569,7 +565,7 @@ export function ChatWindow({
                 hasAvailableAgents
                   ? defaultAgentName
                     ? "默认向 Build 发送消息，使用@指定Agent"
-                    : "当前 Project 缺少 Build Agent，请先写入 Build"
+                    : "请使用@指定Agent发送消息，@Build 当前不可用"
                   : "当前还没有可用 Agent，请先配置团队成员"
               }
               className="no-drag block min-h-[68px] w-full resize-none rounded-[8px] border border-border bg-card px-4 py-2.5 text-sm leading-6 outline-none transition focus:border-primary"
