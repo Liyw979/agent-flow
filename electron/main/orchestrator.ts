@@ -48,7 +48,7 @@ import {
   formatRevisionRequestContent,
 } from "@shared/chat-message-format";
 import {
-  extractTrailingReviewResponseBlock,
+  extractTrailingReviewSignalBlock,
   stripReviewResponseMarkup,
 } from "@shared/review-response";
 import { buildZellijMissingReminder } from "@shared/zellij";
@@ -92,13 +92,14 @@ interface ParsedSignal {
   done: boolean;
 }
 
-type ReviewDecision = "pass" | "needs_revision" | "unknown";
+type ReviewDecision = "pass" | "needs_revision" | "invalid";
 
 interface ParsedReview {
   cleanContent: string;
   decision: ReviewDecision;
   opinion: string | null;
   rawDecisionBlock: string | null;
+  validationError: string | null;
 }
 
 interface GitSummaryCommandResult {
@@ -1034,11 +1035,18 @@ export class Orchestrator {
         return;
       }
 
+      if (parsedReview.decision === "invalid") {
+        await this.completeTask(task.id, "failed");
+        return;
+      }
+
       const triggered =
         behavior.followTopology ?? true
-          ? reviewAgent
+          ? reviewAgent && parsedReview.decision === "pass"
             ? await this.triggerReviewPassDownstream(project, task.id, agentName, agentContextContent)
-            : await this.triggerAssociationDownstream(project, task.id, agentName, agentContextContent, signal)
+            : reviewAgent
+              ? 0
+              : await this.triggerAssociationDownstream(project, task.id, agentName, agentContextContent, signal)
           : 0;
       const batchTriggered = await this.continueAfterAssociationBatchResponse(
         project,
@@ -1627,21 +1635,33 @@ export class Orchestrator {
   }
 
   private parseReview(content: string, reviewAgent: boolean): ParsedReview {
-    const responseMatch = extractTrailingReviewResponseBlock(content);
-    if (!responseMatch) {
+    const signalMatch = extractTrailingReviewSignalBlock(content);
+    if (!signalMatch) {
+      if (reviewAgent) {
+        return {
+          cleanContent: this.stripStructuredSignals(content),
+          decision: "invalid",
+          opinion: null,
+          rawDecisionBlock: null,
+          validationError: "（该审查结果无效：必须显式包含 <chalenge> 或 <agree> 标签，右侧结束标签可选。）",
+        };
+      }
+
       return {
         cleanContent: this.stripStructuredSignals(content),
-        decision: reviewAgent ? "pass" : "unknown",
+        decision: "pass",
         opinion: null,
         rawDecisionBlock: null,
+        validationError: null,
       };
     }
 
     return {
-      cleanContent: this.stripStructuredSignals(responseMatch.body),
-      decision: "needs_revision",
-      opinion: responseMatch.response,
-      rawDecisionBlock: responseMatch.rawBlock,
+      cleanContent: this.stripStructuredSignals(signalMatch.body),
+      decision: signalMatch.kind === "agree" ? "pass" : "needs_revision",
+      opinion: signalMatch.response,
+      rawDecisionBlock: signalMatch.rawBlock,
+      validationError: null,
     };
   }
 
@@ -1849,11 +1869,17 @@ export class Orchestrator {
 
   private createDisplayContent(parsedReview: ParsedReview, fallbackMessage?: string | null): string {
     const cleanContent = this.extractAgentDisplayContent(parsedReview.cleanContent);
+    if (parsedReview.decision === "invalid" && parsedReview.validationError) {
+      return [cleanContent, parsedReview.validationError].filter(Boolean).join("\n\n");
+    }
     if (cleanContent) {
       return cleanContent;
     }
 
     const fallbackContent = this.extractAgentDisplayContent(fallbackMessage?.trim() ?? "");
+    if (parsedReview.decision === "invalid" && parsedReview.validationError) {
+      return [fallbackContent, parsedReview.validationError].filter(Boolean).join("\n\n");
+    }
     if (fallbackContent) {
       return fallbackContent;
     }
@@ -1865,6 +1891,9 @@ export class Orchestrator {
 
     if (parsedReview.decision === "needs_revision") {
       return "（该 Agent 已给出需要响应的结论，但未返回可展示的结果正文。）";
+    }
+    if (parsedReview.decision === "invalid") {
+      return parsedReview.validationError ?? "（该 Agent 返回了无效的审查结果。）";
     }
     if (parsedReview.decision === "pass") {
       return "通过";

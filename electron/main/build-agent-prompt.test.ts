@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 
 import { buildAgentSystemPrompt } from "./agent-system-prompt";
 import { buildSubmitMessageBody } from "./opencode-request-body";
-import { REVIEW_RESPONSE_LABEL } from "../../shared/review-response";
+import {
+  REVIEW_AGREE_LABEL,
+  REVIEW_CHALENGE_LABEL,
+} from "../../shared/review-response";
 
 test("Build agent does not inject a system prompt", () => {
   const prompt = buildAgentSystemPrompt({
@@ -22,7 +25,11 @@ test("Review agents keep the response contract in the system prompt", () => {
   assert.doesNotMatch(prompt, /\[@/);
   assert.match(
     prompt,
-    new RegExp(REVIEW_RESPONSE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    new RegExp(REVIEW_CHALENGE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+  );
+  assert.match(
+    prompt,
+    new RegExp(REVIEW_AGREE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
   );
 });
 
@@ -60,6 +67,10 @@ test("Review agent request body keeps system", () => {
   assert.match(String(body.system), /\[From Build Agent\]/);
   assert.match(
     String(body.system),
-    new RegExp(REVIEW_RESPONSE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    new RegExp(REVIEW_CHALENGE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+  );
+  assert.match(
+    String(body.system),
+    new RegExp(REVIEW_AGREE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
   );
 });

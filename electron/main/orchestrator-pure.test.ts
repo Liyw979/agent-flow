@@ -245,3 +245,12 @@ test("reviewer 给出需要修复时应标记为 needs_revision 而不是 failed
 
   assert.equal(status, "needs_revision");
 });
+
+test("reviewer 缺少强制标签时应标记为 failed", () => {
+  const status = resolveAgentStatusFromReview({
+    reviewDecision: "invalid",
+    reviewAgent: true,
+  });
+
+  assert.equal(status, "failed");
+});

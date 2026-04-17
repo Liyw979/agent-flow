@@ -6,8 +6,8 @@ import type { MessageRecord } from "@shared/types";
 import { mergeTaskChatMessages } from "../../src/lib/chat-messages";
 import { formatRevisionRequestContent } from "../../shared/chat-message-format";
 import {
-  REVIEW_RESPONSE_END_LABEL,
-  REVIEW_RESPONSE_LABEL,
+  REVIEW_CHALENGE_END_LABEL,
+  REVIEW_CHALENGE_LABEL,
 } from "../../shared/review-response";
 
 function createMessage(overrides: Partial<MessageRecord>): MessageRecord {
@@ -24,8 +24,8 @@ function createMessage(overrides: Partial<MessageRecord>): MessageRecord {
 
 test("合并回应消息时只保留一份回应与一份 mention", () => {
   const summary =
-    `${REVIEW_RESPONSE_LABEL}暂无进一步结论，因为尚未完成润色工作。请先完成需求润色，然后再回应实现是否成立。`
-    + REVIEW_RESPONSE_END_LABEL;
+    `${REVIEW_CHALENGE_LABEL}暂无进一步结论，因为尚未完成润色工作。请先完成需求润色，然后再回应实现是否成立。`
+    + REVIEW_CHALENGE_END_LABEL;
   const remediationMessage = formatRevisionRequestContent(
     "暂无进一步结论，因为尚未完成润色工作。请先完成需求润色，然后再回应实现是否成立。",
     "Build",
@@ -159,6 +159,25 @@ test("revision-request 单独展示时会移除标签后再追加 mention", () =
   );
 });
 
+test("revision-request 单独展示时也会移除孤立的结束标签后再追加 mention", () => {
+  const merged = mergeTaskChatMessages([
+    createMessage({
+      id: "revision-request",
+      content: `${REVIEW_CHALENGE_END_LABEL}请补充实现依据。\n\n@Build`,
+      meta: {
+        kind: "revision-request",
+        targetAgentId: "Build",
+      },
+    }),
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(
+    merged[0]?.content,
+    "请补充实现依据。\n\n@Build",
+  );
+});
+
 test("agent-final 展示时会移除整改标签，只保留正文", () => {
   const merged = mergeTaskChatMessages([
     createMessage({
@@ -167,7 +186,7 @@ test("agent-final 展示时会移除整改标签，只保留正文", () => {
       meta: {
         kind: "agent-final",
         reviewDecision: "needs_revision",
-        finalMessage: `审视不通过。\n\n${REVIEW_RESPONSE_LABEL}请补充实现依据。`,
+        finalMessage: `审视不通过。\n\n${REVIEW_CHALENGE_LABEL}请补充实现依据。`,
       },
     }),
   ]);
@@ -184,7 +203,7 @@ test("agent-final 展示时也会移除孤立的结束标签", () => {
       meta: {
         kind: "agent-final",
         reviewDecision: "needs_revision",
-        finalMessage: `审视不通过。\n\n${REVIEW_RESPONSE_END_LABEL}请补充实现依据。`,
+        finalMessage: `审视不通过。\n\n${REVIEW_CHALENGE_END_LABEL}请补充实现依据。`,
       },
     }),
   ]);
