@@ -5,7 +5,7 @@ import {
   buildCliAttachSessionCommand,
   buildCliPanelFocusCommand,
   buildOpencodePaneCommand,
-  buildWindowsOpencodePaneScript,
+  buildWindowsPaneLaunchArtifacts,
 } from "./terminal-commands";
 
 test("CLI 打开的 panel 命令使用跨平台双引号参数", () => {
@@ -55,24 +55,19 @@ test("Windows pane 启动命令使用 cmd.exe 和 Windows 环境变量语法", (
   assert.doesNotMatch(command.shellCommand, /\/bin\/sh|mkdir -p|export /);
 });
 
-test("Windows pane launcher script uses batch lines and a plain opencode attach command", () => {
-  const script = buildWindowsOpencodePaneScript({
-    cwd: "D:\\work tree\\agent-team",
-    runtimeDir: "D:\\work tree\\agent-team\\.agentflow\\pane\\Build",
-    dbPath: "D:\\work tree\\agent-team\\.agentflow\\pane\\Build\\opencode-pane.db",
-    agentName: "Build",
-    opencodeSessionId: "session-123",
-    opencodeAgentName: "build",
-    attachBaseUrl: "http://127.0.0.1:43127",
-    platform: "win32",
-  });
+test("Windows pane 启动链路不再依赖 launch-pane.cmd", () => {
+  const launch = buildWindowsPaneLaunchArtifacts(
+    "echo hello",
+  );
 
-  assert.match(script, /^@echo off\r\n/u);
-  assert.match(script, /\r\ncd \/d "D:\\work tree\\agent-team"\r\n/u);
-  assert.match(script, /set "OPENCODE_CONFIG_DIR=D:\/work tree\/agent-team\/\.agentflow\/pane\/Build"/u);
-  assert.match(script, /\r\nopencode attach "http:\/\/127\.0\.0\.1:43127" --session "session-123" --dir "D:\\work tree\\agent-team"\r\n$/u);
-  assert.doesNotMatch(script, /&&/u);
-  assert.doesNotMatch(script, /"opencode" "attach"/u);
+  assert.equal(launch.launcherPath, null);
+  assert.equal(launch.launcherContent, null);
+  assert.doesNotMatch(launch.shellCommand, /launch-pane\.cmd/u);
+  assert.equal(
+    launch.shellLaunch.args.some((arg) => /launch-pane\.cmd/u.test(arg)),
+    false,
+  );
+  assert.deepEqual(launch.shellLaunch.args, ["/d", "/s", "/c", "echo hello"]);
 });
 
 test("POSIX pane 启动命令继续使用 /bin/sh 和 export", () => {

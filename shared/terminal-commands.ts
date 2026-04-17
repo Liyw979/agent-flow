@@ -27,6 +27,13 @@ interface ShellLaunchSpec {
   args: string[];
 }
 
+interface WindowsPaneLaunchArtifacts {
+  shellCommand: string;
+  shellLaunch: ShellLaunchSpec;
+  launcherPath: string | null;
+  launcherContent: string | null;
+}
+
 function buildWindowsOpencodeCommand(options: OpencodePaneCommandOptions): string {
   if (options.opencodeSessionId) {
     return [
@@ -123,23 +130,18 @@ export function buildCliAttachSessionCommand(
   return `${renderedCommand} attach ${quotePortableShellArg(sessionName)} --create`;
 }
 
-export function buildWindowsOpencodePaneScript(
-  options: OpencodePaneCommandOptions,
-): string {
-  const runtimeDirForEnv = normalizeWindowsEnvPath(options.runtimeDir);
-  const dbPathForEnv = normalizeWindowsEnvPath(options.dbPath);
-
-  return [
-    "@echo off",
-    `if not exist ${quoteWindowsArg(options.runtimeDir)} mkdir ${quoteWindowsArg(options.runtimeDir)}`,
-    `cd /d ${quoteWindowsArg(options.cwd)}`,
-    `set "OPENCODE_CONFIG_DIR=${escapeWindowsEnvValue(runtimeDirForEnv)}"`,
-    `set "OPENCODE_DB=${escapeWindowsEnvValue(dbPathForEnv)}"`,
-    `set "OPENCODE_DISABLE_PROJECT_CONFIG=true"`,
-    `set "OPENCODE_CLIENT=agentflow-zellij"`,
-    buildWindowsOpencodeCommand(options),
-    "",
-  ].join("\r\n");
+export function buildWindowsPaneLaunchArtifacts(
+  inlineCommand: string,
+): WindowsPaneLaunchArtifacts {
+  return {
+    shellCommand: inlineCommand,
+    shellLaunch: {
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", inlineCommand],
+    },
+    launcherPath: null,
+    launcherContent: null,
+  };
 }
 
 export function buildOpencodePaneCommand(
@@ -183,9 +185,10 @@ export function buildOpencodePaneCommand(
       opencodeCommand,
     ].join(" && ");
 
+    const launchArtifacts = buildWindowsPaneLaunchArtifacts(shellCommand);
     return {
-      shellCommand,
-      shellLaunch: buildShellLaunchSpec(shellCommand, platform),
+      shellCommand: launchArtifacts.shellCommand,
+      shellLaunch: launchArtifacts.shellLaunch,
     };
   }
 

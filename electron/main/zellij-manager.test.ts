@@ -89,7 +89,7 @@ class StubZellijManager extends ZellijManager {
       title: this.hostPlatform === "win32" ? "OpenCode" : agent.name,
       pane_command:
         this.hostPlatform === "win32"
-          ? `cmd.exe /d /s /c ${cwd}\\.agentflow\\opencode-pane-runtime\\${sessionName}\\${agent.name}\\launch-pane.cmd`
+          ? this.buildOpencodePaneCommand(sessionName, cwd, agent.name, null).shellCommand
           : null,
       is_plugin: false,
       exited: false,
@@ -540,12 +540,13 @@ test("openCommandInTerminal on Windows uses wt maximized new-tab syntax with sta
   ]);
 });
 
-test("openCommandInTerminal on Windows runs pane launcher scripts directly in the terminal", async () => {
+test("openCommandInTerminal on Windows 直接执行内联 pane 命令", async () => {
   const manager = new CaptureWindowsTerminalManager();
+  const terminalCommand = 'if not exist "D:\\empty\\.agentflow\\opencode-pane-runtime\\session-1\\Build" mkdir "D:\\empty\\.agentflow\\opencode-pane-runtime\\session-1\\Build" && cd /d "D:\\empty" && set "OPENCODE_CLIENT=agentflow-zellij" && opencode . --agent "build"';
 
   await manager.runOpenCommandInTerminal(
     "D:\\empty",
-    "cmd.exe /d /s /c \"D:\\empty\\.agentflow\\opencode-pane-runtime\\session-1\\Build\\launch-pane.cmd\"",
+    terminalCommand,
   );
 
   assert.equal(manager.spawnCalls.length, 1);
@@ -559,7 +560,7 @@ test("openCommandInTerminal on Windows runs pane launcher scripts directly in th
     "D:\\empty",
     "cmd.exe",
     "/k",
-    "D:\\empty\\.agentflow\\opencode-pane-runtime\\session-1\\Build\\launch-pane.cmd",
+    terminalCommand,
   ]);
 });
 
@@ -583,7 +584,7 @@ test("openWindowsCmdSession on Windows uses maximized fallback without fullscree
   assert.equal(serializedArgs.includes("F11"), false);
 });
 
-test("openAgentTerminal on Windows opens the launcher script instead of nesting cmd wrappers", async () => {
+test("openAgentTerminal on Windows 直接打开内联 pane 命令", async () => {
   const manager = new CaptureWindowsTerminalManager();
   manager.setOpenCodeAttachBaseUrl("http://127.0.0.1:61023");
 
@@ -605,7 +606,7 @@ test("openAgentTerminal on Windows opens the launcher script instead of nesting 
     "D:\\empty",
     "cmd.exe",
     "/k",
-    "D:\\empty\\.agentflow\\opencode-pane-runtime\\session-1\\Build\\launch-pane.cmd",
+    'if not exist "D:\\empty\\.agentflow\\opencode-pane-runtime\\session-1\\Build" mkdir "D:\\empty\\.agentflow\\opencode-pane-runtime\\session-1\\Build" && cd /d "D:\\empty" && set "OPENCODE_CONFIG_DIR=D:/empty/.agentflow/opencode-pane-runtime/session-1/Build" && set "OPENCODE_DB=D:/empty/.agentflow/opencode-pane-runtime/session-1/Build/opencode-pane.db" && set "OPENCODE_DISABLE_PROJECT_CONFIG=true" && set "OPENCODE_CLIENT=agentflow-zellij" && "opencode" "attach" "http://127.0.0.1:61023" "--session" "session-123" "--dir" "D:\\empty"',
   ]);
 });
 
@@ -647,7 +648,7 @@ test("materializePanelBindings retries pane creation when run returns a session 
   );
 });
 
-test("buildAgentGridLayout uses launcher command panes on Windows", () => {
+test("buildAgentGridLayout uses inline command panes on Windows", () => {
   const manager = new StubZellijManager();
   manager.hostPlatform = "win32";
 
@@ -656,7 +657,9 @@ test("buildAgentGridLayout uses launcher command panes on Windows", () => {
   ]);
 
   assert.match(layout ?? "", /pane command="cmd\.exe" name="Build"/);
-  assert.match(layout ?? "", /args "\/d" "\/s" "\/c" "D:\\\\empty\\\\\.agentflow\\\\opencode-pane-runtime\\\\session-1\\\\Build\\\\launch-pane\.cmd"/);
+  assert.match(layout ?? "", /args "\/d" "\/s" "\/c"/);
+  assert.match(layout ?? "", /opencode-pane\.db/);
+  assert.doesNotMatch(layout ?? "", /launch-pane\.cmd/);
   assert.match(layout ?? "", /start_suspended false;/);
 });
 

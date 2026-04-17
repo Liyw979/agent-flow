@@ -9,8 +9,6 @@ import { buildZellijMissingMessage } from "@shared/zellij";
 import {
   buildInlineCommand,
   buildOpencodePaneCommand,
-  buildWindowsOpencodePaneScript,
-  quoteInlineCommandArg,
 } from "@shared/terminal-commands";
 import { appendAppLog } from "./app-log";
 import { toOpenCodeAgentName } from "./opencode-agent-name";
@@ -521,7 +519,7 @@ export class ZellijManager {
 
     const launcherPath = this.joinPlatformPath(
       this.ensurePaneRuntimeDir(cwd, sessionName, agentName),
-      "launch-pane.cmd",
+      "opencode-pane.db",
     );
     const normalizedCommand = pane.command.replace(/\//g, "\\").toLowerCase();
     return normalizedCommand.includes(launcherPath.toLowerCase());
@@ -606,31 +604,15 @@ export class ZellijManager {
       opencodeSessionId,
       opencodeAgentName: toOpenCodeAgentName(agentName),
       attachBaseUrl: this.opencodeAttachBaseUrl,
+      platform: this.getHostPlatform(),
     });
     if (this.getHostPlatform() !== "win32") {
       return paneCommand;
     }
 
-    const launcherPath = this.ensureWindowsPaneLauncher(
-      runtimeDir,
-      buildWindowsOpencodePaneScript({
-        cwd,
-        runtimeDir,
-        dbPath,
-        agentName,
-        opencodeSessionId,
-        opencodeAgentName: toOpenCodeAgentName(agentName),
-        attachBaseUrl: this.opencodeAttachBaseUrl,
-        platform: "win32",
-      }),
-    );
-    const launcherCommand = `cmd.exe /d /s /c ${quoteInlineCommandArg(launcherPath, "win32")}`;
     return {
-      shellCommand: launcherCommand,
-      shellLaunch: {
-        command: "cmd.exe",
-        args: ["/d", "/s", "/c", launcherPath],
-      },
+      shellCommand: paneCommand.shellCommand,
+      shellLaunch: paneCommand.shellLaunch,
     };
   }
 
@@ -648,19 +630,6 @@ export class ZellijManager {
 
   protected sanitizePathSegment(value: string): string {
     return value.replace(/[^a-zA-Z0-9._-]/g, "_");
-  }
-
-  protected ensureWindowsPaneLauncher(runtimeDir: string, shellCommand: string): string {
-    const launcherPath = this.joinPlatformPath(runtimeDir, "launch-pane.cmd");
-    const normalizedContent = shellCommand.startsWith("@echo off")
-      ? `${shellCommand}\r\n`
-      : ["@echo off", shellCommand, ""].join("\r\n");
-    fs.writeFileSync(
-      launcherPath,
-      normalizedContent,
-      "utf8",
-    );
-    return launcherPath;
   }
 
   protected joinPlatformPath(...segments: string[]): string {
@@ -787,26 +756,10 @@ export class ZellijManager {
     command: string;
     args: string[];
   } {
-    const launcherPath = this.extractWindowsCmdLauncherPath(terminalCommand);
-    if (launcherPath) {
-      return {
-        command: "cmd.exe",
-        args: ["/k", launcherPath],
-      };
-    }
-
     return {
       command: "cmd.exe",
       args: ["/k", terminalCommand],
     };
-  }
-
-  protected extractWindowsCmdLauncherPath(terminalCommand: string): string | null {
-    const matched = terminalCommand.match(/^cmd(?:\.exe)?\s+\/d\s+\/s\s+\/c\s+"(.+)"$/iu);
-    if (!matched) {
-      return null;
-    }
-    return matched[1] ?? null;
   }
 
   protected buildWindowsCmdInteractiveArgs(terminalCommand: {
