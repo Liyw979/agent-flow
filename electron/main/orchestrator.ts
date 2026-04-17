@@ -129,6 +129,7 @@ type AgentExecutionPrompt =
       mode: "raw";
       content: string;
       from?: string;
+      allowDirectFallbackWhenNoBatch?: boolean;
     }
   | {
       mode: "structured";
@@ -136,6 +137,7 @@ type AgentExecutionPrompt =
       userMessage?: string;
       agentMessage?: string;
       gitDiffSummary?: string;
+      allowDirectFallbackWhenNoBatch?: boolean;
     };
 
 interface AgentRunBehaviorOptions {
@@ -736,10 +738,12 @@ export class Orchestrator {
     });
 
     const forwardedContent = stripTargetMentionPure(content, targetAgent.name);
+    const topology = this.store.getTopology(project.id);
     const runPromise = this.dispatchAgentRun(project, task.id, targetAgent.name, {
       mode: "raw",
       from: "User",
       content: forwardedContent,
+      allowDirectFallbackWhenNoBatch: this.getOutgoingEdges(topology, targetAgent.name, "review_fail").length > 0,
     }, [message.id]);
     void runPromise.catch((error) => {
       console.error("[orchestrator] 后台发送任务失败", {
@@ -940,7 +944,10 @@ export class Orchestrator {
         parsedReview.decision === "needs_revision"
           ? resolveRevisionRequestContinuationAction({
               continuation: batchContinuation,
-              hasDirectRevisionRequestTarget: reviewFailureTargets.length > 0,
+              fallbackActionWhenNoBatch:
+                reviewFailureTargets.length > 0 && (prompt.allowDirectFallbackWhenNoBatch ?? false)
+                  ? "trigger_fallback_review"
+                  : "ignore",
             })
           : "ignore";
       if (
@@ -1005,6 +1012,7 @@ export class Orchestrator {
                 review: parsedReview,
               }
             : undefined,
+          prompt.allowDirectFallbackWhenNoBatch ?? false,
         );
         const hasOtherRunningAgents = [...runtime.runningAgents].some((runningAgent) => runningAgent !== agentName);
         const hasQueuedAgents = runtime.queuedAgents.size > 0;
@@ -1378,6 +1386,7 @@ export class Orchestrator {
             userMessage,
             agentMessage: reviewContent,
             gitDiffSummary: this.shouldAttachGitDiffSummary(topology, targetName) ? gitDiffSummary : undefined,
+            allowDirectFallbackWhenNoBatch: true,
           },
         );
       }),
@@ -1418,6 +1427,7 @@ export class Orchestrator {
       agent: Pick<AgentFileRecord, "name">;
       review: ParsedReview;
     },
+    allowDirectFallbackWhenNoBatch = false,
   ): Promise<number> {
     if (this.isTaskTerminal(taskId)) {
       return 0;
@@ -1425,7 +1435,10 @@ export class Orchestrator {
 
     const action = resolveRevisionRequestContinuationAction({
       continuation,
-      hasDirectRevisionRequestTarget: Boolean(directRevisionRequestSource),
+      fallbackActionWhenNoBatch:
+        directRevisionRequestSource && allowDirectFallbackWhenNoBatch
+          ? "trigger_fallback_review"
+          : "ignore",
     });
 
     if (action === "wait_pending_reviewers" || action === "ignore") {

@@ -200,10 +200,19 @@ test("最新一条仍是用户 @Agent 追问时，持久化补偿逻辑不会提
 test("过期 reviewer 回复不应被当成有效回流继续触发修复", () => {
   const action = resolveRevisionRequestContinuationAction({
     continuation: null,
-    hasDirectRevisionRequestTarget: true,
+    fallbackActionWhenNoBatch: "ignore",
   });
 
   assert.equal(action, "ignore");
+});
+
+test("没有 batch continuation 但允许 direct fallback 时，会继续触发 fallback reviewer", () => {
+  const action = resolveRevisionRequestContinuationAction({
+    continuation: null,
+    fallbackActionWhenNoBatch: "trigger_fallback_review",
+  });
+
+  assert.equal(action, "trigger_fallback_review");
 });
 
 test("reviewer 已经形成有效回流动作时，不应直接结束 Task", () => {

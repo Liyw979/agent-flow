@@ -11,7 +11,10 @@ export type RevisionRequestContinuationInput = {
     repairReviewerAgentId: string | null;
     redispatchTargets: string[];
   } | null;
-  hasDirectRevisionRequestTarget: boolean;
+  fallbackActionWhenNoBatch?: Extract<
+    RevisionRequestContinuationAction,
+    "ignore" | "trigger_fallback_review"
+  >;
 };
 
 export type RevisionRequestContinuationAction =
@@ -233,7 +236,7 @@ export function resolveRevisionRequestContinuationAction(
   input: RevisionRequestContinuationInput,
 ): RevisionRequestContinuationAction {
   if (!input.continuation) {
-    return "ignore";
+    return input.fallbackActionWhenNoBatch ?? "ignore";
   }
 
   if (input.continuation.pendingTargets.length > 0) {

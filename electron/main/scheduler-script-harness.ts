@@ -148,10 +148,13 @@ export async function assertSchedulerScript(
           `${agentName} 的 @ 目标与预期不一致`,
         );
       } else if (reply.targets.length > 0) {
-        assert.deepEqual(
-          reply.targets,
-          sourceState.defaultTargets,
-          `${agentName} 的初始/全量派发目标必须等于 topology.association 默认顺序`,
+        const directReviewFailTargets = reviewFailTargets.get(agentName) ?? [];
+        const matchesAssociationTargets = areSameOrderedTargets(reply.targets, sourceState.defaultTargets);
+        const matchesDirectReviewFailTargets = areSameOrderedTargets(reply.targets, directReviewFailTargets);
+        assert.equal(
+          matchesAssociationTargets || matchesDirectReviewFailTargets,
+          true,
+          `${agentName} 的初始/全量派发目标必须等于 topology.association 默认顺序，或匹配其 direct review_fail 下游`,
         );
       }
     }
@@ -278,14 +281,17 @@ function parseScenario(topology: TopologyRecord, script: string[]): ParsedScenar
   const firstLine = lines[0];
   assert.equal(firstLine?.sender, "user", "第一条脚本必须是 user: @Agent ...");
 
-  const startAgent = extractLeadingMention(firstLine.content);
-  assert.notEqual(startAgent, undefined, "第一条脚本必须以 @Agent 开头");
-  assert.equal(startAgent, topology.startAgentId, "第一条 user 消息的 @Agent 必须等于 topology.startAgentId");
-
   const validAgents = new Set(topology.nodes);
   const agentOrder = [...topology.nodes];
   for (const agentName of agentOrder) {
     assert.ok(validAgents.has(agentName), `topology.nodes 包含未知 Agent：${agentName}`);
+  }
+
+  const startAgent = extractLeadingMention(firstLine.content);
+  assert.notEqual(startAgent, undefined, "第一条脚本必须以 @Agent 开头");
+  assert.ok(validAgents.has(startAgent), "第一条 user 消息的 @Agent 必须存在于 topology.nodes");
+  if (topology.startAgentId) {
+    assert.equal(startAgent, topology.startAgentId, "第一条 user 消息的 @Agent 必须等于 topology.startAgentId");
   }
 
   const repliesByAgent = new Map<string, ParsedReply[]>();
@@ -423,4 +429,8 @@ function extractInlineDispatch(content: string): { body: string; targets: string
 
 function formatScriptLine(sender: string, content: string): string {
   return `${sender}: ${content.trim()}`;
+}
+
+function areSameOrderedTargets(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((target, index) => target === right[index]);
 }
