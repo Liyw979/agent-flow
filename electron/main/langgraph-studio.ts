@@ -19,6 +19,7 @@ interface LangGraphStudioConfig {
 interface LangGraphStudioCliInvocation {
   command: string;
   args: string[];
+  stdio: ["ignore", "ignore", "pipe"];
 }
 
 interface LangGraphStudioServerHandle {
@@ -46,15 +47,48 @@ export function buildLangGraphStudioUrl(baseUrl: string): string {
 }
 
 export function buildLangGraphStudioConfig(input: {
+  configDir: string;
   appRoot: string;
   entryModulePath: string;
 }): LangGraphStudioConfig {
   return {
     dependencies: [input.appRoot],
     graphs: {
-      agentflow: `${input.entryModulePath}:${STUDIO_GRAPH_EXPORT}`,
+      agentflow: `${buildLangGraphStudioGraphSpec(input.configDir, input.entryModulePath)}:${STUDIO_GRAPH_EXPORT}`,
     },
   };
+}
+
+export function buildLangGraphStudioGraphSpec(configDir: string, entryModulePath: string): string {
+  const relativePath = path.relative(configDir, entryModulePath);
+  const normalizedPath = relativePath.split(path.sep).join("/");
+  if (!normalizedPath || normalizedPath === ".") {
+    return "./";
+  }
+  return normalizedPath.startsWith(".") ? normalizedPath : `./${normalizedPath}`;
+}
+
+export function selectLangGraphStudioEntryModulePath(input: {
+  appRoot: string;
+  currentDir: string;
+  pathExists?: (targetPath: string) => boolean;
+}): string {
+  const pathExists = input.pathExists ?? pathExistsSync;
+  const candidates = [
+    path.join(input.currentDir, "langgraph-studio-entry.js"),
+    path.join(input.currentDir, "langgraph-studio-entry.ts"),
+    path.join(input.appRoot, "electron", "main", "langgraph-studio-entry.ts"),
+  ];
+
+  for (const candidate of candidates) {
+    if (pathExists(candidate)) {
+      return path.resolve(candidate);
+    }
+  }
+
+  throw new Error(
+    `未找到 LangGraph Studio graph entry，已检查：${candidates.join(", ")}`,
+  );
 }
 
 export function buildLangGraphStudioCliInvocation(input: {
@@ -75,6 +109,7 @@ export function buildLangGraphStudioCliInvocation(input: {
       "--host",
       input.host,
     ],
+    stdio: ["ignore", "ignore", "pipe"],
   };
 }
 
@@ -141,6 +176,7 @@ export class LangGraphStudioManager {
     const configPath = path.join(state.runtimeDir, "langgraph.json");
     const port = await findAvailablePort(DEFAULT_PORT);
     const config = buildLangGraphStudioConfig({
+      configDir: state.runtimeDir,
       appRoot: this.appRoot,
       entryModulePath: this.entryModulePath,
     });
@@ -158,7 +194,7 @@ export class LangGraphStudioManager {
         ...process.env,
         AGENTFLOW_LANGGRAPH_PROJECT_PATH: state.projectPath,
       },
-      stdio: "pipe",
+      stdio: invocation.stdio,
     });
 
     let stderrBuffer = "";
@@ -208,9 +244,11 @@ export class LangGraphStudioManager {
 
 function resolveLangGraphStudioEntryModulePath(): string {
   const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  const jsPath = path.join(currentDir, "langgraph-studio-entry.js");
-  const tsPath = path.join(currentDir, "langgraph-studio-entry.ts");
-  return path.resolve(pathExistsSync(jsPath) ? jsPath : tsPath);
+  const appRoot = findPackageRoot(currentDir);
+  return selectLangGraphStudioEntryModulePath({
+    appRoot,
+    currentDir,
+  });
 }
 
 function findPackageRoot(startDir: string): string {

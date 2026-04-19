@@ -5,6 +5,10 @@ import type { TopologyRecord } from "@shared/types";
 
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 
+function buildStudioAgentNodeKey(agentName: string): string {
+  return `agent__${agentName}`;
+}
+
 export function createStudioGraph(topology: TopologyRecord) {
   const StudioAnnotation = Annotation.Root({
     activeNode: Annotation<string | null>({
@@ -18,6 +22,7 @@ export function createStudioGraph(topology: TopologyRecord) {
     .addEdge(START, "task_entry");
 
   for (const agentName of topology.nodes) {
+    const agentNodeKey = buildStudioAgentNodeKey(agentName);
     const subgraph = new StateGraph(StudioAnnotation)
       .addNode("agent_enter", async (state) => ({
         ...state,
@@ -32,16 +37,18 @@ export function createStudioGraph(topology: TopologyRecord) {
       .compile({
         name: `agent:${agentName}`,
       });
-    builder = builder.addNode(`agent:${agentName}`, subgraph);
+    builder = builder.addNode(agentNodeKey, subgraph);
   }
 
   for (const edge of topology.edges) {
-    const sourceNode = edge.source === topology.nodes[0] ? "task_entry" : `agent:${edge.source}`;
-    builder = builder.addEdge(sourceNode, `agent:${edge.target}`);
+    const sourceNode =
+      edge.source === topology.nodes[0] ? "task_entry" : buildStudioAgentNodeKey(edge.source);
+    builder = builder.addEdge(sourceNode, buildStudioAgentNodeKey(edge.target));
   }
 
   if (topology.nodes.length > 0) {
-    builder = builder.addEdge(`agent:${topology.nodes.at(-1) ?? ""}`, END);
+    builder = builder.addEdge("task_entry", buildStudioAgentNodeKey(topology.nodes[0] ?? ""));
+    builder = builder.addEdge(buildStudioAgentNodeKey(topology.nodes.at(-1) ?? ""), END);
   } else {
     builder = builder.addEdge("task_entry", END);
   }

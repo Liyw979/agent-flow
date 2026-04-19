@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   buildLangGraphStudioCliInvocation,
   buildLangGraphStudioConfig,
+  buildLangGraphStudioGraphSpec,
+  selectLangGraphStudioEntryModulePath,
   buildLangGraphStudioUrl,
 } from "./langgraph-studio";
 
@@ -16,8 +18,32 @@ test("LangGraph Studio URL 会把 baseUrl 编进官方 Studio 页面地址", () 
   );
 });
 
+test("LangGraph Studio graph entry 必须是相对 langgraph.json 目录的模块路径", () => {
+  assert.equal(
+    buildLangGraphStudioGraphSpec(
+      "/Users/liyw/Library/Application Support/agentflow/langgraph-studio/empty",
+      "/Users/liyw/code/agent-team/out/main/langgraph-studio-entry.js",
+    ),
+    "../../../../../code/agent-team/out/main/langgraph-studio-entry.js",
+  );
+});
+
+test("打包产物目录缺少独立 entry 文件时，应回退到仓库源码里的 langgraph-studio-entry.ts", () => {
+  const selected = selectLangGraphStudioEntryModulePath({
+    appRoot: "/Users/liyw/code/agent-team",
+    currentDir: "/Users/liyw/code/agent-team/out/main",
+    pathExists: (targetPath) => targetPath === "/Users/liyw/code/agent-team/electron/main/langgraph-studio-entry.ts",
+  });
+
+  assert.equal(
+    selected,
+    "/Users/liyw/code/agent-team/electron/main/langgraph-studio-entry.ts",
+  );
+});
+
 test("LangGraph Studio 配置会指向当前仓库依赖和导出的 graph entry", () => {
   const config = buildLangGraphStudioConfig({
+    configDir: "/tmp/agentflow/langgraph-studio/project-a",
     appRoot: "/workspace/agentflow",
     entryModulePath: "/workspace/agentflow/electron/main/langgraph-studio-entry.ts",
   });
@@ -25,7 +51,7 @@ test("LangGraph Studio 配置会指向当前仓库依赖和导出的 graph entry
   assert.deepEqual(config, {
     dependencies: ["/workspace/agentflow"],
     graphs: {
-      agentflow: "/workspace/agentflow/electron/main/langgraph-studio-entry.ts:agentflowStudio",
+      agentflow: "../../../../workspace/agentflow/electron/main/langgraph-studio-entry.ts:agentflowStudio",
     },
   });
 });
@@ -56,6 +82,7 @@ test("LangGraph Studio CLI 调用在不同平台下会生成稳定参数", () =>
       "--host",
       "127.0.0.1",
     ],
+    stdio: ["ignore", "ignore", "pipe"],
   });
   assert.deepEqual(windows, {
     command: "npx.cmd",
@@ -69,5 +96,6 @@ test("LangGraph Studio CLI 调用在不同平台下会生成稳定参数", () =>
       "--host",
       "127.0.0.1",
     ],
+    stdio: ["ignore", "ignore", "pipe"],
   });
 });
