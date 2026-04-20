@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { OpenCodeClient } from "./opencode-client";
+import {
+  buildOpenCodeHostConfigDigest,
+  writeOpenCodeHostState,
+} from "./opencode-host-state";
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "agent-team-opencode-client-"));
@@ -314,4 +318,70 @@ test("不同 Project 会使用各自独立的 serve 端口", async () => {
     "http://127.0.0.1:43127/session",
     "http://127.0.0.1:43128/session",
   ]);
+});
+
+test("getAttachBaseUrl 会优先复用工作区已持久化的 OpenCode host 端口", async () => {
+  const projectPath = createTempDir();
+  writeOpenCodeHostState(projectPath, {
+    pid: 9527,
+    port: 43127,
+    cwd: path.resolve(projectPath),
+    startedAt: "2026-04-20T00:00:00.000Z",
+    configDigest: buildOpenCodeHostConfigDigest(null),
+  });
+
+  const client = new OpenCodeClient(createTempDir()) as OpenCodeClient & {
+    startServer: (projectPath: string) => Promise<{ process: null; port: number }>;
+    waitForHealthy: (port: number) => Promise<boolean>;
+    isOpenCodeServeProcess: (pid: number) => boolean;
+    isPidAlive: (pid: number) => boolean;
+  };
+
+  let startServerCalled = false;
+  client.startServer = async () => {
+    startServerCalled = true;
+    return {
+      process: null,
+      port: 43128,
+    };
+  };
+  client.waitForHealthy = async (port) => port === 43127;
+  client.isOpenCodeServeProcess = (pid) => pid === 9527;
+  client.isPidAlive = (pid) => pid === 9527;
+
+  const baseUrl = await client.getAttachBaseUrl(projectPath);
+
+  assert.equal(baseUrl, "http://127.0.0.1:43127");
+  assert.equal(startServerCalled, false);
+});
+
+test("getAttachBaseUrl 在持久化 host 配置摘要不匹配时会回退新起 serve", async () => {
+  const projectPath = createTempDir();
+  writeOpenCodeHostState(projectPath, {
+    pid: 9527,
+    port: 43127,
+    cwd: path.resolve(projectPath),
+    startedAt: "2026-04-20T00:00:00.000Z",
+    configDigest: buildOpenCodeHostConfigDigest(null),
+  });
+
+  const client = new OpenCodeClient(createTempDir()) as OpenCodeClient & {
+    startServer: (projectPath: string) => Promise<{ process: null; port: number }>;
+    setInjectedConfigContent: (projectPath: string, content: string | null) => void;
+  };
+
+  let startServerCalled = false;
+  client.startServer = async () => {
+    startServerCalled = true;
+    return {
+      process: null,
+      port: 43128,
+    };
+  };
+  client.setInjectedConfigContent(projectPath, "{\"agent\":{\"mode\":\"build\"}}");
+
+  const baseUrl = await client.getAttachBaseUrl(projectPath);
+
+  assert.equal(baseUrl, "http://127.0.0.1:43128");
+  assert.equal(startServerCalled, true);
 });

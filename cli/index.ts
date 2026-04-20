@@ -27,6 +27,7 @@ import {
 import { ensureRuntimeAssets, isCompiledRuntime } from "./runtime-assets";
 import { resolveCliTaskStreamingPlan } from "./task-streaming-policy";
 import { renderTaskSessionSummary } from "./task-session-summary";
+import { renderTaskAttachCommands } from "./task-attach-display";
 import { renderOpenCodeCleanupReport } from "./opencode-cleanup-report";
 import {
   buildBrowserOpenSpec,
@@ -202,24 +203,32 @@ function validateTaskUiCommand(
   }
 }
 
-function printTaskAttachCommands(task: TaskSnapshot) {
-  process.stdout.write("\nattach:\n");
+async function printTaskAttachCommands(context: CliContext, task: TaskSnapshot) {
   const attachCommandOptions = isCompiledRuntime()
     ? {
         mode: "compiled" as const,
         executablePath: process.execPath,
         platform: process.platform,
       }
-    : {
+      : {
         mode: "source" as const,
         platform: process.platform,
       };
-  for (const agent of task.agents) {
-    process.stdout.write(
-      `- ${agent.name} | attach: ${buildCliAttachAgentCommand(task.task.id, agent.name, attachCommandOptions)}\n`,
-    );
-  }
-  process.stdout.write("\n");
+  const attachBaseUrl = await (context.orchestrator as Orchestrator & {
+    opencodeClient: { getAttachBaseUrl: (projectPath: string) => Promise<string> };
+  }).opencodeClient.getAttachBaseUrl(task.task.cwd).catch(() => null);
+  process.stdout.write(
+    renderTaskAttachCommands(
+      task.agents.map((agent) => ({
+        agentName: agent.name,
+        taskAttachCommand: buildCliAttachAgentCommand(task.task.id, agent.name, attachCommandOptions),
+        opencodeAttachCommand:
+          attachBaseUrl && agent.opencodeSessionId
+            ? buildCliOpencodeAttachCommand(attachBaseUrl, agent.opencodeSessionId, task.task.cwd)
+            : null,
+      })),
+    ),
+  );
 }
 
 async function buildAttachCommand(
@@ -308,7 +317,7 @@ async function renderTaskMessages(
     const snapshot = await context.orchestrator.getTaskSnapshot(taskId);
 
     if (!attachPrinted) {
-      printTaskAttachCommands(snapshot);
+      await printTaskAttachCommands(context, snapshot);
       attachPrinted = true;
     }
 

@@ -49,7 +49,9 @@ test("buildTerminalLaunchSpec 在 macOS 里只打开一个 Terminal attach 窗�
       "-e",
       "end repeat",
       "-e",
-      'do script "opencode attach \\"http://127.0.0.1:4310\\" --session \\"session-1\\" --dir \\"/tmp/agent team\\"" in window 1',
+      'set attachTab to do script "opencode attach \\"http://127.0.0.1:4310\\" --session \\"session-1\\" --dir \\"/tmp/agent team\\"" in window 1',
+      "-e",
+      "set selected tab of window 1 to attachTab",
       "-e",
       "end tell",
       "-e",
@@ -59,6 +61,20 @@ test("buildTerminalLaunchSpec 在 macOS 里只打开一个 Terminal attach 窗�
     ],
     cwd: "/tmp/agent team",
   });
+});
+
+test("buildTerminalLaunchSpec 在 macOS 首次启动 Terminal 时必须把焦点切到 attach 所在标签页", () => {
+  const spec = buildTerminalLaunchSpec({
+    cwd: "/tmp/agent team",
+    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1" --dir "/tmp/agent team"',
+    platform: "darwin",
+  });
+
+  assert.match(
+    spec.args.join("\n"),
+    /set attachTab to do script "opencode attach \\"http:\/\/127\.0\.0\.1:4310\\" --session \\"session-1\\" --dir \\"\/tmp\/agent team\\"" in window 1/,
+  );
+  assert.match(spec.args.join("\n"), /set selected tab of window 1 to attachTab/);
 });
 
 test("buildTerminalLaunchSpec 在 Linux 里通过系统终端执行 attach 命令", () => {

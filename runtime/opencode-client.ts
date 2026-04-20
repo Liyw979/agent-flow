@@ -6,10 +6,18 @@ import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:c
 import { buildSubmitMessageBody } from "./opencode-request-body";
 import { toOpenCodeAgentName } from "./opencode-agent-name";
 import { appendAppLog } from "./app-log";
+import {
+  buildOpenCodeHostConfigDigest,
+  deleteOpenCodeHostState,
+  isOpenCodeHostStateReusable,
+  readOpenCodeHostState,
+  writeOpenCodeHostState,
+} from "./opencode-host-state";
 
 interface ServeHandle {
   process: ChildProcessWithoutNullStreams | null;
   port: number;
+  source?: "owned" | "reused";
 }
 
 interface OpenCodeEvent {
@@ -136,13 +144,21 @@ export class OpenCodeClient {
       return state.serverHandle;
     }
 
-    state.serverHandle = this.startServer(state.projectPath).catch((error) => {
+    state.serverHandle = this.resolveServerHandle(state).catch((error) => {
       if (state.serverHandle) {
         state.serverHandle = null;
       }
       throw error;
     });
     return state.serverHandle;
+  }
+
+  private async resolveServerHandle(state: ProjectServerState): Promise<ServeHandle> {
+    const reused = await this.tryReusePersistedServer(state);
+    if (reused) {
+      return reused;
+    }
+    return this.startServer(state.projectPath);
   }
 
   setInjectedConfigContent(projectPath: string, content: string | null) {
@@ -172,6 +188,43 @@ export class OpenCodeClient {
       });
     state.shutdownPromise = pending;
     return pending;
+  }
+
+  private async tryReusePersistedServer(state: ProjectServerState): Promise<ServeHandle | null> {
+    const persisted = readOpenCodeHostState(state.projectPath);
+    if (!persisted) {
+      return null;
+    }
+
+    if (!isOpenCodeHostStateReusable(persisted, {
+      cwd: state.projectPath,
+      configDigest: buildOpenCodeHostConfigDigest(state.injectedConfigContent),
+    })) {
+      deleteOpenCodeHostState(state.projectPath);
+      return null;
+    }
+
+    if (!this.isPidAlive(persisted.pid) || !this.isOpenCodeServeProcess(persisted.pid)) {
+      deleteOpenCodeHostState(state.projectPath);
+      return null;
+    }
+
+    if (!await this.waitForHealthy(persisted.port)) {
+      deleteOpenCodeHostState(state.projectPath);
+      return null;
+    }
+
+    appendAppLog("info", "opencode.serve_reused", {
+      projectPath: state.projectPath,
+      port: persisted.port,
+      pid: persisted.pid,
+    });
+
+    return {
+      process: null,
+      port: persisted.port,
+      source: "reused",
+    };
   }
 
   async createSession(projectPath: string, title: string): Promise<string> {
@@ -345,12 +398,16 @@ export class OpenCodeClient {
       let report: OpenCodeShutdownReport = {
         killedPids: [],
       };
+      let server: ServeHandle | null = null;
       try {
-        const server = await state.serverHandle;
+        server = await state.serverHandle;
         report = await this.terminateServeHandle(server);
       } catch {
         // ignore shutdown errors
       } finally {
+        if (server?.source !== "reused") {
+          deleteOpenCodeHostState(state.projectPath);
+        }
         state.serverHandle = null;
         state.eventPump = null;
       }
@@ -359,15 +416,19 @@ export class OpenCodeClient {
 
     const reports: OpenCodeShutdownReport[] = [];
     for (const state of this.servers.values()) {
+      let server: ServeHandle | null = null;
       try {
         if (!state.serverHandle) {
           continue;
         }
-        const server = await state.serverHandle;
+        server = await state.serverHandle;
         reports.push(await this.terminateServeHandle(server));
       } catch {
         // ignore shutdown errors
       } finally {
+        if (server?.source !== "reused") {
+          deleteOpenCodeHostState(state.projectPath);
+        }
         state.serverHandle = null;
         state.shutdownPromise = null;
         state.eventPump = null;
@@ -538,6 +599,15 @@ export class OpenCodeClient {
     });
   }
 
+  private isPidAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async startServer(projectPath: string): Promise<ServeHandle> {
     const state = this.getProjectServerState(projectPath);
     const port = await this.resolveServerPort();
@@ -631,9 +701,20 @@ export class OpenCodeClient {
       args: spawnSpec.args,
     });
 
+    if (typeof childProcess.pid === "number" && childProcess.pid > 0) {
+      writeOpenCodeHostState(state.projectPath, {
+        pid: childProcess.pid,
+        port,
+        cwd: state.projectPath,
+        startedAt: new Date().toISOString(),
+        configDigest: buildOpenCodeHostConfigDigest(state.injectedConfigContent),
+      });
+    }
+
     return {
       process: childProcess,
       port,
+      source: "owned",
     };
   }
 

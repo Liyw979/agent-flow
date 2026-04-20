@@ -64,6 +64,12 @@ test("task ui 与 task headless 都会把 command.cwd 传入工作区解析链�
   assert.match(CLI_SOURCE, /resolveTaskProject\(context, command\.taskId, command\.cwd\)/);
 });
 
+test("CLI 会在 attach 列表里同时展示 task attach 和 opencode attach 命令", () => {
+  assert.match(CLI_SOURCE, /renderTaskAttachCommands/);
+  assert.match(CLI_SOURCE, /opencodeClient: \{ getAttachBaseUrl/);
+  assert.match(CLI_SOURCE, /buildCliOpencodeAttachCommand\(attachBaseUrl, agent\.opencodeSessionId, task\.task\.cwd\)/);
+});
+
 test("CLI 退出时会输出被清理的 OpenCode 实例 PID", () => {
   assert.match(CLI_SOURCE, /renderOpenCodeCleanupReport/);
   assert.match(CLI_SOURCE, /process\.stdout\.write\(output\)/);
