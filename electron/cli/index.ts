@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { fileURLToPath } from "node:url";
 import { buildCliAttachAgentCommand, buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import type { TaskSnapshot, WorkspaceSnapshot } from "@shared/types";
 import { appendAppLog, initAppFileLogger } from "../main/app-log";
@@ -20,6 +21,9 @@ import {
 } from "./cli-command";
 import { resolveCliDisposeOptions } from "./cli-dispose-policy";
 import { renderTaskSessionSummary } from "./task-session-summary";
+import { buildUiLaunchSpec } from "./ui-launch-spec";
+
+const CLI_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 interface CliContext {
   orchestrator: Orchestrator;
@@ -48,10 +52,11 @@ function buildTaskRunDiagnostics(userDataPath: string): TaskRunDiagnostics {
   };
 }
 
-function printTaskRunDiagnostics(diagnostics: TaskRunDiagnostics, taskId: string) {
+function printTaskRunDiagnostics(diagnostics: TaskRunDiagnostics, taskId: string, cwd?: string) {
   process.stdout.write(`${renderTaskSessionSummary({
     logFilePath: diagnostics.logFilePath,
     taskId,
+    cwd,
   })}\n\n`);
 }
 
@@ -165,10 +170,10 @@ function validateTaskChatCommand(
   }
 }
 
-function printTaskAttachCommands(task: TaskSnapshot) {
+function printTaskAttachCommands(task: TaskSnapshot, cwd?: string) {
   process.stdout.write("\nattach:\n");
   for (const agent of task.agents) {
-    process.stdout.write(`- ${agent.name} | attach: ${buildCliAttachAgentCommand(agent.name)}\n`);
+    process.stdout.write(`- ${agent.name} | attach: ${buildCliAttachAgentCommand(agent.name, cwd)}\n`);
   }
   process.stdout.write("\n");
 }
@@ -225,7 +230,7 @@ async function renderTaskMessages(
     const snapshot = await context.orchestrator.getTaskSnapshot(taskId);
 
     if (!attachPrinted) {
-      printTaskAttachCommands(snapshot);
+      printTaskAttachCommands(snapshot, snapshot.task.cwd);
       attachPrinted = true;
     }
 
@@ -282,16 +287,17 @@ async function runInteractiveSession(
 }
 
 function spawnUi(taskId: string, cwd: string) {
-  const command = process.platform === "win32" ? "npm.cmd" : "npm";
-  const child = spawn(
-    command,
-    ["run", "electron:dev", "--", "--agentflow-task-id", taskId, "--agentflow-cwd", cwd],
-    {
-      cwd,
-      detached: true,
-      stdio: "ignore",
-    },
-  );
+  const spec = buildUiLaunchSpec({
+    repoRoot: CLI_REPO_ROOT,
+    taskId,
+    taskCwd: cwd,
+  });
+  const child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    env: spec.env,
+    detached: true,
+    stdio: "ignore",
+  });
   child.unref();
 }
 
@@ -310,7 +316,7 @@ async function handleTaskRunCommand(
     taskId: null,
     content: initialMessage,
   });
-  printTaskRunDiagnostics(diagnostics, snapshot.task.id);
+  printTaskRunDiagnostics(diagnostics, snapshot.task.id, snapshot.task.cwd);
 
   if (command.ui) {
     spawnUi(snapshot.task.id, snapshot.task.cwd);
@@ -328,9 +334,9 @@ async function handleTaskShowCommand(
   command: Extract<ParsedCliCommand, { kind: "task.show" }>,
 ) {
   const diagnostics = buildTaskRunDiagnostics(context.userDataPath);
-  const workspace = await resolveTaskProject(context, command.taskId);
+  const workspace = await resolveTaskProject(context, command.taskId, command.cwd);
   const task = findTaskOrThrow(workspace, command.taskId);
-  printTaskRunDiagnostics(diagnostics, task.task.id);
+  printTaskRunDiagnostics(diagnostics, task.task.id, task.task.cwd);
 
   if (command.ui) {
     spawnUi(task.task.id, task.task.cwd);
@@ -353,7 +359,7 @@ async function handleTaskChatCommand(
   if (command.taskId) {
     const workspace = await resolveTaskProject(context, command.taskId, command.cwd);
     const task = findTaskOrThrow(workspace, command.taskId);
-    printTaskRunDiagnostics(diagnostics, task.task.id);
+    printTaskRunDiagnostics(diagnostics, task.task.id, task.task.cwd);
 
     if (command.ui) {
       spawnUi(task.task.id, task.task.cwd);
@@ -389,7 +395,7 @@ async function handleTaskChatCommand(
     taskId: null,
     content: initialMessage,
   });
-  printTaskRunDiagnostics(diagnostics, snapshot.task.id);
+  printTaskRunDiagnostics(diagnostics, snapshot.task.id, snapshot.task.cwd);
 
   if (command.ui) {
     spawnUi(snapshot.task.id, snapshot.task.cwd);
@@ -438,14 +444,14 @@ function buildHelp() {
     "",
     "补充命令示例：",
     "  task run --file <topology-json> --message <message> [--ui] [--cwd <path>]",
-    "  task show <taskId> [--ui]",
+    "  task show <taskId> [--ui] [--cwd <path>]",
     "  task chat --file <topology-json> --message <message> [--ui] [--cwd <path>]",
     "  task chat --task <taskId> [--message <message>] [--ui] [--cwd <path>]",
     "  task attach <agentName> [--cwd <path>] [--print-only]",
     "",
     "说明：",
     "  - `task run` 只负责新建任务，运行到本轮任务结束后退出 CLI。",
-    "  - `task show <taskId>` 会打印已有 task 的群聊记录；若任务还在运行，会继续打印到结束。",
+    "  - `task show <taskId>` 会打印已有 task 的群聊记录；若任务位于其他工作目录，请显式传 `--cwd`。",
     "  - `task chat` 会运行到本轮任务结束后继续保留命令行会话，可继续输入消息。",
     "  - 新建任务时必须传 `--file` 和 `--message`。",
     "  - 恢复已有任务继续对话时使用 `task chat --task <taskId>`；会先打印完整历史群聊。",

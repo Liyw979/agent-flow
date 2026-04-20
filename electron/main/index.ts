@@ -11,6 +11,7 @@ import type {
 import { Orchestrator } from "./orchestrator";
 import { initAppFileLogger } from "./app-log";
 import { resolveCliUserDataPath } from "./user-data-path";
+import { resolveLaunchContext } from "./launch-context";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -96,28 +97,22 @@ const orchestrator = new Orchestrator({
 });
 let shuttingDown = false;
 
-function readLaunchArgument(flag: string): string | null {
-  const index = process.argv.findIndex((value) => value === flag);
-  if (index < 0) {
-    return null;
-  }
-  const next = process.argv[index + 1];
-  return typeof next === "string" && next.trim().length > 0 ? next : null;
-}
-
 async function buildUiBootstrapPayload(): Promise<UiBootstrapPayload> {
-  const launchCwd = readLaunchArgument("--agentflow-cwd");
-  const launchTaskId = readLaunchArgument("--agentflow-task-id");
-  const workspace = await orchestrator.getWorkspaceSnapshot(path.resolve(launchCwd || process.cwd()));
+  const launch = resolveLaunchContext({
+    argv: process.argv,
+    env: process.env,
+    defaultCwd: process.cwd(),
+  });
+  const workspace = await orchestrator.getWorkspaceSnapshot(path.resolve(launch.launchCwd));
   const task =
-    launchTaskId
-      ? workspace.tasks.find((item) => item.task.id === launchTaskId) ?? null
+    launch.launchTaskId
+      ? workspace.tasks.find((item) => item.task.id === launch.launchTaskId) ?? null
       : workspace.tasks[0] ?? null;
 
   return {
     workspace,
     task,
-    launchTaskId,
+    launchTaskId: launch.launchTaskId,
     launchCwd: workspace.cwd,
   };
 }

@@ -32,6 +32,13 @@ test("CLI 支持直接构造 task show 命令", () => {
   );
 });
 
+test("CLI 在跨工作区场景下构造 task attach 命令时会带上 --cwd", () => {
+  assert.equal(
+    buildCliAttachAgentCommand("Code Review", "/tmp/project"),
+    'npm run cli -- task attach "Code Review" --cwd "/tmp/project"',
+  );
+});
+
 test("CLI 打开的 zellij attach 命令对 Windows 和 POSIX 都可直接复用", () => {
   assert.equal(
     buildCliAttachSessionCommand("session 123"),

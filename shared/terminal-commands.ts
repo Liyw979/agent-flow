@@ -123,14 +123,18 @@ export function buildCliPanelFocusCommand(
 
 export function buildCliTaskShowCommand(
   taskId: string,
+  cwd?: string,
 ): string {
-  return `npm run cli -- task show ${quotePortableShellArg(taskId)}`;
+  const cwdSegment = cwd ? ` --cwd ${quotePortableShellArg(cwd)}` : "";
+  return `npm run cli -- task show ${quotePortableShellArg(taskId)}${cwdSegment}`;
 }
 
 export function buildCliAttachAgentCommand(
   agentName: string,
+  cwd?: string,
 ): string {
-  return `npm run cli -- task attach ${quotePortableShellArg(agentName)}`;
+  const cwdSegment = cwd ? ` --cwd ${quotePortableShellArg(cwd)}` : "";
+  return `npm run cli -- task attach ${quotePortableShellArg(agentName)}${cwdSegment}`;
 }
 
 export function buildCliAttachSessionCommand(
