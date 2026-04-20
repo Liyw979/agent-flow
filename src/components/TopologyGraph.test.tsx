@@ -22,3 +22,8 @@ test("点击拓扑里的单条历史消息后，会弹出完整内容弹窗", ()
   assert.match(TOPOLOGY_GRAPH_SOURCE, /<AgentHistoryMarkdown[\s\S]*content=\{item\.detail\}/);
   assert.doesNotMatch(TOPOLOGY_GRAPH_SOURCE, /<button[\s\S]*<article/);
 });
+
+test("拓扑历史详情弹窗里的正文字号要和卡片里的工具/审视记录保持一致，不再单独放大", () => {
+  assert.match(TOPOLOGY_GRAPH_SOURCE, /<AgentHistoryMarkdown[\s\S]*className="text-\[11px\] leading-5 text-foreground\/84"/);
+  assert.doesNotMatch(TOPOLOGY_GRAPH_SOURCE, /<AgentHistoryMarkdown[\s\S]*className="text-\[14px\] leading-7 text-foreground\/84"/);
+});

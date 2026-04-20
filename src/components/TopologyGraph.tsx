@@ -431,7 +431,7 @@ export function TopologyGraph({
             <div className="min-h-0 overflow-y-auto px-5 py-4">
               <AgentHistoryMarkdown
                 content={selectedHistoryItem.item.detail}
-                className="text-[14px] leading-7 text-foreground/84"
+                className="text-[11px] leading-5 text-foreground/84"
               />
             </div>
           </div>

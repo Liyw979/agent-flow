@@ -4,10 +4,14 @@ export type ChatMarkdownTypography = {
   bodyFontSizeRem: number;
   headingFontSizeEm: number;
   codeFontSizeEm: number;
+  lineHeightEm: number;
 };
 
 type ChatMarkdownTypographyStyle = CSSProperties & Record<
-  "--chat-markdown-font-size" | "--chat-markdown-heading-font-size" | "--chat-markdown-code-font-size",
+  | "--chat-markdown-font-size"
+  | "--chat-markdown-heading-font-size"
+  | "--chat-markdown-code-font-size"
+  | "--chat-markdown-line-height",
   string
 >;
 
@@ -16,6 +20,7 @@ export function getChatMarkdownTypography(): ChatMarkdownTypography {
     bodyFontSizeRem: 0.875,
     headingFontSizeEm: 1,
     codeFontSizeEm: 1,
+    lineHeightEm: 1.36,
   };
 }
 
@@ -29,5 +34,6 @@ export function getChatMarkdownTypographyStyle(): ChatMarkdownTypographyStyle {
     "--chat-markdown-font-size": `${typography.bodyFontSizeRem}rem`,
     "--chat-markdown-heading-font-size": `${typography.headingFontSizeEm}em`,
     "--chat-markdown-code-font-size": `${typography.codeFontSizeEm}em`,
+    "--chat-markdown-line-height": `${typography.lineHeightEm}em`,
   };
 }

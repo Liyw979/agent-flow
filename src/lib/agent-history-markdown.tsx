@@ -10,7 +10,7 @@ export function AgentHistoryMarkdown({
   content: string;
   className?: string;
 }) {
-  return <MarkdownMessage content={content} className={className} />;
+  return <MarkdownMessage content={content} className={className} inheritTypography />;
 }
 
 export function renderAgentHistoryDetailToStaticHtml(content: string): string {
