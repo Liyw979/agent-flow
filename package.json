@@ -9,7 +9,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "build:web": "vite build",
-    "build:embedded-assets": "node scripts/generate-embedded-assets.mjs",
+    "build:embedded-assets": "node cli/generate-embedded-assets.mjs",
     "test": "tsx --test",
     "preview": "vite preview",
     "cli": "node cli/launcher.cjs",
