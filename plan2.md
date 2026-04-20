@@ -33,7 +33,7 @@
 
 - `shared/terminal-commands.ts` 当前把 attach 提示固定写成 `npm run cli -- task attach ...`。
 - `cli/index.ts` 的 `printTaskAttachCommands()` 直接复用该字符串输出给用户。
-- 当前仓库的已定义打包产物是 `dist/agentflow.exe`，Windows 单文件版并不依赖仓库内 `package.json` 的 `npm run cli`。
+- 当前仓库的已定义打包产物是 `dist/agent-team.exe`，Windows 单文件版并不依赖仓库内 `package.json` 的 `npm run cli`。
 
 ### 目标状态
 
@@ -41,8 +41,8 @@
 
 - 源码运行态：继续输出 `npm run cli -- task attach <agentName> [--cwd ...]`
 - 编译产物运行态：
-  - Windows：输出 `agentflow.exe task attach <agentName> [--cwd ...]`
-  - macOS：输出未来对应的可执行入口，例如 `agentflow task attach <agentName> [--cwd ...]` 或 `.app` 内统一封装后的 CLI 入口
+  - Windows：输出 `agent-team.exe task attach <agentName> [--cwd ...]`
+  - macOS：输出未来对应的可执行入口，例如 `agent-team task attach <agentName> [--cwd ...]` 或 `.app` 内统一封装后的 CLI 入口
 
 ### 修改步骤
 
@@ -68,7 +68,7 @@
 ### 现状证据
 
 - `package.json` 当前只有 `dist:win`，目标为 `bun-windows-x64`。
-- `AGENTS.md` 只记录了 Windows 打包与 `dist/agentflow.exe` 的交付方式。
+- `AGENTS.md` 只记录了 Windows 打包与 `dist/agent-team.exe` 的交付方式。
 - 代码里虽然存在 `darwin` 分支，但仓库没有 macOS 对应的产物构建入口。
 
 ### 目标状态

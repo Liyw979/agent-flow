@@ -6,7 +6,7 @@ let appLogFilePath: string | null = null;
 export function initAppFileLogger(userDataPath: string) {
   const logDir = path.join(userDataPath, "logs");
   fs.mkdirSync(logDir, { recursive: true });
-  appLogFilePath = path.join(logDir, "agentflow.log");
+  appLogFilePath = path.join(logDir, "agent-team.log");
   fs.closeSync(fs.openSync(appLogFilePath, "a"));
   return appLogFilePath;
 }

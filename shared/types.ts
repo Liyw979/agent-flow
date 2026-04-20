@@ -301,7 +301,7 @@ export interface RuntimeUpdatedEventPayload {
   timestamp: string;
 }
 
-export interface AgentFlowEvent {
+export interface AgentTeamEvent {
   type:
     | "workspace-updated"
     | "task-created"

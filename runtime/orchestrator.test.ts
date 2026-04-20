@@ -19,7 +19,7 @@ const TEST_AGENT_PROMPTS: Record<string, string> = {
 };
 
 function createTempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-orchestrator-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "agent-team-orchestrator-"));
 }
 
 const activeOrchestrators = new Set<Orchestrator>();
@@ -119,7 +119,7 @@ afterEach(async () => {
   forceCleanupCurrentProcessOpenCodeChildren();
 });
 
-test("getWorkspaceSnapshot 在空工作区只读读取时不应物化 .agentflow/state.json", async () => {
+test("getWorkspaceSnapshot 在空工作区只读读取时不应物化 .agent-team/state.json", async () => {
   const userDataPath = createTempDir();
   const workspacePath = createTempDir();
   const orchestrator = createTestOrchestrator({
@@ -129,7 +129,7 @@ test("getWorkspaceSnapshot 在空工作区只读读取时不应物化 .agentflow
 
   await orchestrator.getWorkspaceSnapshot(workspacePath);
 
-  assert.equal(fs.existsSync(path.join(workspacePath, ".agentflow", "state.json")), false);
+  assert.equal(fs.existsSync(path.join(workspacePath, ".agent-team", "state.json")), false);
 });
 
 function buildTeamDslFromWorkspaceSnapshot(input: {
@@ -629,7 +629,7 @@ test("保存拓扑后 state.json 不再持久化 startAgentId", async () => {
     },
   });
 
-  const statePath = path.join(projectPath, ".agentflow", "state.json");
+  const statePath = path.join(projectPath, ".agent-team", "state.json");
   const persisted = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
     topology?: Record<string, unknown>;
   };
@@ -698,7 +698,7 @@ test("保存拓扑后会持久化动态 spawn 团队配置", async () => {
   assert.equal(saved.topology.spawnRules?.length, 1);
   assert.equal(saved.topology.nodeRecords?.some((node) => node.kind === "spawn"), true);
 
-  const statePath = path.join(projectPath, ".agentflow", "state.json");
+  const statePath = path.join(projectPath, ".agent-team", "state.json");
   const persisted = JSON.parse(fs.readFileSync(statePath, "utf8")) as {
     topology?: {
       spawnRules?: Array<{ id?: string }>;

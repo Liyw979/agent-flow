@@ -89,7 +89,7 @@ export class OpenCodeClient {
   private readonly sessionWaiters = new Map<string, SessionWaiter[]>();
 
   constructor(runtimeRoot?: string) {
-    const baseDir = runtimeRoot ? path.resolve(runtimeRoot) : path.join(process.cwd(), ".agentflow");
+    const baseDir = runtimeRoot ? path.resolve(runtimeRoot) : path.join(process.cwd(), ".agent-team");
     this.runtimeRoot = path.join(baseDir, "opencode-runtime", "servers");
     fs.mkdirSync(this.runtimeRoot, { recursive: true });
   }
@@ -531,7 +531,7 @@ export class OpenCodeClient {
     delete serverEnv.OPENCODE_CLIENT;
     serverEnv.OPENCODE_CONFIG_DIR = state.runtimeDir;
     serverEnv.OPENCODE_DB = path.join(state.runtimeDir, "opencode-server.db");
-    serverEnv.OPENCODE_CLIENT = "agentflow-orchestrator";
+    serverEnv.OPENCODE_CLIENT = "agent-team-orchestrator";
     serverEnv.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
     if (state.injectedConfigContent) {
       serverEnv.OPENCODE_CONFIG_CONTENT = state.injectedConfigContent;

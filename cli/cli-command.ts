@@ -23,7 +23,7 @@ export type ParsedCliCommand =
 
 function configureProgram(program: Command) {
   return program
-    .name("agentflow")
+    .name("agent-team")
     .description("OpenCode Code Agent CLI")
     .showHelpAfterError()
     .allowExcessArguments(false)

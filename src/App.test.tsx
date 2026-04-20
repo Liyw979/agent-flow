@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const APP_SOURCE = fs.readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const LEGACY_SUBSCRIBE_NAME = ["subscribe", "Agent", "Flow", "Events"].join("");
+const LEGACY_BRIDGE_NAME = ["window", "agent", "Flow"].join(".");
 
 test("App 已裁成单 Task 展示面板", () => {
   assert.doesNotMatch(APP_SOURCE, /SidebarList/);
@@ -92,8 +94,9 @@ test("App 不再从 bootstrap.project 读取当前工作区", () => {
 test("App 改走浏览器 fetch 与 EventSource，而不是旧的桌面桥接 API", () => {
   assert.match(APP_SOURCE, /from "\.\/lib\/web-api"/);
   assert.match(APP_SOURCE, /bootstrapTask/);
-  assert.match(APP_SOURCE, /subscribeAgentFlowEvents/);
+  assert.match(APP_SOURCE, /subscribeAgentTeamEvents/);
+  assert.doesNotMatch(APP_SOURCE, new RegExp(LEGACY_SUBSCRIBE_NAME));
   assert.doesNotMatch(APP_SOURCE, /launchParams\.cwd/);
   assert.doesNotMatch(APP_SOURCE, /cwd: launchParams\.cwd/);
-  assert.doesNotMatch(APP_SOURCE, /window\.agentFlow/);
+  assert.doesNotMatch(APP_SOURCE, new RegExp(LEGACY_BRIDGE_NAME.replace(".", "\\.")));
 });

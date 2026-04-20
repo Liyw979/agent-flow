@@ -29,7 +29,7 @@ interface TaskLocatorIndexFile {
 
 type WorkspaceStateAccessMode = "read" | "write";
 
-const WORKSPACE_DATA_DIR_NAME = ".agentflow";
+const WORKSPACE_DATA_DIR_NAME = ".agent-team";
 const WORKSPACE_STATE_FILE_NAME = "state.json";
 const TASK_LOCATOR_INDEX_FILE_NAME = "task-locator.json";
 

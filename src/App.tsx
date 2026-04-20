@@ -12,7 +12,7 @@ import {
   openAgentTerminal,
   readLaunchParams,
   submitTask,
-  subscribeAgentFlowEvents,
+  subscribeAgentTeamEvents,
 } from "./lib/web-api";
 import { getAgentColorToken } from "./lib/agent-colors";
 import { calculateAgentCardListGap, calculateAgentCardPromptLineCount } from "./lib/agent-card-layout";
@@ -120,7 +120,7 @@ function App() {
       return;
     }
 
-    const unsubscribe = subscribeAgentFlowEvents({
+    const unsubscribe = subscribeAgentTeamEvents({
       taskId: bootstrap.task.task.id,
     }, (event) => {
       if (!bootstrap.task || !bootstrap.workspace) {

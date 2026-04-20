@@ -1,5 +1,5 @@
 import type {
-  AgentFlowEvent,
+  AgentTeamEvent,
   AgentRuntimeSnapshot,
   GetTaskRuntimePayload,
   OpenAgentTerminalPayload,
@@ -58,16 +58,16 @@ export async function openAgentTerminal(payload: OpenAgentTerminalPayload) {
   });
 }
 
-export function subscribeAgentFlowEvents(
+export function subscribeAgentTeamEvents(
   params: {
     taskId: string;
   },
-  listener: (event: AgentFlowEvent) => void,
+  listener: (event: AgentTeamEvent) => void,
 ) {
   const source = new EventSource(`/api/events?${buildQuery(params)}`);
   source.onmessage = (message) => {
     try {
-      const payload = JSON.parse(message.data) as AgentFlowEvent | { type: "connected" };
+      const payload = JSON.parse(message.data) as AgentTeamEvent | { type: "connected" };
       if (payload.type === "connected") {
         return;
       }

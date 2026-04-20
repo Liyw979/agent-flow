@@ -23,7 +23,7 @@ export async function ensureRuntimeAssets(userDataPath: string): Promise<Resolve
   const runtimeRoot = path.join(userDataPath, "runtime", packageJson.version);
   fs.mkdirSync(runtimeRoot, { recursive: true });
 
-  let webRoot: string | null = process.env.AGENTFLOW_WEB_ROOT?.trim() || null;
+  let webRoot: string | null = process.env.AGENT_TEAM_WEB_ROOT?.trim() || null;
 
   if (isCompiledRuntime()) {
     if (!webRoot && EMBEDDED_WEB_ASSETS.length > 0) {
@@ -44,7 +44,7 @@ export async function ensureRuntimeAssets(userDataPath: string): Promise<Resolve
   }
 
   if (webRoot) {
-    process.env.AGENTFLOW_WEB_ROOT = webRoot;
+    process.env.AGENT_TEAM_WEB_ROOT = webRoot;
   }
 
   return {

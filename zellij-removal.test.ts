@@ -6,6 +6,7 @@ import test from "node:test";
 const REPO_ROOT = "/Users/liyw/code/agent-team";
 const REMOVED_TERMINAL_HOST = String.fromCharCode(122, 101, 108, 108, 105, 106);
 const REMOVED_UI_HOOK = ["on", "Open", "Task", "Session"].join("");
+const REMOVED_TERMINAL_PREFIX = ["agent", "flow"].join("");
 
 function readRepoFile(relativePath: string): string {
   return fs.readFileSync(path.join(REPO_ROOT, relativePath), "utf8");
@@ -24,7 +25,7 @@ test("仓库产物与源码入口不再包含已废弃终端宿主残留", () =>
   assert.doesNotMatch(terminalCommands, /buildCliPanelFocusCommand/);
   assert.doesNotMatch(terminalCommands, /buildCliAttachSessionCommand/);
   assert.doesNotMatch(terminalCommands, /buildOpencodePaneCommand/);
-  assert.doesNotMatch(terminalCommands, new RegExp(`agentflow-${REMOVED_TERMINAL_HOST}`));
+  assert.doesNotMatch(terminalCommands, new RegExp(`${REMOVED_TERMINAL_PREFIX}-${REMOVED_TERMINAL_HOST}`));
   assert.doesNotMatch(chatWindow, new RegExp(REMOVED_UI_HOOK));
   assert.doesNotMatch(chatWindow, /打开旧终端宿主/);
 });

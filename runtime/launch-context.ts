@@ -20,18 +20,18 @@ function readLaunchArgument(argv: string[], flag: string): string | null {
   return typeof next === "string" && next.trim().length > 0 ? next : null;
 }
 
-function readLaunchEnv(env: NodeJS.ProcessEnv, key: "AGENTFLOW_TASK_ID" | "AGENTFLOW_CWD"): string | null {
+function readLaunchEnv(env: NodeJS.ProcessEnv, key: "AGENT_TEAM_TASK_ID" | "AGENT_TEAM_CWD"): string | null {
   const value = env[key];
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
 export function resolveLaunchContext(input: ResolveLaunchContextInput): LaunchContext {
   const launchTaskId =
-    readLaunchArgument(input.argv, "--agentflow-task-id")
-    ?? readLaunchEnv(input.env, "AGENTFLOW_TASK_ID");
+    readLaunchArgument(input.argv, "--agent-team-task-id")
+    ?? readLaunchEnv(input.env, "AGENT_TEAM_TASK_ID");
   const launchCwdRaw =
-    readLaunchArgument(input.argv, "--agentflow-cwd")
-    ?? readLaunchEnv(input.env, "AGENTFLOW_CWD")
+    readLaunchArgument(input.argv, "--agent-team-cwd")
+    ?? readLaunchEnv(input.env, "AGENT_TEAM_CWD")
     ?? input.defaultCwd;
 
   return {

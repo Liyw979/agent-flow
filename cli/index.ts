@@ -64,7 +64,7 @@ function sleep(ms: number) {
 
 function buildTaskRunDiagnostics(userDataPath: string): TaskRunDiagnostics {
   return {
-    logFilePath: path.join(userDataPath, "logs", "agentflow.log"),
+    logFilePath: path.join(userDataPath, "logs", "agent-team.log"),
   };
 }
 
@@ -442,7 +442,7 @@ async function ensureUiHost(
     cwd: spec.cwd,
     env: {
       ...process.env,
-      AGENTFLOW_WEB_ROOT: process.env.AGENTFLOW_WEB_ROOT,
+      AGENT_TEAM_WEB_ROOT: process.env.AGENT_TEAM_WEB_ROOT,
     },
     detached: true,
     stdio: "ignore",
@@ -496,7 +496,7 @@ async function runInternalWebHost(command: InternalWebHostCommand) {
     enableEventStream: true,
   });
   const assets = await ensureRuntimeAssets(context.userDataPath);
-  const webRoot = assets.webRoot ?? process.env.AGENTFLOW_WEB_ROOT ?? null;
+  const webRoot = assets.webRoot ?? process.env.AGENT_TEAM_WEB_ROOT ?? null;
   if (!webRoot) {
     fail("网页资源不可用，无法启动内部 web-host。");
   }

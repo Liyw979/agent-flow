@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import {
-  type AgentFlowEvent,
+  type AgentTeamEvent,
   type AgentRuntimeSnapshot,
   type AgentRecord,
   BUILD_AGENT_NAME,
@@ -182,10 +182,10 @@ export class Orchestrator {
     await this.opencodeClient.shutdown();
   }
 
-  subscribe(listener: (event: AgentFlowEvent) => void): () => void {
-    this.events.on("agentflow-event", listener);
+  subscribe(listener: (event: AgentTeamEvent) => void): () => void {
+    this.events.on("agent-team-event", listener);
     return () => {
-      this.events.off("agentflow-event", listener);
+      this.events.off("agent-team-event", listener);
     };
   }
 
@@ -1332,7 +1332,7 @@ export class Orchestrator {
         this.completeTask(cwd, taskId, status, failureReason),
     };
     runtime = new LangGraphRuntime({
-      checkpointDir: path.join(cwd, ".agentflow", "langgraph"),
+      checkpointDir: path.join(cwd, ".agent-team", "langgraph"),
       host,
     });
     this.langGraphRuntimes.set(cwd, runtime);
@@ -1880,8 +1880,8 @@ export class Orchestrator {
     this.pendingEventReconnects.set(normalized, timer);
   }
 
-  private emit(event: AgentFlowEvent) {
-    this.events.emit("agentflow-event", event);
+  private emit(event: AgentTeamEvent) {
+    this.events.emit("agent-team-event", event);
   }
 
   private async ensureEventStream(cwd?: string) {

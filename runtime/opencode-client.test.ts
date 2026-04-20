@@ -7,7 +7,7 @@ import path from "node:path";
 import { OpenCodeClient } from "./opencode-client";
 
 function createTempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-opencode-client-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "agent-team-opencode-client-"));
 }
 
 function createClient(projectPath = createTempDir()) {

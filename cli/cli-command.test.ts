@@ -5,6 +5,8 @@ import fs from "node:fs";
 import { parseCliCommand } from "./cli-command";
 
 const CLI_SOURCE = fs.readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+const CLI_COMMAND_SOURCE = fs.readFileSync(new URL("./cli-command.ts", import.meta.url), "utf8");
+const LEGACY_CLI_NAME = ["agent", "flow"].join("-");
 
 test("parseCliCommand 解析新建 task headless", () => {
   const parsed = parseCliCommand([
@@ -141,6 +143,8 @@ test("旧 task run 与旧 --ui 入口都会被拒绝", () => {
 });
 
 test("Commander help 包含 task headless/task ui/task attach 命令", () => {
+  assert.match(CLI_COMMAND_SOURCE, /\.name\("agent-team"\)/);
+  assert.doesNotMatch(CLI_COMMAND_SOURCE, new RegExp(`\\.name\\("${LEGACY_CLI_NAME}"\\)`));
   assert.match(CLI_SOURCE, /task headless --file <topology-json> --message <message>/);
   assert.match(CLI_SOURCE, /task ui --file <topology-json> --message <message>/);
   assert.match(CLI_SOURCE, /task ui <taskId>/);

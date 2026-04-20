@@ -7,10 +7,10 @@ import {
   normalizeUiHostStateRecord,
 } from "./ui-host-state";
 
-test("getUiHostStatePath 会把运行态持久化到工作区 .agentflow/ui-host.json", () => {
+test("getUiHostStatePath 会把运行态持久化到工作区 .agent-team/ui-host.json", () => {
   assert.equal(
     getUiHostStatePath("/tmp/demo"),
-    "/tmp/demo/.agentflow/ui-host.json",
+    "/tmp/demo/.agent-team/ui-host.json",
   );
 });
 

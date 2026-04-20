@@ -3,7 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { URL } from "node:url";
 import type {
-  AgentFlowEvent,
+  AgentTeamEvent,
   GetTaskRuntimePayload,
   OpenAgentTerminalPayload,
   SubmitTaskPayload,
@@ -106,7 +106,7 @@ export async function startWebHost(
   options: StartWebHostOptions,
 ): Promise<{ close: () => Promise<void> }> {
   const subscriptions = new Set<http.ServerResponse>();
-  const unsubscribe = options.orchestrator.subscribe((event: AgentFlowEvent) => {
+  const unsubscribe = options.orchestrator.subscribe((event: AgentTeamEvent) => {
     if (event.cwd !== options.cwd) {
       return;
     }

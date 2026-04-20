@@ -6,7 +6,7 @@
 
 ### 1.1 产品定位
 
-- Agent Flow 是面向 OpenCode 的单工作区 Task Code Agent 编排桌面工具。
+- Agent Team 是面向 OpenCode 的单工作区 Task Code Agent 编排桌面工具。
 - 当前系统只关注当前 `cwd` 下的团队拓扑、Task 会话、群聊记录与 Agent 运行态，不再维护 Project 概念。
 - GUI 主布局为：上方当前 Task 拓扑图，下方左侧当前 Task 群聊，右侧当前 Task Agent 列表；前端只负责展示与聊天发消息，不负责任何配置写入。
 - CLI 与 GUI 复用同一套 `Orchestrator`、OpenCode 与文件存储逻辑。
@@ -18,7 +18,7 @@
 - React Flow
 - Zustand
 - OpenCode Server (`opencode serve`)
-- 文件存储：当前工作区 `.agentflow/` + 用户数据目录日志
+- 文件存储：当前工作区 `.agent-team/` + 用户数据目录日志
 
 ## 2. 真源与配置边界
 
@@ -33,7 +33,7 @@
 
 ### 2.2 工作区 / Topology / Task 真源
 
-- 当前 CLI / GUI 只关注当前 `cwd` 的单 Task 会话；`.agentflow/` 保存当前工作区的拓扑、Task、消息与运行态数据。
+- 当前 CLI / GUI 只关注当前 `cwd` 的单 Task 会话；`.agent-team/` 保存当前工作区的拓扑、Task、消息与运行态数据。
 - 拓扑不再自动推断，也不再由前端保存；新建 Task 时必须显式提供团队拓扑 JSON 文件。
 - Task 不再快照 Agent 的 prompt / permission 定义；运行时只认当前拓扑 `nodeRecords` 中的 `prompt / writable` 元数据与 `Build` 的 OpenCode 内置 prompt。
 - 当前处于开发初期，不要求兼容历史 Project 数据；旧的 Project registry / projectId 模型均已移除。
@@ -41,9 +41,9 @@
 
 ### 2.3 用户数据目录与日志
 
-- 命令执行失败等诊断日志统一写入用户数据目录下的 `logs/agentflow.log`。
-- Windows 默认日志路径为 `%APPDATA%\agentflow\logs\agentflow.log`。
-- 当前不再维护全局 `projects.json` registry；若默认用户数据目录不可写，必须显式设置 `AGENTFLOW_USER_DATA_DIR`。
+- 命令执行失败等诊断日志统一写入用户数据目录下的 `logs/agent-team.log`。
+- Windows 默认日志路径为 `%APPDATA%\agent-team\logs\agent-team.log`。
+- 当前不再维护全局 `projects.json` registry；若默认用户数据目录不可写，必须显式设置 `AGENT_TEAM_USER_DATA_DIR`。
 
 ## 3. 运行时与编排约定
 
@@ -148,18 +148,18 @@ CLI 能力分组：
 
 ### 5.1 存储布局
 
-- 命令执行失败等诊断日志位于用户数据目录下的 `logs/agentflow.log`。
-- 当前工作区的拓扑、Task、消息与运行态数据位于 `<cwd>/.agentflow/state.json`。
-- 当前工作区网页界面 Host 的运行态位于 `<cwd>/.agentflow/ui-host.json`。
-- 团队拓扑 JSON 编译后的 Agent prompt / writable 元数据会跟随当前拓扑保存在 `<cwd>/.agentflow/state.json` 的 `topology.nodeRecords` 中。
-- 团队拓扑 JSON 编译后的 LangGraph 边界信息会跟随当前拓扑保存在 `<cwd>/.agentflow/state.json` 的 `topology.langgraph` 中。
-- 每个 Task 的 LangGraph checkpoint 位于 `<cwd>/.agentflow/langgraph/`。
-- OpenCode runtime 也统一落到 `.agentflow/` 下，便于随当前工作区一起迁移。
+- 命令执行失败等诊断日志位于用户数据目录下的 `logs/agent-team.log`。
+- 当前工作区的拓扑、Task、消息与运行态数据位于 `<cwd>/.agent-team/state.json`。
+- 当前工作区网页界面 Host 的运行态位于 `<cwd>/.agent-team/ui-host.json`。
+- 团队拓扑 JSON 编译后的 Agent prompt / writable 元数据会跟随当前拓扑保存在 `<cwd>/.agent-team/state.json` 的 `topology.nodeRecords` 中。
+- 团队拓扑 JSON 编译后的 LangGraph 边界信息会跟随当前拓扑保存在 `<cwd>/.agent-team/state.json` 的 `topology.langgraph` 中。
+- 每个 Task 的 LangGraph checkpoint 位于 `<cwd>/.agent-team/langgraph/`。
+- OpenCode runtime 也统一落到 `.agent-team/` 下，便于随当前工作区一起迁移。
 
 ### 5.2 仓库结构
 
 ```txt
-agentflow/
+agent-team/
 ├── cli/
 │   ├── index.ts
 │   ├── launcher.cjs
@@ -212,9 +212,9 @@ npm run dist:win
 
 打包注意事项：
 
-- 推荐直接使用 `npm run dist:win`；该命令会先执行 `npm run build` 生成最新 `dist/web/`，再生成单文件 `dist/agentflow.exe`。
-- Windows 主程序位于 `dist/agentflow.exe`。
-- 打包后的网页静态资源会内嵌在 `agentflow.exe` 中，并在运行时自动释放到本地 runtime 目录。
+- 推荐直接使用 `npm run dist:win`；该命令会先执行 `npm run build` 生成最新 `dist/web/`，再生成单文件 `dist/agent-team.exe`。
+- Windows 主程序位于 `dist/agent-team.exe`。
+- 打包后的网页静态资源会内嵌在 `agent-team.exe` 中，并在运行时自动释放到本地 runtime 目录。
 - 如果只想单独刷新网页产物，可以执行 `npm run build`。
 
 ## 7. 文档同步要求
@@ -224,12 +224,12 @@ npm run dist:win
 - 默认 Agent 模板变化
 - 内置 Agent 集合变化
 - 默认拓扑推断规则变化
-- Project 全局注册或 Project 内 `.agentflow/` 存储布局变化
+- Project 全局注册或 Project 内 `.agent-team/` 存储布局变化
 - CLI 命令、别名或默认行为变化
 - 会影响协作者理解当前系统行为的 UI 或编排逻辑变化
 
 ## 8. 后续建议
 
 - 把协作消息做得更接近 “Agent @ Agent” 的可视化协作流。
-- 为 `.agentflow/state.json` 增加更明确的 schema version 与升级策略。
+- 为 `.agent-team/state.json` 增加更明确的 schema version 与升级策略。
 - 补充集成测试。

@@ -1,9 +1,9 @@
 export const IPC_CHANNELS = {
-  bootstrap: "agentflow/bootstrap",
-  submitTask: "agentflow/submit-task",
-  openAgentTerminal: "agentflow/open-agent-terminal",
-  getTaskRuntime: "agentflow/get-task-runtime",
-  eventStream: "agentflow/event-stream",
+  bootstrap: "agent-team/bootstrap",
+  submitTask: "agent-team/submit-task",
+  openAgentTerminal: "agent-team/open-agent-terminal",
+  getTaskRuntime: "agent-team/get-task-runtime",
+  eventStream: "agent-team/event-stream",
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

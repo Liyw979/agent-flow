@@ -229,7 +229,7 @@ export class LangGraphRuntime {
 
     this.graph = builder.compile({
       checkpointer: this.checkpointer,
-      name: "agentflow-task-runtime",
+      name: "agent-team-task-runtime",
     });
   }
 

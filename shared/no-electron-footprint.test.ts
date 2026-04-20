@@ -26,7 +26,7 @@ function collectLegacyElectronFootprints(snapshot: RepositorySnapshot) {
     issues.push("AGENTS.md 仍记录 Electron 技术栈或目录");
   }
   if (/electron\/cli\//.test(snapshot.launcherScript)) {
-    issues.push("bin/agentflow 仍指向 electron/cli");
+    issues.push("bin/agent-team 仍指向 electron/cli");
   }
   if (snapshot.hasElectronViteConfig) {
     issues.push("仓库仍保留 electron.vite.config.ts");
@@ -46,7 +46,7 @@ test("仓库不再残留 Electron 集成足迹", () => {
   const snapshot: RepositorySnapshot = {
     packageJson: fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
     agentsDoc: fs.readFileSync(path.join(repoRoot, "AGENTS.md"), "utf8"),
-    launcherScript: fs.readFileSync(path.join(repoRoot, "bin", "agentflow"), "utf8"),
+    launcherScript: fs.readFileSync(path.join(repoRoot, "bin", "agent-team"), "utf8"),
     hasElectronViteConfig: fs.existsSync(path.join(repoRoot, "electron.vite.config.ts")),
     hasElectronMainEntry: fs.existsSync(path.join(repoRoot, "electron", "main", "index.ts")),
     hasElectronPreload: fs.existsSync(path.join(repoRoot, "electron", "preload.ts")),

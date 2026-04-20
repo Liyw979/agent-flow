@@ -11,7 +11,7 @@ export interface UiHostStateRecord {
 }
 
 export function getUiHostStatePath(cwd: string): string {
-  return path.join(cwd, ".agentflow", "ui-host.json");
+  return path.join(cwd, ".agent-team", "ui-host.json");
 }
 
 export function normalizeUiHostStateRecord(value: unknown): UiHostStateRecord | null {

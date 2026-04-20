@@ -3,6 +3,7 @@ dist/
 out/
 .tmp/
 .agentflow/
+.agent-team/
 .agentpipeline/
 .DS_Store
 

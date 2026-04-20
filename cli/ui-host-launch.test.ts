@@ -27,12 +27,12 @@ test("buildUiHostLaunchSpec 在源码运行时会复用当前 Node + tsx CLI 链
 test("buildUiHostLaunchSpec 在单 exe 运行时会直接复用当前可执行文件拉起内部 web-host", () => {
   const spec = buildUiHostLaunchSpec({
     mode: "compiled",
-    executablePath: "C:\\AgentFlow\\agentflow.exe",
+    executablePath: "C:\\AgentTeam\\agent-team.exe",
     taskId: "task-123",
     port: 4310,
   });
 
-  assert.equal(spec.command, "C:\\AgentFlow\\agentflow.exe");
+  assert.equal(spec.command, "C:\\AgentTeam\\agent-team.exe");
   assert.deepEqual(spec.args, [
     "internal",
     "web-host",

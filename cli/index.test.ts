@@ -46,7 +46,7 @@ test("task headless 会打印日志文件路径和 taskId", () => {
   assert.match(CLI_SOURCE, /renderTaskSessionSummary/);
   assert.match(CLI_SOURCE, /logFilePath: diagnostics\.logFilePath/);
   assert.match(CLI_SOURCE, /taskId,/);
-  assert.match(CLI_SOURCE, /agentflow\.log/);
+  assert.match(CLI_SOURCE, /agent-team\.log/);
   assert.doesNotMatch(CLI_SOURCE, /task show/);
 });
 

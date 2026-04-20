@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const APP_DIRECTORY_NAME = "agentflow";
+const APP_DIRECTORY_NAME = "agent-team";
 
 function resolveDefaultUserDataPath() {
   const home = os.homedir();
@@ -20,7 +20,7 @@ function resolveDefaultUserDataPath() {
 }
 
 export function resolveCliUserDataPath() {
-  const override = process.env.AGENTFLOW_USER_DATA_DIR?.trim();
+  const override = process.env.AGENT_TEAM_USER_DATA_DIR?.trim();
   if (override) {
     return ensureWritableDirectory(path.resolve(override));
   }
@@ -33,8 +33,8 @@ export function resolveCliUserDataPath() {
     const details = error instanceof Error ? error.message : String(error);
     throw new Error(
       `默认全局用户数据目录不可写：${preferred}。`
-      + ` 为避免在 <project>/.agentflow 下生成第二份 projects.json，CLI 不再静默回退到项目目录。`
-      + ` 请显式设置 AGENTFLOW_USER_DATA_DIR 指向一个可写的全局目录。`
+      + ` 为避免在 <project>/.agent-team 下生成第二份 projects.json，CLI 不再静默回退到项目目录。`
+      + ` 请显式设置 AGENT_TEAM_USER_DATA_DIR 指向一个可写的全局目录。`
       + ` 原始错误：${details}`,
     );
   }
