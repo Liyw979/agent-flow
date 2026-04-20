@@ -17,7 +17,7 @@ test("buildAgentPromptDialogState 会为普通 agent 返回 prompt 详情", () =
   );
 });
 
-test("buildAgentPromptDialogState 会为 Build 返回内置 prompt 说明", () => {
+test("buildAgentPromptDialogState 会为空字符串 prompt 返回由 OpenCode 读取说明", () => {
   assert.deepEqual(
     buildAgentPromptDialogState({
       agentName: "Build",
@@ -25,8 +25,8 @@ test("buildAgentPromptDialogState 会为 Build 返回内置 prompt 说明", () =
     }),
     {
       agentName: "Build",
-      promptSourceLabel: "OpenCode 内置",
-      content: "当前 Agent 使用 OpenCode 内置 prompt，运行时不会在工作区拓扑里展开具体正文。",
+      promptSourceLabel: "由 OpenCode 读取",
+      content: "当前拓扑配置里的 prompt 为空字符串，运行时会改为由 OpenCode 读取该 Agent 的提示词。",
     },
   );
 });
