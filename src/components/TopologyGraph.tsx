@@ -1,11 +1,21 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { getAgentColorToken } from "@/lib/agent-colors";
 import { buildAgentHistoryItems, type AgentHistoryItem } from "@/lib/agent-history";
+import {
+  PANEL_HEADER_CLASS,
+  PANEL_HEADER_LEADING_CLASS,
+  PANEL_HEADER_TITLE_CLASS,
+  PANEL_SECTION_BODY_CLASS,
+  PANEL_SURFACE_CLASS,
+} from "@/lib/panel-header";
+import {
+  getTopologyAgentStatusBadgePresentation,
+  type TopologyAgentStatusBadgePresentation,
+} from "@/components/topology-graph-helpers";
 import { buildTopologyCanvasLayout } from "@/lib/topology-canvas";
 import type {
   AgentRuntimeSnapshot,
   TaskSnapshot,
-  TopologyEdge,
   WorkspaceSnapshot,
 } from "@shared/types";
 
@@ -21,58 +31,10 @@ const NODE_WIDTH = 248;
 const NODE_HEIGHT = 308;
 const HISTORY_VISIBLE_ITEMS = 6;
 
-function getStatusLabel(status: TaskSnapshot["agents"][number]["status"]) {
-  switch (status) {
-    case "running":
-      return "运行中";
-    case "completed":
-      return "已完成";
-    case "failed":
-      return "执行失败";
-    case "needs_revision":
-      return "需要修改";
-    default:
-      return "未启动";
-  }
-}
-
-function getEdgeLabel(triggerOn: TopologyEdge["triggerOn"]) {
-  switch (triggerOn) {
-    case "association":
-      return "传递";
-    case "approved":
-      return "审视通过";
-    case "needs_revision":
-      return "审视不通过";
-    default:
-      return triggerOn;
-  }
-}
-
-function getEdgeAppearance(triggerOn: TopologyEdge["triggerOn"]) {
-  switch (triggerOn) {
-    case "approved":
-      return {
-        stroke: "#c96f3b",
-        fill: "#fff1e8",
-        text: "#8b4b22",
-        dash: "6 6",
-      };
-    case "needs_revision":
-      return {
-        stroke: "#b25a4a",
-        fill: "#f8e4df",
-        text: "#7c3026",
-        dash: "2 8",
-      };
-    default:
-      return {
-        stroke: "#2f6f5e",
-        fill: "#e4f2ec",
-        text: "#173328",
-        dash: undefined,
-      };
-  }
+interface SelectedHistoryItemState {
+  agentId: string;
+  color: ReturnType<typeof getAgentColorToken>;
+  item: AgentHistoryItem;
 }
 
 function getHistoryItemClassName(item: AgentHistoryItem) {
@@ -105,6 +67,77 @@ function formatHistoryTimestamp(timestamp: string) {
   });
 }
 
+function renderStatusBadgeIcon(presentation: TopologyAgentStatusBadgePresentation) {
+  if (presentation.icon === "idle") {
+    return (
+      <svg
+        viewBox="0 0 16 16"
+        className="h-3.5 w-3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <circle cx="8" cy="8" r="5.2" />
+        <path d="M8 5.1v3.3l2.1 1.2" />
+      </svg>
+    );
+  }
+
+  if (presentation.icon === "running") {
+    return (
+      <svg
+        viewBox="0 0 16 16"
+        className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M13 8a5 5 0 1 1-1.46-3.54" />
+        <path d="M10.8 2.7H13v2.2" />
+      </svg>
+    );
+  }
+
+  if (presentation.icon === "success") {
+    return (
+      <svg
+        viewBox="0 0 16 16"
+        className="h-3.5 w-3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M3.4 8.1 6.6 11l6-6.2" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="h-3.5 w-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M5 5 11 11" />
+      <path d="M11 5 5 11" />
+    </svg>
+  );
+}
+
 export function TopologyGraph({
   workspace,
   task,
@@ -112,11 +145,53 @@ export function TopologyGraph({
   onSelectAgent,
   runtimeSnapshots = {},
 }: TopologyGraphProps) {
+  const canvasViewportRef = useRef<HTMLDivElement | null>(null);
+  const [canvasViewport, setCanvasViewport] = useState<{ width: number; height: number } | null>(null);
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState<SelectedHistoryItemState | null>(null);
   const topology = task?.topology ?? workspace?.topology;
   const taskAgents = useMemo(
     () => new Map(task?.agents.map((agent) => [agent.name, agent]) ?? []),
     [task?.agents],
   );
+
+  useEffect(() => {
+    const element = canvasViewportRef.current;
+    if (!element) {
+      return;
+    }
+
+    const updateViewport = (width: number, height: number) => {
+      setCanvasViewport((current) => {
+        const next = {
+          width: Math.max(0, Math.floor(width)),
+          height: Math.max(0, Math.floor(height)),
+        };
+        if (current?.width === next.width && current?.height === next.height) {
+          return current;
+        }
+        return next;
+      });
+    };
+
+    updateViewport(element.clientWidth, element.clientHeight);
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) {
+        return;
+      }
+      updateViewport(entry.contentRect.width, entry.contentRect.height);
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [topology?.nodes.length]);
+
   const canvasLayout = useMemo(() => {
     if (!topology) {
       return null;
@@ -124,10 +199,18 @@ export function TopologyGraph({
     return buildTopologyCanvasLayout({
       nodes: topology.nodes,
       edges: topology.edges,
+      availableWidth: canvasViewport?.width,
+      availableHeight: canvasViewport?.height,
       columnWidth: NODE_WIDTH,
+      minNodeWidth: NODE_WIDTH,
+      minNodeHeight: NODE_HEIGHT,
+      columnGap: 18,
+      sidePadding: 0,
+      topPadding: 0,
+      bottomPadding: 0,
       nodeHeight: NODE_HEIGHT,
     });
-  }, [topology]);
+  }, [canvasViewport?.height, canvasViewport?.width, topology]);
   const historyByAgent = useMemo(() => {
     if (!task || !topology) {
       return new Map<string, AgentHistoryItem[]>();
@@ -146,166 +229,210 @@ export function TopologyGraph({
     );
   }, [runtimeSnapshots, task, topology]);
 
+  useEffect(() => {
+    if (!selectedHistoryItem) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectedHistoryItem(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedHistoryItem]);
+
   if (!workspace || !task || !topology || !canvasLayout) {
     return (
-      <section className="PANEL-surface flex min-h-[320px] flex-col rounded-[10px] p-5">
-        <header className="mb-4 flex items-center justify-between gap-3">
-          <p className="font-display text-[1.45rem] font-bold text-primary">当前拓扑</p>
+      <section className={PANEL_SURFACE_CLASS}>
+        <header className={PANEL_HEADER_CLASS}>
+          <div className={PANEL_HEADER_LEADING_CLASS}>
+            <p className={PANEL_HEADER_TITLE_CLASS}>拓扑</p>
+          </div>
         </header>
-        <div className="flex min-h-[220px] items-center justify-center rounded-[8px] border border-border/60 bg-card/70 text-sm text-muted-foreground">
-          当前还没有可展示的 Task 拓扑。
+        <div className={PANEL_SECTION_BODY_CLASS}>
+          <div className="flex h-full min-h-0 items-center justify-center rounded-[8px] border border-border/60 bg-card/70 text-sm text-muted-foreground">
+            当前还没有可展示的 Task 拓扑。
+          </div>
         </div>
       </section>
     );
   }
 
   return (
-    <section className="PANEL-surface flex min-h-[320px] flex-col rounded-[10px] p-5">
-      <header className="mb-4 flex items-center justify-between gap-3">
-        <div>
-          <p className="font-display text-[1.45rem] font-bold text-primary">当前拓扑</p>
-          <p className="text-sm text-muted-foreground">纯展示模式，拓扑与 Prompt 全部来自 JSON 文件。</p>
+    <section className={PANEL_SURFACE_CLASS}>
+      <header className={PANEL_HEADER_CLASS}>
+        <div className={PANEL_HEADER_LEADING_CLASS}>
+          <p className={PANEL_HEADER_TITLE_CLASS}>拓扑</p>
         </div>
       </header>
 
-      <div className="mesh-bg relative min-h-[350px] overflow-x-auto overflow-y-hidden rounded-[12px] border border-border/60 bg-card/75 p-4">
+      <div className={`relative flex-1 min-h-0 ${PANEL_SECTION_BODY_CLASS}`}>
         <div
-          className="relative min-w-full"
-          style={{
-            width: `${canvasLayout.width}px`,
-            height: `${canvasLayout.height}px`,
-          }}
+          ref={canvasViewportRef}
+          className="h-full min-h-[350px] w-full overflow-x-auto overflow-y-hidden"
         >
-          <svg
-            className="absolute inset-0 h-full w-full"
-            viewBox={`0 0 ${canvasLayout.width} ${canvasLayout.height}`}
-            fill="none"
-            aria-label="当前任务拓扑图"
+          <div
+            className="relative min-h-full min-w-full"
+            style={{
+              width: `${canvasLayout.width}px`,
+              height: `${canvasLayout.height}px`,
+            }}
           >
-            <defs>
-              <marker
-                id="topology-arrow"
-                markerWidth="10"
-                markerHeight="10"
-                refX="8"
-                refY="5"
-                orient="auto-start-reverse"
-              >
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="#2f6f5e" />
-              </marker>
-            </defs>
-
-            {canvasLayout.edges.map((edge) => {
-              const appearance = getEdgeAppearance(edge.triggerOn);
-              return (
-                <g key={edge.id}>
-                  <path
-                    d={edge.path}
-                    stroke={appearance.stroke}
-                    strokeWidth="2.5"
-                    strokeDasharray={appearance.dash}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    markerEnd="url(#topology-arrow)"
-                  />
-                  <g transform={`translate(${edge.labelX}, ${edge.labelY})`}>
-                    <rect
-                      x="-36"
-                      y="-10"
-                      width="72"
-                      height="20"
-                      rx="10"
-                      fill={appearance.fill}
-                      stroke={appearance.stroke}
-                      strokeOpacity="0.45"
-                    />
-                    <text
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      fontSize="11"
-                      fontWeight="600"
-                      fill={appearance.text}
-                    >
-                      {getEdgeLabel(edge.triggerOn)}
-                    </text>
-                  </g>
-                </g>
+            {canvasLayout.nodes.map((node) => {
+              const taskAgent = taskAgents.get(node.id);
+              const color = getAgentColorToken(node.id);
+              const historyItems = historyByAgent.get(node.id) ?? [];
+              const statusBadge = getTopologyAgentStatusBadgePresentation(
+                topology,
+                node.id,
+                taskAgent?.status ?? "idle",
               );
-            })}
-          </svg>
-
-          {canvasLayout.nodes.map((node) => {
-            const taskAgent = taskAgents.get(node.id);
-            const runtime = runtimeSnapshots[node.id];
-            const color = getAgentColorToken(node.id);
-            const selected = selectedAgentId === node.id;
-            const historyItems = historyByAgent.get(node.id) ?? [];
-            return (
-              <button
-                key={node.id}
-                type="button"
-                onClick={() => onSelectAgent(node.id)}
-                className="absolute overflow-hidden rounded-[14px] text-left transition"
-                style={{
-                  left: `${node.x}px`,
-                  top: `${node.y}px`,
-                  width: `${node.width}px`,
-                  height: `${node.height}px`,
-                  border: selected ? `2px solid ${color.solid}` : `1px solid ${color.border}`,
-                  boxShadow: selected ? `0 0 0 3px ${color.solid}1f, 0 20px 40px rgba(44, 74, 63, 0.14)` : "0 12px 30px rgba(44, 74, 63, 0.08)",
-                  background: "rgba(255,248,240,0.9)",
-                }}
-              >
+              return (
                 <div
-                  className="border-b px-4 py-3"
+                  key={node.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectAgent(node.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectAgent(node.id);
+                    }
+                  }}
+                  className="absolute flex flex-col overflow-hidden rounded-[14px] text-left transition"
                   style={{
-                    background: color.soft,
-                    borderColor: color.border,
+                    left: `${node.x}px`,
+                    top: `${node.y}px`,
+                    width: `${node.width}px`,
+                    height: `${node.height}px`,
+                    border: `1px solid ${color.border}`,
+                    boxShadow: "0 12px 30px rgba(44, 74, 63, 0.08)",
+                    background: "rgba(255,248,240,0.9)",
                   }}
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-base font-semibold text-foreground">{node.id}</p>
-                    <span className="rounded-full border border-black/8 bg-white/70 px-2 py-0.5 text-xs text-foreground/75">
-                      {getStatusLabel(taskAgent?.status ?? "idle")}
-                    </span>
+                  <div
+                    className="border-b px-4 py-[3px]"
+                    style={{
+                      background: color.soft,
+                      borderColor: color.border,
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-base font-semibold text-foreground">{node.id}</p>
+                      <span
+                        aria-label={statusBadge.label}
+                        title={statusBadge.label}
+                        className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold shadow-[0_1px_0_rgba(255,255,255,0.45)] ${statusBadge.className} ${statusBadge.effectClassName}`}
+                      >
+                        {renderStatusBadgeIcon(statusBadge)}
+                      </span>
+                    </div>
                   </div>
-                  <p className="mt-1 text-xs leading-5 text-foreground/70">
-                    runs: {taskAgent?.runCount ?? 0}
-                  </p>
-                  {runtime?.headline ? (
-                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-foreground/80">{runtime.headline}</p>
-                  ) : null}
-                </div>
 
-                <div className="h-[220px] px-3 py-3">
-                  {historyItems.length > 0 ? (
-                    <div className="h-full space-y-2 overflow-y-auto pr-1">
-                      {historyItems.map((item) => (
-                        <article
-                          key={item.id}
-                          className={`rounded-[10px] border px-3 py-2 text-left ${getHistoryItemClassName(item)}`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-semibold">{item.label}</span>
-                            <span className="text-[11px] opacity-70">{formatHistoryTimestamp(item.timestamp)}</span>
-                          </div>
-                          <p className="mt-1 line-clamp-3 whitespace-pre-wrap break-all text-[11px] leading-5 opacity-90">
-                            {item.detail}
-                          </p>
-                        </article>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="flex h-full items-center justify-center rounded-[10px] border border-dashed border-border/70 bg-background/45 text-sm text-muted-foreground">
-                      待启动
-                    </div>
-                  )}
+                  <div className="min-h-0 flex-1 px-2 py-2">
+                    {historyItems.length > 0 ? (
+                      <div className="h-full space-y-1 overflow-y-auto">
+                        {historyItems.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedHistoryItem({
+                                agentId: node.id,
+                                color,
+                                item,
+                              });
+                            }}
+                            className={`rounded-[10px] border px-2.5 py-1.5 text-left ${getHistoryItemClassName(item)}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-semibold">{item.label}</span>
+                              <span className="text-[11px] opacity-70">{formatHistoryTimestamp(item.timestamp)}</span>
+                            </div>
+                            <p className="mt-1 whitespace-pre-wrap break-words text-[11px] leading-5 opacity-90">
+                              {item.detail}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex h-full items-center justify-center rounded-[10px] border border-dashed border-border/70 bg-background/45 text-sm text-muted-foreground">
+                        待启动
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </button>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
+
+      {selectedHistoryItem ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/28 px-6 py-6"
+          onClick={() => setSelectedHistoryItem(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${selectedHistoryItem.agentId} 历史详情`}
+            className="flex max-h-[min(82vh,720px)] w-full max-w-[720px] flex-col overflow-hidden rounded-[14px] border bg-background shadow-[0_24px_80px_rgba(23,32,25,0.22)]"
+            style={{
+              borderColor: selectedHistoryItem.color.border,
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div
+              className="flex items-center justify-between gap-3 border-b px-5 py-3"
+              style={{
+                background: selectedHistoryItem.color.soft,
+                borderColor: selectedHistoryItem.color.border,
+              }}
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-flex max-w-full shrink-0 rounded-[8px] px-2 py-px text-center text-[14px] font-semibold leading-[1.2] tracking-[0.02em]"
+                    style={{
+                      background: selectedHistoryItem.color.solid,
+                      color: selectedHistoryItem.color.badgeText,
+                    }}
+                  >
+                    {selectedHistoryItem.agentId}
+                  </span>
+                  <span className="text-sm font-semibold text-foreground/86">
+                    {selectedHistoryItem.item.label}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-foreground/60">
+                  {formatHistoryTimestamp(selectedHistoryItem.item.timestamp)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedHistoryItem(null)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/70 bg-background/90 text-lg leading-none text-foreground/68 transition hover:bg-background"
+                aria-label="关闭历史详情"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="min-h-0 overflow-y-auto px-5 py-4">
+              <pre className="whitespace-pre-wrap break-words text-[14px] leading-7 text-foreground/84">
+                {selectedHistoryItem.item.detail}
+              </pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

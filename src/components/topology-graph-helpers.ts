@@ -1,24 +1,65 @@
 import { isReviewAgentInTopology, type TopologyEdge, type TopologyRecord } from "@shared/types";
 
+export interface TopologyAgentStatusBadgePresentation {
+  label: string;
+  icon: "idle" | "running" | "success" | "failed";
+  className: string;
+  effectClassName: string;
+}
+
+export function getTopologyAgentStatusBadgePresentation(
+  topology: Pick<TopologyRecord, "edges">,
+  agentName: string,
+  agentState: string,
+): TopologyAgentStatusBadgePresentation {
+  const reviewAgent = isReviewAgentInTopology(topology, agentName);
+
+  switch (agentState) {
+    case "completed":
+      return {
+        label: reviewAgent ? "审查通过" : "已完成",
+        icon: "success",
+        className: "border border-[#2c4a3f]/18 bg-[#edf5f0] text-[#2c4a3f]",
+        effectClassName: "",
+      };
+    case "failed":
+      return {
+        label: reviewAgent ? "审查不通过" : "执行失败",
+        icon: "failed",
+        className: "border border-[#d66b63]/45 bg-[#fff1ef] text-[#a33f38]",
+        effectClassName: "",
+      };
+    case "needs_revision":
+      return {
+        label: "审查不通过",
+        icon: "failed",
+        className: "border border-[#d66b63]/45 bg-[#fff1ef] text-[#a33f38]",
+        effectClassName: "",
+      };
+    case "running":
+      return {
+        label: "运行中",
+        icon: "running",
+        className:
+          "border border-[#d8b14a]/70 bg-[linear-gradient(180deg,#fff7d8_0%,#ffedb8_100%)] text-[#6b5208]",
+        effectClassName: "topology-status-badge-running",
+      };
+    default:
+      return {
+        label: "未启动",
+        icon: "idle",
+        className: "border border-[#c9d6ce]/85 bg-[#f7fbf8] text-[#5f7267]",
+        effectClassName: "",
+      };
+  }
+}
+
 export function getTopologyAgentStatusLabel(
   topology: Pick<TopologyRecord, "edges">,
   agentName: string,
   agentState: string,
 ) {
-  const reviewAgent = isReviewAgentInTopology(topology, agentName);
-
-  switch (agentState) {
-    case "completed":
-      return reviewAgent ? "审视通过" : "已完成";
-    case "failed":
-      return reviewAgent ? "审视不通过" : "执行失败";
-    case "needs_revision":
-      return "审视不通过";
-    case "running":
-      return "运行中";
-    default:
-      return "未启动";
-  }
+  return getTopologyAgentStatusBadgePresentation(topology, agentName, agentState).label;
 }
 
 export function getTopologyEdgeTriggerAppearance(triggerOn: TopologyEdge["triggerOn"]) {

@@ -24,18 +24,16 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promi
 export function readLaunchParams() {
   const params = new URLSearchParams(window.location.search);
   return {
-    cwd: params.get("cwd")?.trim() ?? "",
     taskId: params.get("taskId")?.trim() ?? "",
   };
 }
 
-export function bootstrapTask(params: { cwd: string; taskId: string }) {
+export function bootstrapTask(params: { taskId: string }) {
   return fetchJson<UiBootstrapPayload>(`/api/bootstrap?${buildQuery(params)}`);
 }
 
-export function getTaskRuntime(payload: GetTaskRuntimePayload) {
+export function getTaskRuntime(payload: Pick<GetTaskRuntimePayload, "taskId">) {
   return fetchJson<AgentRuntimeSnapshot[]>(`/api/tasks/runtime?${buildQuery({
-    cwd: payload.cwd,
     taskId: payload.taskId,
   })}`);
 }
@@ -62,7 +60,6 @@ export async function openAgentTerminal(payload: OpenAgentTerminalPayload) {
 
 export function subscribeAgentFlowEvents(
   params: {
-    cwd: string;
     taskId: string;
   },
   listener: (event: AgentFlowEvent) => void,

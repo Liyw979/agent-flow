@@ -12,8 +12,10 @@ test("CLI 不再兼容旧的 review relation 别名", () => {
 test("CLI 帮助包含 task headless/task ui/task attach 命令", () => {
   assert.match(CLI_SOURCE, /task headless --file <topology-json> --message <message>/);
   assert.match(CLI_SOURCE, /task ui --file <topology-json> --message <message>/);
-  assert.match(CLI_SOURCE, /task ui --task <taskId>/);
+  assert.match(CLI_SOURCE, /task ui <taskId>/);
   assert.match(CLI_SOURCE, /task attach <agentName>/);
+  assert.doesNotMatch(CLI_SOURCE, /task ui --file <topology-json> --message <message> \[--cwd <path>\]/);
+  assert.doesNotMatch(CLI_SOURCE, /task ui --task <taskId> \[--cwd <path>\]/);
   assert.doesNotMatch(CLI_SOURCE, /task show <taskId>/);
   assert.doesNotMatch(CLI_SOURCE, /task chat --file <topology-json> --message <message>/);
   assert.doesNotMatch(CLI_SOURCE, /task chat --task <taskId>/);

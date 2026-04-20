@@ -53,15 +53,12 @@ test("parseCliCommand 解析 task ui 新建任务", () => {
     "config/team-topologies/development-team.topology.json",
     "--message",
     "请开始执行",
-    "--cwd",
-    "/tmp/project",
   ]);
 
   assert.deepEqual(parsed, {
     kind: "task.ui",
     file: "config/team-topologies/development-team.topology.json",
     message: "请开始执行",
-    cwd: "/tmp/project",
     taskId: undefined,
   });
 });
@@ -72,17 +69,40 @@ test("parseCliCommand 解析 task ui 恢复已有任务", () => {
     "ui",
     "--task",
     "task-1",
-    "--cwd",
-    "/tmp/project",
   ]);
 
   assert.deepEqual(parsed, {
     kind: "task.ui",
     taskId: "task-1",
-    cwd: "/tmp/project",
     file: undefined,
     message: undefined,
   });
+});
+
+test("parseCliCommand 解析 task ui 位置参数 taskId", () => {
+  const parsed = parseCliCommand([
+    "task",
+    "ui",
+    "task-1",
+  ]);
+
+  assert.deepEqual(parsed, {
+    kind: "task.ui",
+    taskId: "task-1",
+    file: undefined,
+    message: undefined,
+  });
+});
+
+test("parseCliCommand 不再接受 task ui --cwd", () => {
+  assert.throws(() => parseCliCommand([
+    "task",
+    "ui",
+    "--task",
+    "task-1",
+    "--cwd",
+    "/tmp/project",
+  ]));
 });
 
 test("parseCliCommand 解析 task attach", () => {
@@ -123,7 +143,7 @@ test("旧 task run 与旧 --ui 入口都会被拒绝", () => {
 test("Commander help 包含 task headless/task ui/task attach 命令", () => {
   assert.match(CLI_SOURCE, /task headless --file <topology-json> --message <message>/);
   assert.match(CLI_SOURCE, /task ui --file <topology-json> --message <message>/);
-  assert.match(CLI_SOURCE, /task ui --task <taskId>/);
+  assert.match(CLI_SOURCE, /task ui <taskId>/);
   assert.match(CLI_SOURCE, /task attach <agentName>/);
   assert.doesNotMatch(CLI_SOURCE, /task run --file <topology-json> --message <message>/);
   assert.doesNotMatch(CLI_SOURCE, /task show <taskId>/);

@@ -798,6 +798,37 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
   );
 });
 
+test("openAgentTerminal 会通过服务端终端启动器 attach 到对应 session", async () => {
+  const userDataPath = createTempDir();
+  const projectPath = createTempDir();
+  const launches: Array<{ cwd: string; command: string }> = [];
+  const orchestrator = createTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+    terminalLauncher: async (input) => {
+      launches.push(input);
+    },
+  });
+
+  stubOpenCodeSessions(orchestrator);
+  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"]);
+  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+
+  await orchestrator.openAgentTerminal({
+    cwd: project.cwd,
+    taskId: task.task.id,
+    agentName: "Build",
+  });
+
+  assert.deepEqual(launches, [
+    {
+      cwd: project.cwd,
+      command: `opencode attach "http://127.0.0.1:4096" --session "session:demo:Build" --dir "${project.cwd}"`,
+    },
+  ]);
+});
+
 test("未写入 Build 时当前 Project 可以没有可写 Agent", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentRuntimeSnapshot,
   RuntimeUpdatedEventPayload,
@@ -6,9 +6,6 @@ import type {
 } from "@shared/types";
 import { ChatWindow } from "./components/ChatWindow";
 import { TopologyGraph } from "./components/TopologyGraph";
-import { PANEL_HEADER_ACTION_BUTTON_CLASS } from "./lib/panel-header-action-button";
-import { getAgentColorToken } from "./lib/agent-colors";
-import { buildAgentHistoryItems, type AgentHistoryItem } from "./lib/agent-history";
 import {
   bootstrapTask,
   getTaskRuntime,
@@ -17,6 +14,20 @@ import {
   submitTask,
   subscribeAgentFlowEvents,
 } from "./lib/web-api";
+import { getAgentColorToken } from "./lib/agent-colors";
+import { calculateAgentCardListGap, calculateAgentCardPromptLineCount } from "./lib/agent-card-layout";
+import {
+  PANEL_HEADER_CLASS,
+  PANEL_HEADER_LEADING_CLASS,
+  PANEL_HEADER_TITLE_CLASS,
+  PANEL_SECTION_BODY_CLASS,
+  PANEL_SURFACE_CLASS,
+} from "./lib/panel-header";
+import {
+  buildAvailableAgentNamesForFrontend,
+  orderAgentsForFrontend,
+  resolveDefaultSelectedAgentIdForFrontend,
+} from "./lib/frontend-agent-order";
 
 function App() {
   const launchParams = useMemo(() => readLaunchParams(), []);
@@ -25,30 +36,34 @@ function App() {
   const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, AgentRuntimeSnapshot>>({});
   const [openingAgentTerminalId, setOpeningAgentTerminalId] = useState<string | null>(null);
   const [agentTerminalActionError, setAgentTerminalActionError] = useState<string | null>(null);
+  const [promptLineCount, setPromptLineCount] = useState(1);
+  const [agentCardGapPx, setAgentCardGapPx] = useState(6);
+  const agentPanelViewportRef = useRef<HTMLDivElement | null>(null);
 
   const workspace = bootstrap?.workspace ?? null;
   const task = bootstrap?.task ?? null;
 
   async function refreshBootstrap() {
-    if (!launchParams.cwd || !launchParams.taskId) {
+    if (!launchParams.taskId) {
       setBootstrap({
         workspace: null,
         task: null,
-        launchCwd: launchParams.cwd || null,
+        launchCwd: null,
         launchTaskId: launchParams.taskId || null,
       });
       return;
     }
 
     const next = await bootstrapTask({
-      cwd: launchParams.cwd,
       taskId: launchParams.taskId,
     });
     setBootstrap(next);
-    const nextSelectedAgentId =
-      next.task?.agents.find((agent) => agent.name === selectedAgentId)?.name
-      ?? next.workspace?.agents[0]?.name
-      ?? null;
+    const nextSelectedAgentId = resolveDefaultSelectedAgentIdForFrontend({
+      selectedAgentId,
+      workspaceAgents: next.workspace?.agents ?? [],
+      taskAgents: next.task?.agents ?? [],
+      topology: next.task?.topology ?? next.workspace?.topology ?? null,
+    });
     setSelectedAgentId(nextSelectedAgentId);
   }
 
@@ -68,7 +83,6 @@ function App() {
     async function loadRuntime() {
       try {
         const snapshots = await getTaskRuntime({
-          cwd: workspace.cwd,
           taskId: task.task.id,
         });
         if (cancelled) {
@@ -101,7 +115,6 @@ function App() {
     }
 
     const unsubscribe = subscribeAgentFlowEvents({
-      cwd: bootstrap.workspace.cwd,
       taskId: bootstrap.task.task.id,
     }, (event) => {
       if (!bootstrap.task || !bootstrap.workspace) {
@@ -125,37 +138,78 @@ function App() {
     return unsubscribe;
   }, [bootstrap?.workspace?.cwd, bootstrap?.task?.task.id, selectedAgentId]);
 
-  const availableAgents = workspace?.agents.map((agent) => agent.name) ?? [];
+  const availableAgents = useMemo(
+    () => buildAvailableAgentNamesForFrontend(
+      workspace?.agents ?? [],
+      task?.topology ?? workspace?.topology ?? null,
+    ),
+    [task?.topology, workspace?.agents, workspace?.topology],
+  );
   const agentCards = useMemo(() => {
     if (!workspace || !task) {
       return [];
     }
 
+    const taskMessages = task.messages;
     const taskAgents = new Map(task.agents.map((agent) => [agent.name, agent]));
-    return workspace.agents.map((agent) => {
+    return orderAgentsForFrontend(workspace.agents, task.topology ?? workspace.topology).map((agent) => {
       const taskAgent = taskAgents.get(agent.name);
       return {
         name: agent.name,
         prompt: agent.prompt,
         status: taskAgent?.status ?? "idle",
-        runCount: taskAgent?.runCount ?? 0,
+        messageCount: taskMessages.filter((message) => message.sender === agent.name).length,
       };
     });
   }, [workspace, task]);
-  const selectedAgentCard = agentCards.find((agent) => agent.name === selectedAgentId) ?? null;
-  const selectedAgentRuntime = selectedAgentId ? runtimeSnapshots[selectedAgentId] : undefined;
-  const selectedAgentHistory = useMemo(() => {
-    if (!task || !workspace || !selectedAgentId) {
-      return [];
+
+  useEffect(() => {
+    const viewport = agentPanelViewportRef.current;
+    if (!viewport || agentCards.length === 0) {
+      setPromptLineCount(1);
+      setAgentCardGapPx(6);
+      return;
     }
 
-    return buildAgentHistoryItems({
-      agentId: selectedAgentId,
-      messages: task.messages,
-      topology: task.topology ?? workspace.topology,
-      runtimeSnapshot: runtimeSnapshots[selectedAgentId],
-    });
-  }, [runtimeSnapshots, selectedAgentId, task, workspace]);
+    const updatePromptLineCount = () => {
+      const viewportHeight = viewport.clientHeight - (agentTerminalActionError ? 42 : 0);
+      const nextPromptLineCount = calculateAgentCardPromptLineCount({
+        viewportHeight,
+        cardCount: agentCards.length,
+        gapPx: 6,
+        reservedHeightPx: 58,
+        lineHeightPx: 18,
+      });
+      setPromptLineCount(nextPromptLineCount);
+      setAgentCardGapPx(
+        calculateAgentCardListGap({
+          viewportHeight,
+          cardCount: agentCards.length,
+          promptCardCount: agentCards.filter((agent) => agent.prompt.trim().length > 0).length,
+          promptLineCount: nextPromptLineCount,
+          minGapPx: 6,
+          reservedHeightPx: 58,
+          lineHeightPx: 18,
+          emptyStateHeightPx: 20,
+        }),
+      );
+    };
+
+    updatePromptLineCount();
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            updatePromptLineCount();
+          });
+    resizeObserver?.observe(viewport);
+    window.addEventListener("resize", updatePromptLineCount);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updatePromptLineCount);
+    };
+  }, [agentCards.length, agentTerminalActionError]);
 
   async function handleOpenAgentTerminal(agentName: string) {
     if (!workspace || !task || openingAgentTerminalId === agentName) {
@@ -222,157 +276,94 @@ function App() {
               />
             </div>
 
-            <aside className="PANEL-surface flex min-h-0 flex-col overflow-hidden rounded-[10px]">
-              <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border/60 px-5">
-                <div>
-                  <p className="font-display text-[1.45rem] font-bold text-primary">当前 Agent</p>
-                  <p className="text-xs text-muted-foreground">纯展示面板，不提供配置入口</p>
+            <aside className={PANEL_SURFACE_CLASS}>
+              <header className={PANEL_HEADER_CLASS}>
+                <div className={PANEL_HEADER_LEADING_CLASS}>
+                  <p className={PANEL_HEADER_TITLE_CLASS}>团队</p>
                 </div>
-                <span className="rounded-full bg-[#c96f3b] px-2.5 py-0.5 text-xs font-semibold text-white">
-                  {agentCards.length}
-                </span>
               </header>
 
-              <div className="grid min-h-0 flex-1 grid-rows-[minmax(240px,0.95fr)_minmax(0,1.05fr)] gap-4 px-5 py-4">
-                <section className="flex min-h-0 flex-col overflow-hidden rounded-[10px] border border-border/60 bg-card/75">
-                  <header className="border-b border-border/60 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-foreground">Agent 历史记录</p>
-                        <p className="text-xs text-muted-foreground">
-                          {selectedAgentCard ? `${selectedAgentCard.name} 的完整运行轨迹` : "请选择一个 Agent"}
-                        </p>
-                      </div>
-                      {selectedAgentRuntime?.headline ? (
-                        <span className="max-w-[150px] truncate rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                          {selectedAgentRuntime.headline}
-                        </span>
-                      ) : null}
-                    </div>
-                  </header>
+              <div
+                ref={agentPanelViewportRef}
+                className={`min-h-0 flex-1 overflow-y-auto ${PANEL_SECTION_BODY_CLASS}`}
+              >
+                {agentTerminalActionError ? (
+                  <div className="mb-1.5 rounded-[8px] border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
+                    {agentTerminalActionError}
+                  </div>
+                ) : null}
 
-                  <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                    {selectedAgentCard ? (
-                      <div className="space-y-3">
-                        <div
-                          className="rounded-[10px] border px-3 py-3"
-                          style={{
-                            background: getAgentColorToken(selectedAgentCard.name).soft,
-                            borderColor: getAgentColorToken(selectedAgentCard.name).border,
-                          }}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-foreground">{selectedAgentCard.name}</p>
-                              <p className="text-xs text-foreground/70">
-                                状态: {getAgentStatusText(selectedAgentCard.status)} · runs: {selectedAgentCard.runCount}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void handleOpenAgentTerminal(selectedAgentCard.name);
-                              }}
-                              className={PANEL_HEADER_ACTION_BUTTON_CLASS}
-                            >
-                              {openingAgentTerminalId === selectedAgentCard.name ? "打开中..." : "attach"}
-                            </button>
-                          </div>
-                          {selectedAgentCard.prompt ? (
-                            <p className="mt-3 line-clamp-2 text-xs leading-6 text-foreground/80">
-                              {selectedAgentCard.prompt.split(/\n+/).find((line) => line.trim())}
-                            </p>
-                          ) : null}
+                <div className="flex flex-col" style={{ gap: `${agentCardGapPx}px` }}>
+                  {agentCards.map((agent) => {
+                    const color = getAgentColorToken(agent.name);
+                    const promptPreview = agent.prompt.trim();
+                    const promptPreviewLine = promptPreview.replace(/\s+/gu, "");
+                    return (
+                      <div
+                        key={agent.name}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => {
+                          setSelectedAgentId(agent.name);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            setSelectedAgentId(agent.name);
+                          }
+                        }}
+                        className="rounded-[8px] border px-3 py-2 text-left shadow-sm transition"
+                        style={{
+                          background: color.soft,
+                          borderColor: color.border,
+                          color: color.text,
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span
+                            className="inline-flex max-w-full shrink-0 rounded-[8px] px-2 py-px text-center text-[14px] font-semibold leading-[1.2] tracking-[0.02em]"
+                            style={{
+                              background: color.solid,
+                              color: color.badgeText,
+                            }}
+                          >
+                            {agent.name}
+                          </span>
+                          <span className="rounded-full border border-[#d8cdbd] bg-[#fffaf2] px-2.5 py-0.5 text-[0.78rem] font-semibold text-foreground/76">{agent.messageCount}</span>
                         </div>
-
-                        {selectedAgentHistory.length > 0 ? (
-                          <div className="space-y-2">
-                            {selectedAgentHistory.map((item) => (
-                              <article
-                                key={item.id}
-                                className={`rounded-[10px] border px-3 py-2.5 text-left ${getHistoryItemClassName(item)}`}
-                              >
-                                <div className="flex items-center justify-between gap-3">
-                                  <span className="text-[11px] font-semibold">{item.label}</span>
-                                  <span className="text-[11px] opacity-70">{formatHistoryTimestamp(item.timestamp)}</span>
-                                </div>
-                                <p className="mt-1 whitespace-pre-wrap break-all text-[12px] leading-6 opacity-90">
-                                  {item.detail}
-                                </p>
-                              </article>
-                            ))}
+                        {promptPreview ? (
+                          <div className="mt-1 min-w-0">
+                            <p
+                              title={promptPreview}
+                              className="min-w-0 overflow-hidden break-all text-[0.9rem] leading-[18px]"
+                              style={{
+                                color: color.mutedText,
+                                display: "-webkit-box",
+                                WebkitBoxOrient: "vertical",
+                                WebkitLineClamp: promptLineCount,
+                              }}
+                            >
+                              {promptPreviewLine}
+                            </p>
                           </div>
                         ) : (
-                          <div className="rounded-[10px] border border-dashed border-border/70 bg-background/50 px-3 py-4 text-sm text-muted-foreground">
-                            当前还没有这位 Agent 的历史记录。
+                          <div className="mt-1 min-w-0 text-[0.9rem] leading-5" style={{ color: color.mutedText }}>
+                            -
                           </div>
                         )}
-                      </div>
-                    ) : (
-                      <div className="rounded-[10px] border border-dashed border-border/70 bg-background/50 px-3 py-4 text-sm text-muted-foreground">
-                        当前没有选中的 Agent。
-                      </div>
-                    )}
-                  </div>
-                </section>
-
-                <div className="min-h-0 overflow-y-auto">
-                  {agentTerminalActionError ? (
-                    <div className="mb-3 rounded-[8px] border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
-                      {agentTerminalActionError}
-                    </div>
-                  ) : null}
-
-                  <div className="space-y-3">
-                    {agentCards.map((agent) => {
-                      const color = getAgentColorToken(agent.name);
-                      const selected = agent.name === selectedAgentId;
-                      return (
-                        <div
-                          key={agent.name}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => {
-                            setSelectedAgentId(agent.name);
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleOpenAgentTerminal(agent.name);
                           }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              setSelectedAgentId(agent.name);
-                            }
-                          }}
-                          className="block w-full rounded-[10px] border p-4 text-left transition"
-                          style={{
-                            background: color.soft,
-                            borderColor: selected ? color.solid : color.border,
-                            boxShadow: selected ? `0 0 0 2px ${color.solid}33 inset` : undefined,
-                          }}
+                          className="sr-only"
                         >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="text-base font-semibold text-foreground">{agent.name}</p>
-                              <p className="text-xs text-foreground/70">runs: {agent.runCount}</p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void handleOpenAgentTerminal(agent.name);
-                              }}
-                              className={PANEL_HEADER_ACTION_BUTTON_CLASS}
-                            >
-                              {openingAgentTerminalId === agent.name ? "打开中..." : "attach"}
-                            </button>
-                          </div>
-                          {agent.prompt ? (
-                            <p className="mt-3 text-sm leading-6 text-foreground/80">
-                              {agent.prompt.split(/\n+/).find((line) => line.trim())}
-                            </p>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
+                          {openingAgentTerminalId === agent.name ? "打开中..." : "attach"}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </aside>
@@ -381,51 +372,6 @@ function App() {
       </main>
     </div>
   );
-}
-
-function formatHistoryTimestamp(timestamp: string) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) {
-    return timestamp;
-  }
-  return date.toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-}
-
-function getHistoryItemClassName(item: AgentHistoryItem) {
-  switch (item.tone) {
-    case "failure":
-      return "border-rose-200 bg-rose-50 text-rose-900";
-    case "runtime-tool":
-      return "border-amber-200 bg-amber-50 text-amber-900";
-    case "runtime-thinking":
-      return "border-slate-200 bg-slate-50 text-slate-800";
-    case "runtime-step":
-      return "border-sky-200 bg-sky-50 text-sky-900";
-    case "runtime-message":
-      return "border-emerald-200 bg-emerald-50 text-emerald-900";
-    default:
-      return "border-emerald-200 bg-emerald-50 text-emerald-900";
-  }
-}
-
-function getAgentStatusText(status: string) {
-  switch (status) {
-    case "running":
-      return "运行中";
-    case "completed":
-      return "已完成";
-    case "failed":
-      return "执行失败";
-    case "needs_revision":
-      return "需要修改";
-    default:
-      return "未启动";
-  }
 }
 
 export default App;

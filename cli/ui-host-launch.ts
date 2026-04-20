@@ -10,7 +10,6 @@ interface SourceUiHostLaunchInput {
   mode: "source";
   nodeBinary: string;
   repoRoot: string;
-  cwd: string;
   taskId: string;
   port: number;
 }
@@ -18,7 +17,6 @@ interface SourceUiHostLaunchInput {
 interface CompiledUiHostLaunchInput {
   mode: "compiled";
   executablePath: string;
-  cwd: string;
   taskId: string;
   port: number;
 }
@@ -33,8 +31,6 @@ export function buildUiHostLaunchSpec(
   const hostArgs = [
     "internal",
     "web-host",
-    "--cwd",
-    input.cwd,
     "--task-id",
     input.taskId,
     "--port",
@@ -65,11 +61,9 @@ export function buildUiHostLaunchSpec(
 
 export function buildUiUrl(input: {
   port: number;
-  cwd: string;
   taskId: string;
 }): string {
   const query = new URLSearchParams({
-    cwd: input.cwd,
     taskId: input.taskId,
   });
   return `http://127.0.0.1:${input.port}/?${query.toString()}`;

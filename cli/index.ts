@@ -36,7 +36,7 @@ import {
 } from "./ui-host-state";
 import { startWebHost } from "./web-host";
 
-const CLI_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const CLI_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_UI_PORT = 4310;
 const HEALTHCHECK_TIMEOUT_MS = 10_000;
 
@@ -50,7 +50,6 @@ interface TaskRunDiagnostics {
 }
 
 interface InternalWebHostCommand {
-  cwd: string;
   taskId: string;
   port: number;
 }
@@ -108,10 +107,8 @@ async function resolveProject(
 async function resolveTaskProject(
   context: CliContext,
   taskId: string,
-  cwd?: string,
 ): Promise<WorkspaceSnapshot> {
-  const resolvedCwd = path.resolve(cwd || process.cwd());
-  const task = await context.orchestrator.getTaskSnapshot(taskId, resolvedCwd);
+  const task = await context.orchestrator.getTaskSnapshot(taskId);
   return context.orchestrator.getWorkspaceSnapshot(task.task.cwd);
 }
 
@@ -345,21 +342,21 @@ async function isUiHostAlive(record: UiHostStateRecord): Promise<boolean> {
     if (!response.ok) {
       return false;
     }
-    const payload = await response.json() as { cwd?: string; taskId?: string };
-    return payload.cwd === record.cwd && payload.taskId === record.taskId;
+    const payload = await response.json() as { taskId?: string };
+    return payload.taskId === record.taskId;
   } catch {
     return false;
   }
 }
 
-async function waitForUiHost(port: number, cwd: string, taskId: string) {
+async function waitForUiHost(port: number, taskId: string) {
   const startTime = Date.now();
   while (Date.now() - startTime < HEALTHCHECK_TIMEOUT_MS) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/healthz`);
       if (response.ok) {
-        const payload = await response.json() as { cwd?: string; taskId?: string };
-        if (payload.cwd === cwd && payload.taskId === taskId) {
+        const payload = await response.json() as { taskId?: string };
+        if (payload.taskId === taskId) {
           return;
         }
       }
@@ -417,7 +414,6 @@ async function ensureUiHost(
       port: state.port,
       url: buildUiUrl({
         port: state.port,
-        cwd,
         taskId,
       }),
     };
@@ -432,7 +428,6 @@ async function ensureUiHost(
     ? buildUiHostLaunchSpec({
         mode: "compiled",
         executablePath: process.execPath,
-        cwd,
         taskId,
         port,
       })
@@ -440,7 +435,6 @@ async function ensureUiHost(
         mode: "source",
         nodeBinary: process.execPath,
         repoRoot: CLI_REPO_ROOT,
-        cwd,
         taskId,
         port,
       });
@@ -454,7 +448,7 @@ async function ensureUiHost(
     stdio: "ignore",
   });
   child.unref();
-  await waitForUiHost(port, cwd, taskId);
+  await waitForUiHost(port, taskId);
   writeUiHostState(cwd, {
     pid: child.pid ?? 0,
     port,
@@ -467,7 +461,6 @@ async function ensureUiHost(
     port,
     url: buildUiUrl({
       port,
-      cwd,
       taskId,
     }),
   };
@@ -486,15 +479,13 @@ function parseInternalWebHostCommand(argv: string[]): InternalWebHostCommand | n
     return argv[index + 1] ?? null;
   };
 
-  const cwd = readFlag("--cwd");
   const taskId = readFlag("--task-id");
   const port = Number(readFlag("--port"));
-  if (!cwd || !taskId || !Number.isFinite(port)) {
+  if (!taskId || !Number.isFinite(port)) {
     fail("internal web-host 缺少必要参数。");
   }
 
   return {
-    cwd: path.resolve(cwd),
     taskId,
     port,
   };
@@ -510,10 +501,13 @@ async function runInternalWebHost(command: InternalWebHostCommand) {
     fail("网页资源不可用，无法启动内部 web-host。");
   }
 
-  writeUiHostState(command.cwd, {
+  const task = await context.orchestrator.getTaskSnapshot(command.taskId);
+  const cwd = path.resolve(task.task.cwd);
+
+  writeUiHostState(cwd, {
     pid: process.pid,
     port: command.port,
-    cwd: command.cwd,
+    cwd,
     taskId: command.taskId,
     startedAt: new Date().toISOString(),
     version: packageJson.version,
@@ -521,7 +515,7 @@ async function runInternalWebHost(command: InternalWebHostCommand) {
 
   const host = await startWebHost({
     orchestrator: context.orchestrator,
-    cwd: command.cwd,
+    cwd,
     taskId: command.taskId,
     port: command.port,
     webRoot,
@@ -575,7 +569,7 @@ async function handleTaskUiCommand(
   const diagnostics = buildTaskRunDiagnostics(context.userDataPath);
 
   if (command.taskId) {
-    const workspace = await resolveTaskProject(context, command.taskId, command.cwd);
+    const workspace = await resolveTaskProject(context, command.taskId);
     const task = findTaskOrThrow(workspace, command.taskId);
     const { url } = await ensureUiHost(context, task.task.cwd, task.task.id);
     printTaskRunDiagnostics(diagnostics, task.task.id);
@@ -584,7 +578,7 @@ async function handleTaskUiCommand(
     return;
   }
 
-  let workspace = await resolveProject(context, command.cwd);
+  let workspace = await resolveProject(context);
   workspace = await ensureJsonTopologyApplied(context, workspace, command.file!);
   const snapshot = await context.orchestrator.submitTask({
     cwd: workspace.cwd,
@@ -632,8 +626,8 @@ function buildHelp() {
     "",
     "补充命令示例：",
     "  task headless --file <topology-json> --message <message> [--cwd <path>]",
-    "  task ui --file <topology-json> --message <message> [--cwd <path>]",
-    "  task ui --task <taskId> [--cwd <path>]",
+    "  task ui --file <topology-json> --message <message>",
+    "  task ui <taskId>",
     "  task attach <agentName> [--cwd <path>] [--print-only]",
     "",
     "说明：",

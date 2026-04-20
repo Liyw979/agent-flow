@@ -123,9 +123,9 @@
 - CLI 只保留 `task headless`、`task ui`、`task attach`。
 - `task headless --file <topology.json> --message <message>` 会新建当前 Task，打印本轮群聊，任务结束后退出到 shell。
 - `task ui --file <topology.json> --message <message>` 会新建当前 Task，后台启动本地 Web Host，并在浏览器中打开当前 Task 页面。
-- `task ui --task <taskId>` 会恢复已有 Task，并在浏览器中打开当前 Task 页面。
+- `task ui <taskId>` 会恢复已有 Task，并在浏览器中打开当前 Task 页面。
 - `task attach <agentName>` 会 attach 到当前工作区最近一个 Task 的目标 Agent OpenCode session；所有用户可见 attach 文案都统一显示这条高层命令，不展示底层 `opencode attach ...`。
-- `npm run cli -- ...` 需要在仓库根目录执行；若从其他目录排查目标工作区，请显式传入 `--cwd`。
+- `npm run cli -- ...` 需要在仓库根目录执行；若从其他目录排查目标工作区，`task headless` / `task attach` 请显式传入 `--cwd`。
 
 常用命令示例：
 
@@ -134,7 +134,7 @@ npm run cli -- help
 
 npm run cli -- task headless --file config/team-topologies/development-team.topology.json --message "请开始一轮开发团队协作。"
 npm run cli -- task ui --file config/team-topologies/development-team.topology.json --message "请开始一轮开发团队协作。"
-npm run cli -- task ui --task <taskId>
+npm run cli -- task ui <taskId>
 npm run cli -- task attach <agentName>
 ```
 

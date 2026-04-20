@@ -3,32 +3,38 @@ import assert from "node:assert/strict";
 
 import { buildTopologyCanvasLayout } from "./topology-canvas";
 
-test("buildTopologyCanvasLayout 会按节点顺序生成从左到右的布局和边路径", () => {
+test("buildTopologyCanvasLayout 会按面板宽高把节点横向纵向铺满", () => {
   const layout = buildTopologyCanvasLayout({
-    nodes: ["BA", "Build", "TaskReview"],
+    nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
       { source: "BA", target: "Build", triggerOn: "association" },
-      { source: "Build", target: "TaskReview", triggerOn: "approved" },
+      { source: "Build", target: "CodeReview", triggerOn: "approved" },
     ],
-    columnWidth: 200,
-    columnGap: 40,
+    availableWidth: 1860,
+    availableHeight: 360,
+    columnGap: 20,
     sidePadding: 20,
     topPadding: 10,
-    laneHeight: 50,
-    nodeHeight: 260,
+    bottomPadding: 10,
   });
 
-  assert.equal(layout.width, 680);
-  assert.equal(layout.height, 340);
+  assert.equal(layout.width, 1860);
+  assert.equal(layout.height, 360);
   assert.deepEqual(
-    layout.nodes.map((node) => ({ id: node.id, x: node.x, y: node.y })),
+    layout.nodes.map((node) => ({
+      id: node.id,
+      x: node.x,
+      y: node.y,
+      width: node.width,
+      height: node.height,
+    })),
     [
-      { id: "BA", x: 20, y: 60 },
-      { id: "Build", x: 260, y: 60 },
-      { id: "TaskReview", x: 500, y: 60 },
+      { id: "BA", x: 20, y: 10, width: 348, height: 340 },
+      { id: "Build", x: 388, y: 10, width: 348, height: 340 },
+      { id: "CodeReview", x: 756, y: 10, width: 348, height: 340 },
+      { id: "UnitTest", x: 1124, y: 10, width: 348, height: 340 },
+      { id: "TaskReview", x: 1492, y: 10, width: 348, height: 340 },
     ],
   );
-  assert.equal(layout.edges.length, 2);
-  assert.match(layout.edges[0]?.path ?? "", /^M /);
-  assert.match(layout.edges[1]?.path ?? "", /^M /);
+  assert.equal(layout.edges.length, 0);
 });

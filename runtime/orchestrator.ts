@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resolveTaskSubmissionTarget } from "@shared/task-submission";
+import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import {
   type AgentFlowEvent,
   type AgentRuntimeSnapshot,
@@ -75,6 +76,7 @@ import {
   resolveProjectAgents,
   validateProjectAgents,
 } from "./project-agent-source";
+import { launchTerminalCommand } from "./terminal-launcher";
 
 const execFileAsync = promisify(execFile);
 
@@ -83,6 +85,7 @@ interface OrchestratorOptions {
   autoOpenTaskSession?: boolean;
   enableEventStream?: boolean;
   runtimeRefreshDebounceMs?: number;
+  terminalLauncher?: (input: { cwd: string; command: string }) => Promise<void>;
 }
 
 interface DisposeOrchestratorOptions {
@@ -143,6 +146,7 @@ export class Orchestrator {
   private readonly pendingTaskRuns = new Set<Promise<void>>();
   private readonly knownWorkspaces = new Set<string>();
   private readonly runtimeRefreshDebounceMs: number;
+  private readonly terminalLauncher: (input: { cwd: string; command: string }) => Promise<void>;
   private isDisposing = false;
 
   constructor(options: OrchestratorOptions) {
@@ -152,6 +156,7 @@ export class Orchestrator {
     this.autoOpenTaskSession = options.autoOpenTaskSession ?? false;
     this.enableEventStream = options.enableEventStream ?? true;
     this.runtimeRefreshDebounceMs = options.runtimeRefreshDebounceMs ?? 120;
+    this.terminalLauncher = options.terminalLauncher ?? launchTerminalCommand;
   }
 
   async initialize() {
@@ -370,6 +375,7 @@ export class Orchestrator {
     if (!taskAgent.opencodeSessionId) {
       throw new Error(`Agent ${payload.agentName} 当前还没有可 attach 的 OpenCode session。`);
     }
+    await this.launchAgentTerminal(normalizedCwd, taskAgent.opencodeSessionId);
   }
 
   async getTaskRuntime(payload: GetTaskRuntimePayload): Promise<AgentRuntimeSnapshot[]> {
@@ -1066,6 +1072,19 @@ export class Orchestrator {
   private async syncOpenCodeAttachEndpoint(projectPath: string) {
     const attachBaseUrl = await this.opencodeClient.getAttachBaseUrl(projectPath);
     return attachBaseUrl;
+  }
+
+  private async launchAgentTerminal(projectPath: string, opencodeSessionId: string) {
+    const attachBaseUrl = await this.syncOpenCodeAttachEndpoint(projectPath);
+    const attachCommand = buildCliOpencodeAttachCommand(
+      attachBaseUrl,
+      opencodeSessionId,
+      projectPath,
+    );
+    await this.terminalLauncher({
+      cwd: projectPath,
+      command: attachCommand,
+    });
   }
 
   private isReviewAgent(

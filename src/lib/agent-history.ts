@@ -22,7 +22,11 @@ export interface AgentHistoryItem {
 }
 
 function normalizeHistoryText(content: string | null | undefined) {
-  const normalized = stripReviewResponseMarkup(content ?? "").trim();
+  const normalized = stripReviewResponseMarkup(content ?? "")
+    .replace(/\r\n?/gu, "\n")
+    .replace(/[ \t]+\n/gu, "\n")
+    .replace(/\n\s*\n+/gu, "\n")
+    .trim();
   return normalized || "暂无详细记录";
 }
 
@@ -103,24 +107,37 @@ function buildFinalHistoryItems(input: {
 function buildRuntimeHistoryItems(input: {
   agentId: string;
   runtimeSnapshot?: AgentRuntimeSnapshot;
+  finalHistoryItems?: AgentHistoryItem[];
 }) {
   if (!input.runtimeSnapshot) {
     return [];
   }
 
+  const finalMessageSignatures = new Set(
+    (input.finalHistoryItems ?? []).map((item) => `${item.sortTimestamp}:::${item.detail}`),
+  );
+
   return input.runtimeSnapshot.activities.map((activity, index) => {
     const presentation = getRuntimeItemPresentation(activity.kind);
-    return {
+    const detail =
+      activity.kind === "tool"
+        ? normalizeToolHistory(activity.label, activity.detail)
+        : normalizeHistoryText(activity.detail || activity.label);
+    const runtimeItem = {
       id: `${input.agentId}-runtime-${activity.id}-${index}`,
       label: presentation.label,
-      detail:
-        activity.kind === "tool"
-          ? normalizeToolHistory(activity.label, activity.detail)
-          : normalizeHistoryText(activity.detail || activity.label),
+      detail,
       timestamp: activity.timestamp,
       sortTimestamp: activity.timestamp,
       tone: presentation.tone,
     } satisfies AgentHistoryItem;
+    return runtimeItem;
+  }).filter((item) => {
+    if (item.tone !== "runtime-message") {
+      return true;
+    }
+
+    return !finalMessageSignatures.has(`${item.sortTimestamp}:::${item.detail}`);
   });
 }
 
@@ -130,8 +147,12 @@ export function buildAgentHistoryItems(input: {
   topology: Pick<TopologyRecord, "edges">;
   runtimeSnapshot?: AgentRuntimeSnapshot;
 }) {
+  const finalHistoryItems = buildFinalHistoryItems(input);
   return [
-    ...buildFinalHistoryItems(input),
-    ...buildRuntimeHistoryItems(input),
+    ...finalHistoryItems,
+    ...buildRuntimeHistoryItems({
+      ...input,
+      finalHistoryItems,
+    }),
   ].sort((left, right) => left.sortTimestamp.localeCompare(right.sortTimestamp));
 }

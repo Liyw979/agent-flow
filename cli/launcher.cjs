@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 const { spawn } = require("node:child_process");
-const path = require("node:path");
 const { buildCliLauncherSpec } = require("./launcher-spec.cjs");
+const { resolveCliRepoRoot } = require("./launcher-paths.cjs");
 
-const repoRoot = path.resolve(__dirname, "../..");
+const repoRoot = resolveCliRepoRoot(__dirname);
 const spec = buildCliLauncherSpec({
   nodeBinary: process.execPath,
   repoRoot,

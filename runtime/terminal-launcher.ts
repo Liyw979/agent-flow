@@ -1,0 +1,66 @@
+import { spawn } from "node:child_process";
+
+export interface TerminalLaunchInput {
+  cwd: string;
+  command: string;
+  platform?: NodeJS.Platform;
+}
+
+export interface TerminalLaunchSpec {
+  command: string;
+  args: string[];
+  cwd: string;
+}
+
+function quoteAppleScriptString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLaunchSpec {
+  const platform = input.platform ?? process.platform;
+
+  if (platform === "win32") {
+    return {
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", `start "" cmd.exe /k ${input.command}`],
+      cwd: input.cwd,
+    };
+  }
+
+  if (platform === "darwin") {
+    return {
+      command: "osascript",
+      args: [
+        "-e",
+        `tell application "Terminal" to do script ${quoteAppleScriptString(input.command)}`,
+        "-e",
+        'tell application "Terminal" to activate',
+      ],
+      cwd: input.cwd,
+    };
+  }
+
+  return {
+    command: "x-terminal-emulator",
+    args: ["-e", "/bin/sh", "-lc", input.command],
+    cwd: input.cwd,
+  };
+}
+
+export async function launchTerminalCommand(input: TerminalLaunchInput): Promise<void> {
+  const spec = buildTerminalLaunchSpec(input);
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(spec.command, spec.args, {
+      cwd: spec.cwd,
+      detached: true,
+      stdio: "ignore",
+    });
+
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}

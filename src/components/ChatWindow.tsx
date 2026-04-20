@@ -10,6 +10,13 @@ import {
   type MentionContext,
 } from "@/lib/chat-mentions";
 import { PANEL_HEADER_ACTION_BUTTON_CLASS } from "@/lib/panel-header-action-button";
+import {
+  PANEL_HEADER_CLASS,
+  PANEL_HEADER_LEADING_CLASS,
+  PANEL_HEADER_TITLE_CLASS,
+  PANEL_SECTION_BODY_CLASS,
+  PANEL_SURFACE_CLASS,
+} from "@/lib/panel-header";
 import { formatChatTranscript, getChatSenderLabel } from "@/lib/chat-transcript";
 
 interface ChatWindowProps {
@@ -400,10 +407,10 @@ export function ChatWindow({
   }
 
   return (
-    <section className="PANEL-surface flex h-full min-h-0 flex-col rounded-[10px]">
-      <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border/60 px-5">
-        <div className="flex items-center gap-2.5">
-          <p className="font-display text-[1.45rem] font-bold text-primary">消息</p>
+    <section className={PANEL_SURFACE_CLASS}>
+      <header className={PANEL_HEADER_CLASS}>
+        <div className={PANEL_HEADER_LEADING_CLASS}>
+          <p className={PANEL_HEADER_TITLE_CLASS}>消息</p>
           <span className="rounded-full bg-[#c96f3b] px-2.5 py-0.5 text-xs font-semibold text-white">
             {messages.length}
           </span>
@@ -435,7 +442,7 @@ export function ChatWindow({
             viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
           shouldStickToBottomRef.current = distanceToBottom <= 48;
         }}
-        className="flex-1 min-h-0 space-y-3 overflow-y-auto px-5 py-3"
+        className={`flex-1 min-h-0 space-y-1.5 overflow-y-auto ${PANEL_SECTION_BODY_CLASS}`}
       >
         {messages.length > 0 ? (
           messages.map((message) => (
@@ -449,7 +456,7 @@ export function ChatWindow({
       </div>
 
       <form
-        className="border-t border-border/60 px-5 py-3"
+        className={`border-t border-border/60 ${PANEL_SECTION_BODY_CLASS}`}
         onSubmit={async (event) => {
           event.preventDefault();
           await handleSubmit();

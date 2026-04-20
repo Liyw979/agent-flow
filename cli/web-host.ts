@@ -49,11 +49,10 @@ async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
 
 async function buildUiBootstrapPayload(
   orchestrator: Orchestrator,
-  cwd: string,
   taskId: string,
 ): Promise<UiBootstrapPayload> {
-  const workspace = await orchestrator.getWorkspaceSnapshot(cwd);
-  const task = workspace.tasks.find((item) => item.task.id === taskId) ?? null;
+  const task = await orchestrator.getTaskSnapshot(taskId);
+  const workspace = await orchestrator.getWorkspaceSnapshot(task.task.cwd);
   return {
     workspace,
     task,
@@ -122,7 +121,6 @@ export async function startWebHost(
       if (request.method === "GET" && url.pathname === "/healthz") {
         json(response, 200, {
           ok: true,
-          cwd: options.cwd,
           taskId: options.taskId,
           port: options.port,
         });
@@ -130,16 +128,17 @@ export async function startWebHost(
       }
 
       if (request.method === "GET" && url.pathname === "/api/bootstrap") {
-        const cwd = url.searchParams.get("cwd") ?? options.cwd;
         const taskId = url.searchParams.get("taskId") ?? options.taskId;
-        json(response, 200, await buildUiBootstrapPayload(options.orchestrator, cwd, taskId));
+        json(response, 200, await buildUiBootstrapPayload(options.orchestrator, taskId));
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/tasks/runtime") {
+        const taskId = url.searchParams.get("taskId") ?? options.taskId;
+        const snapshot = await options.orchestrator.getTaskSnapshot(taskId, options.cwd);
         const payload: GetTaskRuntimePayload = {
-          cwd: url.searchParams.get("cwd") ?? options.cwd,
-          taskId: url.searchParams.get("taskId") ?? options.taskId,
+          cwd: snapshot.task.cwd,
+          taskId: snapshot.task.id,
         };
         json(response, 200, await options.orchestrator.getTaskRuntime(payload));
         return;
@@ -164,7 +163,7 @@ export async function startWebHost(
           "cache-control": "no-store",
           connection: "keep-alive",
         });
-        response.write(`data: ${JSON.stringify({ type: "connected", cwd: options.cwd })}\n\n`);
+        response.write(`data: ${JSON.stringify({ type: "connected" })}\n\n`);
         subscriptions.add(response);
         request.on("close", () => {
           subscriptions.delete(response);

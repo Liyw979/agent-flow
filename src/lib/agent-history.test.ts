@@ -112,7 +112,89 @@ test("buildAgentHistoryItems 会把审查标签去掉并标记为审视不通过
     [
       {
         label: "审视不通过",
-        detail: "缺少测试。\n\n请补充测试",
+        detail: "缺少测试。\n请补充测试",
+      },
+    ],
+  );
+});
+
+test("buildAgentHistoryItems 会移除历史消息中的多余空行，避免卡片里出现大块空白", () => {
+  const messages: MessageRecord[] = [
+    {
+      id: "message-blank-lines",
+      taskId: "task-1",
+      sender: "Build",
+      content: "原始消息",
+      timestamp: "2026-04-20T09:06:00.000Z",
+      meta: {
+        kind: "agent-final",
+        finalMessage: "实际验证结果已经有了，且可以复核：\n\n```text\nprint('ok')\n```",
+      },
+    },
+  ];
+
+  assert.deepEqual(
+    buildAgentHistoryItems({
+      agentId: "Build",
+      messages,
+      topology,
+      runtimeSnapshot: undefined,
+    }).map((item) => item.detail),
+    [
+      "实际验证结果已经有了，且可以复核：\n```text\nprint('ok')\n```",
+    ],
+  );
+});
+
+test("buildAgentHistoryItems 不会把同一条最终回复同时展示成审视结果和普通消息", () => {
+  const messages: MessageRecord[] = [
+    {
+      id: "review-final",
+      taskId: "task-1",
+      sender: "TaskReview",
+      content: "原始消息",
+      timestamp: "2026-04-20T14:34:44.000Z",
+      meta: {
+        kind: "agent-final",
+        finalMessage: "这次我认可最终交付结论。",
+      },
+    },
+  ];
+
+  const runtimeSnapshot: AgentRuntimeSnapshot = {
+    taskId: "task-1",
+    agentId: "TaskReview",
+    sessionId: "session-review",
+    status: "completed",
+    messageCount: 1,
+    updatedAt: "2026-04-20T14:34:44.000Z",
+    headline: "TaskReview 已完成",
+    activeToolNames: [],
+    activities: [
+      {
+        id: "activity-review-message",
+        kind: "message",
+        label: "消息",
+        detail: "这次我认可最终交付结论。",
+        timestamp: "2026-04-20T14:34:44.000Z",
+      },
+    ],
+  };
+
+  assert.deepEqual(
+    buildAgentHistoryItems({
+      agentId: "TaskReview",
+      messages,
+      topology,
+      runtimeSnapshot,
+    }).map((item) => ({
+      label: item.label,
+      detail: item.detail,
+    })),
+    [
+      {
+        label: "审视通过",
+        detail: "这次我认可最终交付结论。",
       },
     ],
   );

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import packageJson from "../package.json";
 import { EMBEDDED_WEB_ASSETS } from "./generated-embedded-assets";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export interface ResolvedRuntimeAssets {
   webRoot: string | null;

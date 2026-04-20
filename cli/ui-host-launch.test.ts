@@ -12,7 +12,6 @@ test("buildUiHostLaunchSpec 在源码运行时会复用当前 Node + tsx CLI 链
     mode: "source",
     nodeBinary: "/usr/local/bin/node",
     repoRoot: "/repo/agent-team",
-    cwd: "/tmp/project",
     taskId: "task-123",
     port: 4310,
   });
@@ -21,7 +20,7 @@ test("buildUiHostLaunchSpec 在源码运行时会复用当前 Node + tsx CLI 链
   assert.equal(spec.cwd, "/repo/agent-team");
   assert.match(spec.args.join(" "), /internal web-host/);
   assert.match(spec.args.join(" "), /--task-id task-123/);
-  assert.match(spec.args.join(" "), /--cwd \/tmp\/project/);
+  assert.doesNotMatch(spec.args.join(" "), /--cwd \/tmp\/project/);
   assert.match(spec.args.join(" "), /--port 4310/);
 });
 
@@ -29,7 +28,6 @@ test("buildUiHostLaunchSpec 在单 exe 运行时会直接复用当前可执行�
   const spec = buildUiHostLaunchSpec({
     mode: "compiled",
     executablePath: "C:\\AgentFlow\\agentflow.exe",
-    cwd: "D:\\workspace\\demo",
     taskId: "task-123",
     port: 4310,
   });
@@ -38,8 +36,6 @@ test("buildUiHostLaunchSpec 在单 exe 运行时会直接复用当前可执行�
   assert.deepEqual(spec.args, [
     "internal",
     "web-host",
-    "--cwd",
-    "D:\\workspace\\demo",
     "--task-id",
     "task-123",
     "--port",
@@ -47,14 +43,13 @@ test("buildUiHostLaunchSpec 在单 exe 运行时会直接复用当前可执行�
   ]);
 });
 
-test("buildUiUrl 会把 cwd 和 taskId 编进浏览器 URL", () => {
+test("buildUiUrl 只把 taskId 编进浏览器 URL，不再暴露 cwd", () => {
   assert.equal(
     buildUiUrl({
       port: 4310,
-      cwd: "/tmp/project",
       taskId: "task 123",
     }),
-    "http://127.0.0.1:4310/?cwd=%2Ftmp%2Fproject&taskId=task+123",
+    "http://127.0.0.1:4310/?taskId=task+123",
   );
 });
 
