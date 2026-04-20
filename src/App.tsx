@@ -28,6 +28,11 @@ import {
   orderAgentsForFrontend,
   resolveDefaultSelectedAgentIdForFrontend,
 } from "./lib/frontend-agent-order";
+import { MarkdownMessage } from "./lib/chat-markdown";
+import {
+  buildAgentPromptDialogState,
+  type AgentPromptDialogState,
+} from "./lib/agent-prompt-dialog";
 
 function App() {
   const launchParams = useMemo(() => readLaunchParams(), []);
@@ -38,6 +43,7 @@ function App() {
   const [agentTerminalActionError, setAgentTerminalActionError] = useState<string | null>(null);
   const [promptLineCount, setPromptLineCount] = useState(1);
   const [agentCardGapPx, setAgentCardGapPx] = useState(6);
+  const [selectedAgentPromptDialog, setSelectedAgentPromptDialog] = useState<AgentPromptDialogState | null>(null);
   const agentPanelViewportRef = useRef<HTMLDivElement | null>(null);
 
   const workspace = bootstrap?.workspace ?? null;
@@ -233,6 +239,19 @@ function App() {
     }
   }
 
+  function handleOpenAgentPromptDialog(agent: {
+    name: string;
+    prompt: string;
+  }) {
+    setSelectedAgentId(agent.name);
+    setSelectedAgentPromptDialog(
+      buildAgentPromptDialogState({
+        agentName: agent.name,
+        prompt: agent.prompt,
+      }),
+    );
+  }
+
   if (!workspace || !task) {
     return (
       <div className="flex h-screen items-center justify-center bg-background px-6 text-foreground">
@@ -304,12 +323,12 @@ function App() {
                         role="button"
                         tabIndex={0}
                         onClick={() => {
-                          setSelectedAgentId(agent.name);
+                          handleOpenAgentPromptDialog(agent);
                         }}
                         onKeyDown={(event) => {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
-                            setSelectedAgentId(agent.name);
+                            handleOpenAgentPromptDialog(agent);
                           }
                         }}
                         className="rounded-[8px] border px-3 py-2 text-left shadow-sm transition"
@@ -370,6 +389,64 @@ function App() {
           </div>
         </div>
       </main>
+
+      {selectedAgentPromptDialog ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/28 px-6 py-6"
+          onClick={() => setSelectedAgentPromptDialog(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${selectedAgentPromptDialog.agentName} Prompt 详情`}
+            className="flex max-h-[min(82vh,720px)] w-full max-w-[720px] flex-col overflow-hidden rounded-[14px] border bg-background shadow-[0_24px_80px_rgba(23,32,25,0.22)]"
+            style={{
+              borderColor: getAgentColorToken(selectedAgentPromptDialog.agentName).border,
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div
+              className="flex items-center justify-between gap-3 border-b px-5 py-3"
+              style={{
+                background: getAgentColorToken(selectedAgentPromptDialog.agentName).soft,
+                borderColor: getAgentColorToken(selectedAgentPromptDialog.agentName).border,
+              }}
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-flex max-w-full shrink-0 rounded-[8px] px-2 py-px text-center text-[14px] font-semibold leading-[1.2] tracking-[0.02em]"
+                    style={{
+                      background: getAgentColorToken(selectedAgentPromptDialog.agentName).solid,
+                      color: getAgentColorToken(selectedAgentPromptDialog.agentName).badgeText,
+                    }}
+                  >
+                    {selectedAgentPromptDialog.agentName}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-foreground/60">
+                  {selectedAgentPromptDialog.promptSourceLabel}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedAgentPromptDialog(null)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/70 bg-background/90 text-lg leading-none text-foreground/68 transition hover:bg-background"
+                aria-label="关闭 Prompt 详情"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className={`min-h-0 overflow-y-auto ${PANEL_SECTION_BODY_CLASS}`}>
+              <MarkdownMessage
+                content={selectedAgentPromptDialog.content}
+                className="text-[14px] leading-[1.35] text-foreground/84"
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
