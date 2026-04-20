@@ -465,13 +465,16 @@ test("dispose 在 CLI 快速退出模式下不会等待悬挂的后台 task prom
   const typed = orchestrator as unknown as Orchestrator & {
     pendingTaskRuns: Set<Promise<void>>;
     opencodeClient: {
-      shutdown: () => Promise<void>;
+      shutdown: () => Promise<{ killedPids: number[] }>;
     };
   };
 
   let shutdownCalled = false;
   typed.opencodeClient.shutdown = async () => {
     shutdownCalled = true;
+    return {
+      killedPids: [4096],
+    };
   };
   typed.pendingTaskRuns.add(new Promise<void>(() => undefined));
 
@@ -485,6 +488,29 @@ test("dispose 在 CLI 快速退出模式下不会等待悬挂的后台 task prom
 
   assert.equal(completed, true);
   assert.equal(shutdownCalled, true);
+});
+
+test("dispose 会把 OpenCode 清理报告向上返回", async () => {
+  const userDataPath = createTempDir();
+  const orchestrator = createTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+  });
+  const typed = orchestrator as unknown as Orchestrator & {
+    opencodeClient: {
+      shutdown: () => Promise<{ killedPids: number[] }>;
+    };
+  };
+
+  typed.opencodeClient.shutdown = async () => ({
+    killedPids: [4096, 5120],
+  });
+
+  const report = await orchestrator.dispose();
+
+  assert.deepEqual(report, {
+    killedPids: [4096, 5120],
+  });
 });
 
 test("未应用团队 DSL 时，Project 不再暴露可手工编辑的 agents 配置", async () => {

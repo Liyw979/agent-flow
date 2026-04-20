@@ -27,6 +27,7 @@ import {
 import { ensureRuntimeAssets, isCompiledRuntime } from "./runtime-assets";
 import { resolveCliTaskStreamingPlan } from "./task-streaming-policy";
 import { renderTaskSessionSummary } from "./task-session-summary";
+import { renderOpenCodeCleanupReport } from "./opencode-cleanup-report";
 import {
   buildBrowserOpenSpec,
   buildUiHostLaunchSpec,
@@ -52,6 +53,10 @@ interface CliContext {
 
 interface TaskRunDiagnostics {
   logFilePath: string;
+}
+
+interface CliDisposeOptions {
+  awaitPendingTaskRuns: boolean;
 }
 
 interface InternalWebHostCommand {
@@ -82,6 +87,15 @@ function printTaskRunDiagnostics(diagnostics: TaskRunDiagnostics, taskId: string
 
 function isSettledTaskStatus(status: TaskSnapshot["task"]["status"]) {
   return status === "waiting" || status === "finished" || status === "failed";
+}
+
+async function disposeCliContext(context: CliContext, options: CliDisposeOptions) {
+  const report = await context.orchestrator.dispose(options);
+  const output = renderOpenCodeCleanupReport(report);
+  if (output) {
+    process.stdout.write(output);
+  }
+  return report;
 }
 
 async function createCliContext(options?: {
@@ -571,7 +585,7 @@ async function runInternalWebHost(command: InternalWebHostCommand) {
   const shutdown = async () => {
     deleteUiHostState(command.cwd);
     await host.close().catch(() => undefined);
-    await context.orchestrator.dispose({
+    await disposeCliContext(context, {
       awaitPendingTaskRuns: false,
     }).catch(() => undefined);
     process.exit(0);
@@ -740,7 +754,7 @@ async function run() {
       process.exit(plan.exitCode);
       return;
     }
-    void context.orchestrator.dispose({
+    void disposeCliContext(context, {
       awaitPendingTaskRuns: plan.awaitPendingTaskRuns,
     })
       .catch(() => undefined)
@@ -769,7 +783,7 @@ async function run() {
         observedSettledTaskState,
       });
       forceProcessExit = disposeOptions.forceProcessExit;
-      await context.orchestrator.dispose(disposeOptions);
+      await disposeCliContext(context, disposeOptions);
     }
   }
 

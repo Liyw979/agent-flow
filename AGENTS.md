@@ -145,6 +145,7 @@ CLI 能力分组：
 - `task ui`：运行或恢复任务，并在浏览器里打开当前 Task 页面。
 - `task attach`：attach 到指定 Task 的指定 Agent OpenCode 会话。
 - CLI 主进程收到 `Ctrl+C` / `SIGTERM` 时，会先回收当前这次命令启动或连接过的全部 OpenCode serve 实例，再结束当前命令，避免遗留孤儿会话。
+- CLI 在任务自然结束退出或收到 `Ctrl+C` / `SIGTERM` 退出时，都会打印本次回收掉的 OpenCode 实例 PID，便于排查残留进程。
 
 ## 5. 存储布局与仓库结构
 

@@ -63,3 +63,9 @@ test("task ui 与 task headless 都会把 command.cwd 传入工作区解析链�
   assert.match(CLI_SOURCE, /resolveProject\(context, command\.cwd\)/);
   assert.match(CLI_SOURCE, /resolveTaskProject\(context, command\.taskId, command\.cwd\)/);
 });
+
+test("CLI 退出时会输出被清理的 OpenCode 实例 PID", () => {
+  assert.match(CLI_SOURCE, /renderOpenCodeCleanupReport/);
+  assert.match(CLI_SOURCE, /process\.stdout\.write\(output\)/);
+  assert.match(CLI_SOURCE, /const report = await context\.orchestrator\.dispose\(options\)/);
+});

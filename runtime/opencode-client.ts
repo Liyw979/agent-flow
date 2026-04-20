@@ -79,6 +79,10 @@ interface ProjectServerState {
   injectedConfigContent: string | null;
 }
 
+export interface OpenCodeShutdownReport {
+  killedPids: number[];
+}
+
 export class OpenCodeClient {
   private readonly servers = new Map<string, ProjectServerState>();
   private readonly host = "127.0.0.1";
@@ -329,32 +333,38 @@ export class OpenCodeClient {
     return this.buildRuntimeSnapshot(sessionId, list);
   }
 
-  async shutdown(projectPath?: string): Promise<void> {
+  async shutdown(projectPath?: string): Promise<OpenCodeShutdownReport> {
     if (projectPath) {
       const state = this.servers.get(this.getProjectKey(projectPath));
       if (!state?.serverHandle) {
-        return;
+        return {
+          killedPids: [],
+        };
       }
 
+      let report: OpenCodeShutdownReport = {
+        killedPids: [],
+      };
       try {
         const server = await state.serverHandle;
-        await this.terminateServeHandle(server);
+        report = await this.terminateServeHandle(server);
       } catch {
         // ignore shutdown errors
       } finally {
         state.serverHandle = null;
         state.eventPump = null;
       }
-      return;
+      return report;
     }
 
+    const reports: OpenCodeShutdownReport[] = [];
     for (const state of this.servers.values()) {
       try {
         if (!state.serverHandle) {
           continue;
         }
         const server = await state.serverHandle;
-        await this.terminateServeHandle(server);
+        reports.push(await this.terminateServeHandle(server));
       } catch {
         // ignore shutdown errors
       } finally {
@@ -366,6 +376,7 @@ export class OpenCodeClient {
     this.sessionIdleAt.clear();
     this.sessionErrors.clear();
     this.sessionWaiters.clear();
+    return this.mergeShutdownReports(reports);
   }
 
   async deleteProject(projectPath: string): Promise<void> {
@@ -382,15 +393,25 @@ export class OpenCodeClient {
     }
   }
 
-  private async terminateServeHandle(server: ServeHandle): Promise<void> {
-    if (!server.process) {
-      return;
+  private async terminateServeHandle(server: ServeHandle): Promise<OpenCodeShutdownReport> {
+    const killedPids = this.findListeningPids(server.port)
+      .filter((pid) => this.isOpenCodeServeProcess(pid));
+
+    if (server.process) {
+      await this.killChildProcessTree(server.process);
     }
 
-    await this.killChildProcessTree(server.process);
     for (const pid of this.findListeningPids(server.port)) {
+      if (!this.isOpenCodeServeProcess(pid)) {
+        continue;
+      }
       this.killProcess(pid);
+      killedPids.push(pid);
     }
+
+    return {
+      killedPids: [...new Set(killedPids)],
+    };
   }
 
   private async killChildProcessTree(child: ChildProcessWithoutNullStreams): Promise<void> {
@@ -1561,6 +1582,12 @@ export class OpenCodeClient {
 
   private normalizeProcessOutput(value: string | Buffer): string {
     return typeof value === "string" ? value : value.toString("utf8");
+  }
+
+  private mergeShutdownReports(reports: OpenCodeShutdownReport[]): OpenCodeShutdownReport {
+    return {
+      killedPids: [...new Set(reports.flatMap((report) => report.killedPids))],
+    };
   }
 
   private async resolveServerPort(): Promise<number> {

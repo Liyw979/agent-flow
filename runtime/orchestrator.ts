@@ -44,7 +44,7 @@ import {
   stripStructuredSignals as stripStructuredSignalsPure,
   type ParsedReview,
 } from "./review-parser";
-import { OpenCodeClient } from "./opencode-client";
+import { OpenCodeClient, type OpenCodeShutdownReport } from "./opencode-client";
 import { OpenCodeRunner } from "./opencode-runner";
 import { StoreService } from "./store";
 import {
@@ -166,7 +166,7 @@ export class Orchestrator {
     await this.ensureEventStream(cwd);
   }
 
-  async dispose(options: DisposeOrchestratorOptions = {}) {
+  async dispose(options: DisposeOrchestratorOptions = {}): Promise<OpenCodeShutdownReport> {
     this.isDisposing = true;
     this.pendingRuntimeRefreshWorkspaces.forEach((timer) => clearTimeout(timer));
     this.pendingRuntimeRefreshWorkspaces.clear();
@@ -179,7 +179,7 @@ export class Orchestrator {
       this.pendingTaskRuns.clear();
     }
     this.langGraphRuntimes.clear();
-    await this.opencodeClient.shutdown();
+    return this.opencodeClient.shutdown();
   }
 
   subscribe(listener: (event: AgentTeamEvent) => void): () => void {
