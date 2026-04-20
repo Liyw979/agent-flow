@@ -59,7 +59,6 @@ export interface TaskRecord {
   title: string;
   status: TaskStatus;
   cwd: string;
-  zellijSessionId: string | null;
   opencodeSessionId: string | null;
   agentCount: number;
   createdAt: string;
@@ -119,16 +118,6 @@ export interface TaskAgentRecord {
   opencodeSessionId: string | null;
   status: AgentStatus;
   runCount: number;
-}
-
-export interface TaskPanelRecord {
-  id: string;
-  taskId: string;
-  sessionName: string;
-  paneId: string;
-  agentName: string;
-  cwd: string;
-  order: number;
 }
 
 export type TopologyEdgeTrigger = "association" | "approved" | "needs_revision";
@@ -250,7 +239,6 @@ export interface AgentRuntimeSnapshot {
 export interface TaskSnapshot {
   task: TaskRecord;
   agents: TaskAgentRecord[];
-  panels: TaskPanelRecord[];
   messages: MessageRecord[];
   topology: TopologyRecord;
 }

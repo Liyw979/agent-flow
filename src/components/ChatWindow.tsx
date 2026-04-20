@@ -9,7 +9,7 @@ import {
   getMentionOptionItems,
   type MentionContext,
 } from "@/lib/chat-mentions";
-import { PANEL_HEADER_ACTION_BUTTON_CLASS, cn } from "@/lib/panel-header-action-button";
+import { PANEL_HEADER_ACTION_BUTTON_CLASS } from "@/lib/panel-header-action-button";
 import { formatChatTranscript, getChatSenderLabel } from "@/lib/chat-transcript";
 
 interface ChatWindowProps {
@@ -17,7 +17,6 @@ interface ChatWindowProps {
   task: TaskSnapshot | undefined;
   availableAgents: string[];
   onSubmit: (payload: { content: string; mentionAgent?: string }) => Promise<void>;
-  onOpenTaskSession?: () => Promise<void>;
 }
 
 const MENTION_MENU_WIDTH = 224;
@@ -194,7 +193,6 @@ export function ChatWindow({
   task,
   availableAgents,
   onSubmit,
-  onOpenTaskSession,
 }: ChatWindowProps) {
   const defaultAgentName = getDefaultAgentName(workspace, task);
   const hasAvailableAgents = availableAgents.length > 0;
@@ -377,19 +375,6 @@ export function ChatWindow({
     }
   }
 
-  async function handleOpenTaskSession() {
-    if (!onOpenTaskSession) {
-      return;
-    }
-
-    setSubmitError(null);
-    try {
-      await onOpenTaskSession();
-    } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "打开 Zellij 失败，请稍后重试。");
-    }
-  }
-
   async function handleCopyTranscript() {
     if (messages.length === 0) {
       return;
@@ -398,9 +383,7 @@ export function ChatWindow({
     setSubmitError(null);
 
     try {
-      await window.agentFlow.copyToClipboard({
-        text: formatChatTranscript(messages),
-      });
+      await navigator.clipboard.writeText(formatChatTranscript(messages));
       setCopySuccess(true);
 
       if (copyResetTimerRef.current !== null) {
@@ -439,15 +422,6 @@ export function ChatWindow({
               )}
             >
               {copySuccess ? "已复制记录" : "复制对话记录"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                void handleOpenTaskSession();
-              }}
-              className={cn(PANEL_HEADER_ACTION_BUTTON_CLASS, "no-drag")}
-            >
-              打开 Zellij
             </button>
           </div>
         ) : null}

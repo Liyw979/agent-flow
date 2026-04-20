@@ -248,7 +248,7 @@ async function waitForValue<T>(
   throw new Error(`Value did not satisfy the predicate in ${timeoutMs}ms.`);
 }
 
-test("task init 不再写入 Zellij session 信息，但会补齐 OpenCode 运行态", async () => {
+test("task init 会补齐 OpenCode 运行态", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = createTestOrchestrator({
@@ -261,11 +261,10 @@ test("task init 不再写入 Zellij session 信息，但会补齐 OpenCode 运�
   project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"]);
   const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
 
-  assert.equal(task.task.zellijSessionId, null);
   assert.equal(task.task.cwd, project.cwd);
-  assert.equal(task.messages.some((message) => message.content.includes("Zellij Session")), false);
-  assert.equal(task.panels.some((panel) => panel.agentName === "Build"), true);
-  assert.equal(task.panels[0]?.cwd, projectPath);
+  assert.equal(task.messages.some((message) => /session/i.test(message.content)), false);
+  assert.equal(task.agents.some((agent) => agent.name === "Build"), true);
+  assert.equal(task.task.cwd, projectPath);
 });
 
 test("getTaskSnapshot 在新的 Orchestrator 进程里也能按 taskId 直接定位跨工作区任务", async () => {
@@ -304,7 +303,7 @@ test("getTaskSnapshot 在新的 Orchestrator 进程里也能按 taskId 直接定
   assert.equal(snapshot.task.cwd, workspacePath);
 });
 
-test("task init 不再追加 zellij 缺失提醒", async () => {
+test("task init 不会追加额外系统提醒", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = createTestOrchestrator({
@@ -317,7 +316,7 @@ test("task init 不再追加 zellij 缺失提醒", async () => {
   project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"]);
   const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
 
-  assert.equal(task.messages.some((message) => message.meta?.kind === "zellij-missing"), false);
+  assert.equal(task.messages.some((message) => message.meta?.kind === "runtime-missing"), false);
 });
 
 test("buildProjectGitDiffSummary 在系统没有 git 时返回空字符串", async () => {
@@ -370,13 +369,9 @@ test("OpenCode 事件会触发 runtime-updated 前端事件", async () => {
     runtimeRefreshDebounceMs: 1,
   });
   const sentEvents: unknown[] = [];
-  orchestrator.attachWindow({
-    webContents: {
-      send: (_channel: string, event: unknown) => {
-        sentEvents.push(event);
-      },
-    },
-  } as never);
+  const unsubscribe = orchestrator.subscribe((event) => {
+    sentEvents.push(event);
+  });
 
   let eventHandler: ((event: unknown) => void) | null = null;
   const typed = orchestrator as unknown as Orchestrator & {
@@ -417,6 +412,7 @@ test("OpenCode 事件会触发 runtime-updated 前端事件", async () => {
   assert.notEqual(runtimeUpdatedEvent, undefined);
   assert.equal(runtimeUpdatedEvent?.cwd, project.cwd);
   assert.equal(runtimeUpdatedEvent?.payload?.sessionId, "session-build-1");
+  unsubscribe();
 });
 
 test("dispose 之后，迟到结束的 event stream 不会再排 reconnect 定时器", async () => {
@@ -764,15 +760,6 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async (_cwd: string, taskId: string) => `oap-${taskId}`,
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
 
   const typed = orchestrator as unknown as Orchestrator & {
@@ -912,15 +899,6 @@ test("只有第一次 Agent 间传递会携带 [Initial Task]", async () => {
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
 
   const typed = orchestrator as unknown as Orchestrator & {
@@ -1023,15 +1001,6 @@ test("当前 Project 缺少 Build Agent 时，默认会从 start node 开始，�
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
   stubOpenCodeSessions(orchestrator);
   const typed = orchestrator as unknown as Orchestrator & {
@@ -1092,15 +1061,6 @@ test("单 reviewer 审查失败后会把 needs_revision 回流给 Build", async 
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
 
   const typed = orchestrator as unknown as Orchestrator & {
@@ -1220,15 +1180,6 @@ test("审查 Agent 的结构化 prompt 不会混入 Project Git Diff Summary", a
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
 
   const typed = orchestrator as unknown as Orchestrator & {
@@ -1350,15 +1301,6 @@ test("修复首个失败 reviewer 后，Build 下一轮不会立刻全量重派�
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
 
   const typed = orchestrator as unknown as Orchestrator & {
@@ -1526,15 +1468,6 @@ test("审查 Agent 返回 needs_revision 后会在其余 reviewer 收齐后回�
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
 
   const typed = orchestrator as unknown as Orchestrator & {
@@ -1762,15 +1695,6 @@ test("Task 启动后仍允许重新 applyTeamDsl，让 task run --file 继续以
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
   stubOpenCodeSessions(orchestrator);
 
@@ -1891,31 +1815,6 @@ test("审视 Agent 执行中止时不会伪造成整改意见", async () => {
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: ({ projectId, taskId, sessionName, cwd }: {
-        cwd: string;
-        taskId: string;
-        sessionName: string;
-        cwd: string;
-      }) => [
-        {
-          id: `${taskId}:CodeReview`,
-          taskId,
-          projectId,
-          sessionName,
-          paneId: "pane-1",
-          agentName: "CodeReview",
-          cwd,
-          order: 0,
-        },
-      ],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
   stubOpenCodeSessions(orchestrator);
   const typed = orchestrator as unknown as Orchestrator & {
@@ -2030,15 +1929,6 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
 
   const typed = orchestrator as unknown as Orchestrator & {
@@ -2172,15 +2062,6 @@ test("最大连续回流达到上限后，聊天页面会直接展示明确失�
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
   const typed = stubOpenCodeSessions(orchestrator) as unknown as Orchestrator & {
     ensureTaskPanels: (cwd: string, taskId: string) => Promise<void>;
@@ -2295,15 +2176,6 @@ test("聊天页面会按每条 needs_revision 边的单独上限展示失败原�
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
   const typed = stubOpenCodeSessions(orchestrator) as unknown as Orchestrator & {
     ensureTaskPanels: (cwd: string, taskId: string) => Promise<void>;
@@ -2416,15 +2288,6 @@ test("并发审查失败时不会提前追加任务结束系统消息", async ()
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
-    zellijManager: {
-      isAvailable: async () => true,
-      createTaskSession: async () => "oap-project-task",
-      createPanelBindings: () => [],
-      materializePanelBindings: async () => [],
-      openTaskSession: async () => undefined,
-      deleteTaskSession: async () => undefined,
-      setOpenCodeAttachBaseUrl: () => undefined,
-    } as never,
   });
 
   const typed = orchestrator as unknown as Orchestrator & {
@@ -2576,7 +2439,7 @@ test("并发审查失败时不会提前追加任务结束系统消息", async ()
   assert.equal(failedCompletionMessages.length, 0);
 });
 
-test("bootstrap 不再依赖 zellij session 存活状态清理任务", async () => {
+test("bootstrap 会直接回放当前工作区任务", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = createTestOrchestrator({

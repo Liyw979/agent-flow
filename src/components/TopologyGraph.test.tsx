@@ -35,7 +35,6 @@ function createTaskSnapshot(topology: TopologyRecord): TaskSnapshot {
       title: "demo task",
       status: "running",
       cwd: "/tmp/demo",
-      zellijSessionId: null,
       opencodeSessionId: null,
       agentCount: 3,
       createdAt: "2026-04-14T00:00:00.000Z",
@@ -47,7 +46,6 @@ function createTaskSnapshot(topology: TopologyRecord): TaskSnapshot {
       { id: "task-1:Build", taskId: "task-1", name: "Build", opencodeSessionId: null, status: "running", runCount: 2 },
       { id: "task-1:TaskReview", taskId: "task-1", name: "TaskReview", opencodeSessionId: null, status: "idle", runCount: 0 },
     ],
-    panels: [],
     messages: [],
     topology,
   };

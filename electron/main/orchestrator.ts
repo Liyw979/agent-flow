@@ -1,10 +1,8 @@
-import { BrowserWindow } from "electron";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-import { IPC_CHANNELS } from "@shared/ipc";
 import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import {
   type AgentFlowEvent,
@@ -24,7 +22,6 @@ import {
   resolveTopologyAgentOrder,
   type SubmitTaskPayload,
   type TaskAgentRecord,
-  type TaskPanelRecord,
   type TaskRecord,
   type TaskSnapshot,
   type TopologyEdge,
@@ -86,7 +83,6 @@ interface OrchestratorOptions {
   autoOpenTaskSession?: boolean;
   enableEventStream?: boolean;
   runtimeRefreshDebounceMs?: number;
-  zellijManager?: unknown;
 }
 
 interface DisposeOrchestratorOptions {
@@ -148,7 +144,6 @@ export class Orchestrator {
   private readonly knownWorkspaces = new Set<string>();
   private readonly runtimeRefreshDebounceMs: number;
   private isDisposing = false;
-  private window: BrowserWindow | null = null;
 
   constructor(options: OrchestratorOptions) {
     this.store = new StoreService(options.userDataPath);
@@ -182,11 +177,11 @@ export class Orchestrator {
     await this.opencodeClient.shutdown();
   }
 
-  attachWindow(window: BrowserWindow) {
-    this.window = window;
-    this.events.on("agentflow-event", (event: AgentFlowEvent) => {
-      this.window?.webContents.send(IPC_CHANNELS.eventStream, event);
-    });
+  subscribe(listener: (event: AgentFlowEvent) => void): () => void {
+    this.events.on("agentflow-event", listener);
+    return () => {
+      this.events.off("agentflow-event", listener);
+    };
   }
 
   async bootstrap(cwd = process.cwd()): Promise<WorkspaceSnapshot> {
@@ -259,8 +254,6 @@ export class Orchestrator {
     const agents = this.listWorkspaceAgents(normalizedCwd);
     const normalized = this.normalizeTopology(agents, payload.topology);
     this.store.upsertTopology(normalizedCwd, normalized);
-    this.syncWorkspaceTaskPanelOrders(normalizedCwd, agents, normalized);
-    await this.rebuildWorkspaceTaskPanels(normalizedCwd, agents, normalized);
     const updated = this.hydrateWorkspace(normalizedCwd);
     this.emit({
       type: "workspace-updated",
@@ -444,7 +437,6 @@ export class Orchestrator {
       title: options.title,
       status: "pending",
       cwd: normalizedCwd,
-      zellijSessionId: null,
       opencodeSessionId: null,
       agentCount: agents.length,
       createdAt: new Date().toISOString(),
@@ -597,22 +589,6 @@ export class Orchestrator {
         status: "idle",
         runCount: 0,
       });
-    }
-
-    const existingPanels = new Set(this.store.listTaskPanels(task.cwd, task.id).map((item) => item.agentName));
-    const nextPanels = orderedAgents.map((item, index) => ({
-      id: `${task.id}:${item.name}`,
-      taskId: task.id,
-      sessionName: "",
-      paneId: item.name,
-      agentName: item.name,
-      cwd: task.cwd,
-      order: index,
-    }));
-    for (const panel of nextPanels) {
-      if (!existingPanels.has(panel.agentName)) {
-        this.store.insertTaskPanel(task.cwd, panel);
-      }
     }
 
     this.store.updateTaskAgentCount(task.cwd, task.id, agents.length);
@@ -1044,19 +1020,7 @@ export class Orchestrator {
     this.setInjectedConfigForWorkspace(cwd);
     this.syncTaskAgents(task, agents);
     const currentTask = this.store.getTask(task.cwd, task.id);
-    const orderedTaskAgents = this.orderTaskAgents(task.cwd, task.id, this.store.listTaskAgents(task.cwd, task.id));
     await this.ensureTaskAgentSessions(cwd, currentTask);
-    for (const [index, agent] of orderedTaskAgents.entries()) {
-      this.store.upsertTaskPanel(task.cwd, {
-        id: `${currentTask.id}:${agent.name}`,
-        taskId: currentTask.id,
-        sessionName: "",
-        paneId: agent.name,
-        agentName: agent.name,
-        cwd: currentTask.cwd,
-        order: index,
-      });
-    }
 
     const refreshedTask = this.store.getTask(task.cwd, task.id);
     if (!refreshedTask.initializedAt) {
@@ -1087,7 +1051,6 @@ export class Orchestrator {
 
   private orderTaskAgents(
     cwd: string,
-    taskId: string,
     agents: TaskAgentRecord[],
     topologyOverride?: TopologyRecord,
   ): TaskAgentRecord[] {
@@ -1098,61 +1061,6 @@ export class Orchestrator {
     );
     const agentByName = new Map(agents.map((agent) => [agent.name, agent]));
     return orderedNames.map((name) => agentByName.get(name)).filter((agent): agent is TaskAgentRecord => Boolean(agent));
-  }
-
-  private syncWorkspaceTaskPanelOrders(
-    cwd: string,
-    agents: AgentRecord[],
-    topology: TopologyRecord,
-  ) {
-    const orderedNames = this.getOrderedAgentNames(cwd, agents, topology);
-    const orderIndex = new Map(orderedNames.map((name, index) => [name, index]));
-    for (const task of this.store.listTasks(cwd)) {
-      const taskPanels = this.store.listTaskPanels(task.cwd, task.id);
-      for (const [fallbackIndex, panel] of taskPanels.entries()) {
-        this.store.upsertTaskPanel(task.cwd, {
-          ...panel,
-          order: orderIndex.get(panel.agentName) ?? orderedNames.length + fallbackIndex,
-        });
-      }
-    }
-  }
-
-  private async rebuildWorkspaceTaskPanels(
-    cwd: string,
-    agents: AgentRecord[],
-    topology: TopologyRecord,
-  ) {
-    for (const task of this.store.listTasks(cwd)) {
-      if (!task.initializedAt) {
-        continue;
-      }
-
-      try {
-        const orderedAgents = this.orderTaskAgents(
-          cwd,
-          task.id,
-          this.store.listTaskAgents(task.cwd, task.id),
-          topology,
-        );
-        for (const [index, agent] of orderedAgents.entries()) {
-          this.store.upsertTaskPanel(task.cwd, {
-            id: `${task.id}:${agent.name}`,
-            taskId: task.id,
-            sessionName: "",
-            paneId: agent.name,
-            agentName: agent.name,
-            cwd: task.cwd,
-            order: index,
-          });
-        }
-      } catch (error) {
-        console.error("[orchestrator] 重建 Task pane 顺序失败", {
-          taskId: task.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
   }
 
   private async syncOpenCodeAttachEndpoint(projectPath: string) {
@@ -1266,7 +1174,6 @@ export class Orchestrator {
     return {
       task: this.store.getTask(task.cwd, taskId),
       agents: this.store.listTaskAgents(task.cwd, taskId),
-      panels: this.store.listTaskPanels(task.cwd, taskId),
       messages: this.store.listMessages(task.cwd, taskId),
       topology: this.store.getTopology(task.cwd),
     };

@@ -96,6 +96,7 @@ const orchestrator = new Orchestrator({
   userDataPath,
 });
 let shuttingDown = false;
+let unsubscribeAgentFlowEvents: (() => void) | null = null;
 
 async function buildUiBootstrapPayload(): Promise<UiBootstrapPayload> {
   const launch = resolveLaunchContext({
@@ -130,7 +131,10 @@ async function createWindow() {
     },
   });
 
-  orchestrator.attachWindow(mainWindow);
+  unsubscribeAgentFlowEvents?.();
+  unsubscribeAgentFlowEvents = orchestrator.subscribe((event) => {
+    mainWindow?.webContents.send(IPC_CHANNELS.eventStream, event);
+  });
 
   mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     console.error("[renderer] did-fail-load", {
@@ -193,6 +197,8 @@ app.on("before-quit", (event) => {
   }
 
   shuttingDown = true;
+  unsubscribeAgentFlowEvents?.();
+  unsubscribeAgentFlowEvents = null;
   event.preventDefault();
   void orchestrator.dispose()
     .catch((error) => {

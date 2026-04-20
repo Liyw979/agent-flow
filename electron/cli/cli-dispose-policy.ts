@@ -20,7 +20,7 @@ export function resolveCliDisposeOptions(
     };
   }
 
-  if (input.commandKind === "task.run" || input.commandKind === "task.show") {
+  if (input.commandKind === "task.headless") {
     return {
       awaitPendingTaskRuns: false,
       forceProcessExit: true,

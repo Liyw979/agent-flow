@@ -5,24 +5,15 @@
   "description": "Project / Task oriented OpenCode Code Agent orchestration tool",
   "main": "out/main/index.js",
   "type": "module",
-  "build": {
-    "extraResources": [
-      {
-        "from": "download/zellij.exe",
-        "to": "bin/zellij.exe"
-      }
-    ]
-  },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && electron-vite build",
-    "build:web": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build",
+    "build:web": "vite build",
+    "build:embedded-assets": "node scripts/generate-embedded-assets.mjs",
     "test": "tsx --test",
     "preview": "vite preview",
     "cli": "node electron/cli/launcher.cjs",
-    "electron:dev": "electron-vite dev",
-    "electron:build": "electron-vite build",
-    "dist:win": "npm run build && electron-builder --win dir --x64 --config.win.signAndEditExecutable=false",
+    "dist:win": "npm run build && npm run build:embedded-assets && bun build --compile --target bun-windows-x64 ./electron/cli/index.ts --outfile ./dist/agentflow.exe",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

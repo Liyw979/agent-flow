@@ -4,7 +4,6 @@ import { createTopologyLangGraphRecord, normalizeNeedsRevisionMaxRounds } from "
 import type {
   MessageRecord,
   TaskAgentRecord,
-  TaskPanelRecord,
   TaskRecord,
   TopologyRecord,
 } from "@shared/types";
@@ -20,7 +19,6 @@ interface WorkspaceStateFile {
   topology: TopologyRecord;
   tasks: TaskRecord[];
   taskAgents: TaskAgentRecord[];
-  taskPanels: TaskPanelRecord[];
   messages: MessageRecord[];
 }
 
@@ -110,7 +108,6 @@ function createDefaultWorkspaceState(): WorkspaceStateFile {
     },
     tasks: [],
     taskAgents: [],
-    taskPanels: [],
     messages: [],
   };
 }
@@ -154,7 +151,6 @@ export class StoreService {
       ...state,
       tasks: state.tasks.filter((task) => task.id !== taskId),
       taskAgents: state.taskAgents.filter((agent) => agent.taskId !== taskId),
-      taskPanels: state.taskPanels.filter((panel) => panel.taskId !== taskId),
       messages: state.messages.filter((message) => message.taskId !== taskId),
     }));
     this.removeTaskLocator(taskId);
@@ -224,28 +220,6 @@ export class StoreService {
     this.updateWorkspaceState(cwd, (state) => ({
       ...state,
       taskAgents: uniqueById([...state.taskAgents, record]),
-    }));
-  }
-
-  listTaskPanels(cwd: string, taskId: string): TaskPanelRecord[] {
-    return [...this.readWorkspaceState(cwd).taskPanels]
-      .filter((panel) => panel.taskId === taskId)
-      .sort((left, right) => left.order - right.order || left.agentName.localeCompare(right.agentName));
-  }
-
-  insertTaskPanel(cwd: string, record: TaskPanelRecord) {
-    this.updateWorkspaceState(cwd, (state) => ({
-      ...state,
-      taskPanels: uniqueById([...state.taskPanels, record]),
-    }));
-  }
-
-  upsertTaskPanel(cwd: string, record: TaskPanelRecord) {
-    this.updateWorkspaceState(cwd, (state) => ({
-      ...state,
-      taskPanels: uniqueById(
-        state.taskPanels.filter((panel) => panel.id !== record.id).concat(record),
-      ),
     }));
   }
 
@@ -399,7 +373,6 @@ export class StoreService {
                 ? task.status
                 : "pending",
             cwd: typeof task.cwd === "string" ? task.cwd : normalizedCwd,
-            zellijSessionId: typeof task.zellijSessionId === "string" ? task.zellijSessionId : null,
             opencodeSessionId: typeof task.opencodeSessionId === "string" ? task.opencodeSessionId : null,
             agentCount: typeof task.agentCount === "number" ? task.agentCount : 0,
             createdAt: typeof task.createdAt === "string" ? task.createdAt : new Date(0).toISOString(),
@@ -565,21 +538,6 @@ export class StoreService {
           })()
         : createDefaultWorkspaceState().topology;
 
-    const taskPanels: TaskPanelRecord[] = Array.isArray(parsed.taskPanels)
-      ? parsed.taskPanels
-          .filter((panel): panel is Partial<TaskPanelRecord> => Boolean(panel) && typeof panel === "object")
-          .map((panel, index) => ({
-            id: typeof panel.id === "string" ? panel.id : "",
-            taskId: typeof panel.taskId === "string" ? panel.taskId : "",
-            sessionName: typeof panel.sessionName === "string" ? panel.sessionName : "",
-            paneId: typeof panel.paneId === "string" ? panel.paneId : "",
-            agentName: typeof panel.agentName === "string" ? panel.agentName : "",
-            cwd: typeof panel.cwd === "string" ? panel.cwd : normalizedCwd,
-            order: typeof panel.order === "number" && Number.isFinite(panel.order) ? panel.order : index,
-          }))
-          .filter((panel) => panel.id && panel.taskId && panel.agentName)
-      : [];
-
     const messages: MessageRecord[] = Array.isArray(parsed.messages)
       ? parsed.messages
           .filter((message): message is Partial<MessageRecord> => Boolean(message) && typeof message === "object")
@@ -604,7 +562,6 @@ export class StoreService {
       topology,
       tasks,
       taskAgents,
-      taskPanels,
       messages,
     };
   }

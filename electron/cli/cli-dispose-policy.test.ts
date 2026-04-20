@@ -3,23 +3,10 @@ import test from "node:test";
 
 import { resolveCliDisposeOptions } from "./cli-dispose-policy";
 
-test("task run 在已经观察到任务结束后，不再等待后台 task promise 收尾", () => {
+test("task headless 在已经观察到任务结束后，不再等待后台 task promise 收尾", () => {
   assert.deepEqual(
     resolveCliDisposeOptions({
-      commandKind: "task.run",
-      observedSettledTaskState: true,
-    }),
-    {
-      awaitPendingTaskRuns: false,
-      forceProcessExit: true,
-    },
-  );
-});
-
-test("task show 在已经观察到任务结束后，也不再等待后台 task promise 收尾", () => {
-  assert.deepEqual(
-    resolveCliDisposeOptions({
-      commandKind: "task.show",
+      commandKind: "task.headless",
       observedSettledTaskState: true,
     }),
     {
@@ -32,7 +19,7 @@ test("task show 在已经观察到任务结束后，也不再等待后台 task p
 test("未观察到任务结束前，CLI 仍然保持保守关闭策略", () => {
   assert.deepEqual(
     resolveCliDisposeOptions({
-      commandKind: "task.run",
+      commandKind: "task.headless",
       observedSettledTaskState: false,
     }),
     {
@@ -42,10 +29,10 @@ test("未观察到任务结束前，CLI 仍然保持保守关闭策略", () => {
   );
 });
 
-test("task chat 即使进入 settled，也不能强制退出进程", () => {
+test("task ui 即使进入 settled，也不会走强制退出分支", () => {
   assert.deepEqual(
     resolveCliDisposeOptions({
-      commandKind: "task.chat",
+      commandKind: "task.ui",
       observedSettledTaskState: true,
     }),
     {

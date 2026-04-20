@@ -1,15 +1,24 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { ChatWindow } from "./components/ChatWindow";
-import { TopologyGraph } from "./components/TopologyGraph";
-import { getAgentColorToken } from "./lib/agent-colors";
-import { PANEL_HEADER_ACTION_BUTTON_CLASS } from "./lib/panel-header-action-button";
 import type {
   AgentRuntimeSnapshot,
   RuntimeUpdatedEventPayload,
   UiBootstrapPayload,
 } from "@shared/types";
+import { ChatWindow } from "./components/ChatWindow";
+import { TopologyGraph } from "./components/TopologyGraph";
+import { PANEL_HEADER_ACTION_BUTTON_CLASS } from "./lib/panel-header-action-button";
+import { getAgentColorToken } from "./lib/agent-colors";
+import {
+  bootstrapTask,
+  getTaskRuntime,
+  openAgentTerminal,
+  readLaunchParams,
+  submitTask,
+  subscribeAgentFlowEvents,
+} from "./lib/web-api";
 
 function App() {
+  const launchParams = useMemo(() => readLaunchParams(), []);
   const [bootstrap, setBootstrap] = useState<UiBootstrapPayload | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, AgentRuntimeSnapshot>>({});
@@ -20,7 +29,20 @@ function App() {
   const task = bootstrap?.task ?? null;
 
   async function refreshBootstrap() {
-    const next = await window.agentFlow.bootstrap();
+    if (!launchParams.cwd || !launchParams.taskId) {
+      setBootstrap({
+        workspace: null,
+        task: null,
+        launchCwd: launchParams.cwd || null,
+        launchTaskId: launchParams.taskId || null,
+      });
+      return;
+    }
+
+    const next = await bootstrapTask({
+      cwd: launchParams.cwd,
+      taskId: launchParams.taskId,
+    });
     setBootstrap(next);
     const nextSelectedAgentId =
       next.task?.agents.find((agent) => agent.name === selectedAgentId)?.name
@@ -44,7 +66,7 @@ function App() {
 
     async function loadRuntime() {
       try {
-        const snapshots = await window.agentFlow.getTaskRuntime({
+        const snapshots = await getTaskRuntime({
           cwd: workspace.cwd,
           taskId: task.task.id,
         });
@@ -73,8 +95,15 @@ function App() {
   }, [workspace?.cwd, task?.task.id]);
 
   useEffect(() => {
-    const unsubscribe = window.agentFlow.onAgentFlowEvent((event) => {
-      if (!bootstrap?.task || !bootstrap.workspace) {
+    if (!bootstrap?.workspace || !bootstrap.task) {
+      return;
+    }
+
+    const unsubscribe = subscribeAgentFlowEvents({
+      cwd: bootstrap.workspace.cwd,
+      taskId: bootstrap.task.task.id,
+    }, (event) => {
+      if (!bootstrap.task || !bootstrap.workspace) {
         return;
       }
 
@@ -121,7 +150,7 @@ function App() {
     setOpeningAgentTerminalId(agentName);
     setAgentTerminalActionError(null);
     try {
-      await window.agentFlow.openAgentTerminal({
+      await openAgentTerminal({
         cwd: workspace.cwd,
         taskId: task.task.id,
         agentName,
@@ -141,8 +170,8 @@ function App() {
         <div className="PANEL-surface max-w-xl rounded-[12px] p-6 text-center">
           <p className="font-display text-[1.8rem] font-bold text-primary">当前没有可展示的 Task</p>
           <p className="mt-3 text-sm leading-7 text-muted-foreground">
-            请先通过命令行执行 <code>task run --file &lt;topology.json&gt; --message &lt;message&gt; --ui</code>
-            ，或使用 <code>task show &lt;taskId&gt; --ui</code> 打开已有任务。
+            请先通过命令行执行 <code>task ui --file &lt;topology.json&gt; --message &lt;message&gt;</code>
+            ，或使用 <code>task ui --task &lt;taskId&gt;</code> 打开已有任务。
           </p>
         </div>
       </div>
@@ -151,9 +180,7 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden text-foreground">
-      <div className="window-drag-region h-8 shrink-0" />
-
-      <main className="min-h-0 flex-1 overflow-hidden px-5 pb-5">
+      <main className="min-h-0 flex-1 overflow-hidden px-5 py-5">
         <div className="grid h-full overflow-hidden grid-rows-[minmax(320px,42%)_minmax(0,1fr)] gap-[10px]">
           <TopologyGraph
             workspace={workspace}
@@ -170,7 +197,7 @@ function App() {
                 task={task}
                 availableAgents={availableAgents}
                 onSubmit={async ({ content, mentionAgent }) => {
-                  await window.agentFlow.submitTask({
+                  await submitTask({
                     cwd: workspace.cwd,
                     taskId: task.task.id,
                     content,

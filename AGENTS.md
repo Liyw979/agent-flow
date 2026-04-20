@@ -61,7 +61,7 @@
 
 ### 3.2 Task 初始化与状态流转
 
-- CLI 通过 `task run`、`task show`、`task chat` 管理当前工作区 Task 会话；GUI 只负责展示当前 Task，不再承担初始化或配置职责。
+- CLI 通过 `task headless`、`task ui` 管理当前工作区 Task 会话；GUI 只负责展示当前 Task，不再承担初始化或配置职责。
 - 若当前节点执行完成后，拓扑里不存在可自动继续推进的下游节点，Task 会进入 `waiting` 状态；左侧 Task 列表与群聊系统消息必须同步反映该状态。
 - 当 Task 进入 `finished` 状态时，右侧拓扑面板中的每个 Agent 节点都统一显示为 `已完成`，不再保留 `未启动 / 运行中` 等中间状态；聊天区会追加一条“任务已经结束”的系统消息。
 - Agent 运行态成功码统一使用 `completed`。
@@ -108,11 +108,11 @@
 - 每个 Agent 都会按名称自动分配一套稳定配色；聊天记录里会使用对应的浅色底、描边与标签色来区分不同 Agent。
 - 右下角展示当前工作区拓扑中的全部 Agent，以及它们在当前 Task 语境下的状态。
 - 前端不再提供 Agent、Prompt、拓扑、Project、Task 的创建、删除、编辑与保存入口。
-- 前端不嵌入终端，也不复刻 Zellij panel；GUI 只展示当前 Task 的聊天流、拓扑和 Agent 状态，并允许继续发消息。
+- 前端不嵌入终端；GUI 只展示当前 Task 的聊天流、拓扑和 Agent 状态，并允许继续发消息。
 
-### 3.6 Zellij 与终端行为
+### 3.6 终端行为
 
-- GUI 和 CLI 都通过 OpenCode session attach 到单个 Agent，会话调试入口统一围绕 OpenCode，而不是 Zellij pane。
+- GUI 和 CLI 都通过 OpenCode session attach 到单个 Agent，会话调试入口统一围绕 OpenCode。
 - 右下角团队成员面板中，每个 Agent 名称旁都会提供“attach”按钮，直接打开该 Agent 自己的 OpenCode attach 独立终端窗口。
 - 运行中的 Agent 会通过 OpenCode HTTP session 消息接口轮询实时工具调用与摘要，并显示在拓扑图节点内。
 - 应用退出时，会统一关闭当前工作区相关的 `opencode serve` 与其派生会话。
@@ -120,13 +120,11 @@
 ## 4. CLI 约定
 
 - CLI 默认使用当前目录作为工作目录。
-- CLI 只保留 `task run`、`task show`、`task chat`、`task attach`。
-- `task run --file <topology.json> --message <message>` 会新建当前 Task，打印本轮群聊，任务结束后退出到 shell。
-- `task show <taskId>` 会打印当前工作区指定 Task 的历史群聊；若任务仍在运行，会继续打印到结束。
-- `task chat --file <topology.json> --message <message>` 会新建当前 Task，任务开始后继续保留命令行会话，可持续发送消息。
-- `task chat --task <taskId> [--message <message>]` 会恢复已有 Task，先回放历史群聊，再进入可继续输入的会话。
+- CLI 只保留 `task headless`、`task ui`、`task attach`。
+- `task headless --file <topology.json> --message <message>` 会新建当前 Task，打印本轮群聊，任务结束后退出到 shell。
+- `task ui --file <topology.json> --message <message>` 会新建当前 Task，后台启动本地 Web Host，并在浏览器中打开当前 Task 页面。
+- `task ui --task <taskId>` 会恢复已有 Task，并在浏览器中打开当前 Task 页面。
 - `task attach <agentName>` 会 attach 到当前工作区最近一个 Task 的目标 Agent OpenCode session；所有用户可见 attach 文案都统一显示这条高层命令，不展示底层 `opencode attach ...`。
-- `task run --ui`、`task show --ui`、`task chat --ui` 会同步拉起前端界面。
 - `npm run cli -- ...` 需要在仓库根目录执行；若从其他目录排查目标工作区，请显式传入 `--cwd`。
 
 常用命令示例：
@@ -134,19 +132,16 @@
 ```bash
 npm run cli -- help
 
-npm run cli -- task run --file config/team-topologies/development-team.topology.json --message "请开始一轮开发团队协作。"
-npm run cli -- task run --file config/team-topologies/development-team.topology.json --message "请开始一轮开发团队协作。" --ui
-npm run cli -- task show <taskId>
-npm run cli -- task chat --file config/team-topologies/development-team.topology.json --message "@BA 请继续推进"
-npm run cli -- task chat --task <taskId>
+npm run cli -- task headless --file config/team-topologies/development-team.topology.json --message "请开始一轮开发团队协作。"
+npm run cli -- task ui --file config/team-topologies/development-team.topology.json --message "请开始一轮开发团队协作。"
+npm run cli -- task ui --task <taskId>
 npm run cli -- task attach <agentName>
 ```
 
 CLI 能力分组：
 
-- `task run`：运行一轮任务，结束后退出 CLI。
-- `task show`：查看已有 Task 的群聊记录。
-- `task chat`：运行或恢复任务后进入持续聊天会话。
+- `task headless`：运行一轮任务，结束后退出 CLI。
+- `task ui`：运行或恢复任务，并在浏览器里打开当前 Task 页面。
 - `task attach`：attach 到当前工作区最近一个 Task 的指定 Agent OpenCode 会话。
 
 ## 5. 存储布局与仓库结构
@@ -155,6 +150,7 @@ CLI 能力分组：
 
 - 命令执行失败等诊断日志位于用户数据目录下的 `logs/agentflow.log`。
 - 当前工作区的拓扑、Task、消息与运行态数据位于 `<cwd>/.agentflow/state.json`。
+- 当前工作区网页界面 Host 的运行态位于 `<cwd>/.agentflow/ui-host.json`。
 - 团队拓扑 JSON 编译后的 Agent prompt / writable 元数据会跟随当前拓扑保存在 `<cwd>/.agentflow/state.json` 的 `topology.nodeRecords` 中。
 - 团队拓扑 JSON 编译后的 LangGraph 边界信息会跟随当前拓扑保存在 `<cwd>/.agentflow/state.json` 的 `topology.langgraph` 中。
 - 每个 Task 的 LangGraph checkpoint 位于 `<cwd>/.agentflow/langgraph/`。
@@ -176,7 +172,6 @@ agentflow/
 │   │   ├── orchestrator.ts
 │   │   ├── topology-compiler.ts
 │   │   ├── store.ts
-│   │   ├── zellij-manager.ts
 │   │   ├── opencode-client.ts
 │   │   └── user-data-path.ts
 │   └── preload.ts
@@ -192,10 +187,7 @@ agentflow/
 │   ├── main.tsx
 │   └── styles.css
 ├── config/
-│   ├── agentflow.kdl
 │   └── opencode.example.json
-├── download/
-│   └── zellij.exe
 └── AGENTS.md
 ```
 
@@ -205,7 +197,7 @@ agentflow/
 
 ```bash
 npm install
-npm run electron:dev
+npm run cli -- help
 ```
 
 常用构建命令：
@@ -221,11 +213,10 @@ npm run dist:win
 
 打包注意事项：
 
-- Windows 打包前必须先刷新当前源码对应的 Electron 产物，禁止直接复用旧 `out/`。
-- 推荐直接使用 `npm run dist:win`；该命令会先执行 `npm run build` 生成最新 `out/main`、`out/preload`、`out/renderer`，再生成 `dist/win-unpacked/` 目录产物。
-- Windows 主程序位于 `dist/win-unpacked/agentflow.exe`。
-- 打包后的 `zellij.exe` 位于 `dist/win-unpacked/resources/bin/zellij.exe`。
-- 如果只想单独刷新 Electron 产物，可以执行 `npm run build`。
+- 推荐直接使用 `npm run dist:win`；该命令会先执行 `npm run build` 生成最新 `dist/web/`，再生成单文件 `dist/agentflow.exe`。
+- Windows 主程序位于 `dist/agentflow.exe`。
+- 打包后的网页静态资源会内嵌在 `agentflow.exe` 中，并在运行时自动释放到本地 runtime 目录。
+- 如果只想单独刷新网页产物，可以执行 `npm run build`。
 
 ## 7. 文档同步要求
 

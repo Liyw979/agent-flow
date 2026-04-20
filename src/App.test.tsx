@@ -24,3 +24,10 @@ test("App 不再从 bootstrap.project 读取当前工作区", () => {
   assert.doesNotMatch(APP_SOURCE, /project\.project\.id/);
   assert.doesNotMatch(APP_SOURCE, /ProjectSnapshot/);
 });
+
+test("App 改走浏览器 fetch 与 EventSource，而不是 Electron preload API", () => {
+  assert.match(APP_SOURCE, /fetch\(/);
+  assert.match(APP_SOURCE, /new EventSource/);
+  assert.match(APP_SOURCE, /new URLSearchParams/);
+  assert.doesNotMatch(APP_SOURCE, /window\.agentFlow/);
+});
