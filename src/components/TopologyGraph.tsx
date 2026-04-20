@@ -340,28 +340,32 @@ export function TopologyGraph({
                     {historyItems.length > 0 ? (
                       <div className="h-full space-y-1 overflow-y-auto">
                         {historyItems.map((item) => (
-                          <button
+                          <article
                             key={item.id}
-                            type="button"
+                            className={`${getTopologyHistoryItemButtonClassName()} ${getHistoryItemClassName(item)}`}
                             onClick={(event) => {
                               event.stopPropagation();
+                              if (window.getSelection()?.toString().trim()) {
+                                return;
+                              }
                               setSelectedHistoryItem({
                                 agentId: node.id,
                                 color,
                                 item,
                               });
                             }}
-                            className={`${getTopologyHistoryItemButtonClassName()} ${getHistoryItemClassName(item)}`}
                           >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="text-[11px] font-semibold">{item.label}</span>
-                              <span className="text-[11px] opacity-70">{formatHistoryTimestamp(item.timestamp)}</span>
+                            <div className="min-w-0 flex-1 select-text">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[11px] font-semibold">{item.label}</span>
+                                <span className="text-[11px] opacity-70">{formatHistoryTimestamp(item.timestamp)}</span>
+                              </div>
+                              <AgentHistoryMarkdown
+                                content={item.detail}
+                                className="mt-1 text-[11px] leading-[1.35] opacity-90 select-text"
+                              />
                             </div>
-                            <AgentHistoryMarkdown
-                              content={item.detail}
-                              className="mt-1 text-[11px] leading-[1.35] opacity-90"
-                            />
-                          </button>
+                          </article>
                         ))}
                       </div>
                     ) : (
@@ -431,7 +435,7 @@ export function TopologyGraph({
             <div className="min-h-0 overflow-y-auto px-5 py-4">
               <AgentHistoryMarkdown
                 content={selectedHistoryItem.item.detail}
-                className="text-[11px] leading-[1.35] text-foreground/84"
+                className="text-[14px] leading-[1.35] text-foreground/84"
               />
             </div>
           </div>
