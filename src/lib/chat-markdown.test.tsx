@@ -13,7 +13,7 @@ test("renderMarkdownToStaticHtml 会把标题列表和代码块渲染成 HTML", 
   assert.match(html, /<code/);
   assert.match(html, /--chat-markdown-block-spacing:0\.1625em/);
   assert.match(html, /--chat-markdown-list-item-spacing:0\.06rem/);
-  assert.match(html, /--chat-markdown-font-size:0\.875rem/);
+  assert.match(html, /--chat-markdown-font-size:0\.8125rem/);
   assert.match(html, /--chat-markdown-heading-font-size:1em/);
   assert.match(html, /--chat-markdown-code-font-size:1em/);
 });
@@ -21,7 +21,7 @@ test("renderMarkdownToStaticHtml 会把标题列表和代码块渲染成 HTML", 
 test("renderMarkdownToStaticHtml 继续服务消息记录，保留消息记录自己的字号变量", () => {
   const html = renderMarkdownToStaticHtml("普通消息");
 
-  assert.match(html, /--chat-markdown-font-size:0\.875rem/);
+  assert.match(html, /--chat-markdown-font-size:0\.8125rem/);
   assert.match(html, /--chat-markdown-line-height:1\.36em/);
 });
 
@@ -62,4 +62,13 @@ test("renderMarkdownToStaticHtml 会给代码块文字增加字形留白修剪�
   const html = renderMarkdownToStaticHtml("```bash\npython3 -m pytest -q\n....   [100%]\n4 passed in 0.01s\n```");
 
   assert.match(html, /\.chat-markdown pre > code \{[^}]*display: block;[^}]*margin: -0\.08em 0 -0\.1em;/);
+});
+
+test("renderMarkdownToStaticHtml 会让 pre 和 code 显式继承消息正文的 13px 字号，避免代码块看起来比正文更大", () => {
+  const html = renderMarkdownToStaticHtml("```ts\nconst answer = 13;\n```");
+
+  assert.match(html, /--chat-markdown-font-size:0\.8125rem/);
+  assert.match(html, /--chat-markdown-code-font-size:1em/);
+  assert.match(html, /\.chat-markdown pre \{[^}]*font-size: var\(--chat-markdown-font-size, inherit\);/);
+  assert.match(html, /\.chat-markdown code \{[^}]*font-size: var\(--chat-markdown-code-font-size, inherit\);/);
 });

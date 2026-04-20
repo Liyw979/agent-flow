@@ -27,3 +27,8 @@ test("运行时 chat markdown 必须支持拓扑专用的更紧凑列表和 code
   assert.match(STYLES_SOURCE, /padding: var\(--chat-markdown-pre-padding, 0\.3rem 0\.65rem\);/);
   assert.match(STYLES_SOURCE, /padding: var\(--chat-markdown-inline-code-padding, 0\.12rem 0\.35rem\);/);
 });
+
+test("运行时 chat markdown 的 pre 和 code 必须显式继承正文 13px 字号，避免代码块视觉放大", () => {
+  assert.match(STYLES_SOURCE, /\.chat-markdown pre \{[\s\S]*font-size: var\(--chat-markdown-font-size, inherit\);/);
+  assert.match(STYLES_SOURCE, /\.chat-markdown code \{[\s\S]*font-size: var\(--chat-markdown-code-font-size, inherit\);/);
+});

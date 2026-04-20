@@ -55,6 +55,7 @@ export function getChatMarkdownStaticStyleSheet(): string {
 
     .chat-markdown pre {
       overflow-x: auto;
+      font-size: var(--chat-markdown-font-size, inherit);
       padding: var(--chat-markdown-pre-padding, 0.3rem 0.65rem);
       border-radius: 10px;
       background: rgba(23, 32, 25, 0.1);
