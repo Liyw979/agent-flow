@@ -24,6 +24,25 @@ test("buildUiHostLaunchSpec 在源码运行时会复用当前 Node + tsx CLI 链
   assert.match(spec.args.join(" "), /--port 4310/);
 });
 
+test("buildUiHostLaunchSpec 在 Windows 源码态也会生成合法的 loader file URL", () => {
+  const spec = buildUiHostLaunchSpec({
+    mode: "source",
+    nodeBinary: "C:\\Program Files\\nodejs\\node.exe",
+    repoRoot: "C:\\repo\\agent-team",
+    taskId: "task-123",
+    port: 4310,
+    platform: "win32",
+  });
+
+  assert.deepEqual(spec.args.slice(0, 5), [
+    "--require",
+    "C:\\repo\\agent-team\\node_modules\\tsx\\dist\\preflight.cjs",
+    "--import",
+    "file:///C:/repo/agent-team/node_modules/tsx/dist/loader.mjs",
+    "C:\\repo\\agent-team\\cli\\index.ts",
+  ]);
+});
+
 test("buildUiHostLaunchSpec 在单 exe 运行时会直接复用当前可执行文件拉起内部 web-host", () => {
   const spec = buildUiHostLaunchSpec({
     mode: "compiled",

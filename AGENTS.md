@@ -204,6 +204,8 @@ bun run cli -- help
 ```bash
 bun run build
 bun run dist:win
+bun run dist:mac-arm64
+bun run dist:mac-x64
 ```
 
 交付前检查：
@@ -213,8 +215,10 @@ bun run dist:win
 打包注意事项：
 
 - 推荐直接使用 `bun run dist:win`；该命令会先执行 `bun run build` 生成最新 `dist/web/`，再生成单文件 `dist/agent-team.exe`。
+- macOS Apple Silicon 打包命令为 `bun run dist:mac-arm64`，产物位于 `dist/agent-team-macos-arm64`。
+- macOS Intel 打包命令为 `bun run dist:mac-x64`，产物位于 `dist/agent-team-macos-x64`。
 - Windows 主程序位于 `dist/agent-team.exe`。
-- 打包后的网页静态资源会内嵌在 `agent-team.exe` 中，并在运行时自动释放到本地 runtime 目录。
+- 打包后的网页静态资源会内嵌在编译产物中，并在运行时自动释放到本地 runtime 目录。
 - 如果只想单独刷新网页产物，可以执行 `bun run build`。
 
 ## 7. 文档同步要求

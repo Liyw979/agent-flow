@@ -189,8 +189,20 @@ function validateTaskUiCommand(
 
 function printTaskAttachCommands(task: TaskSnapshot, cwd?: string) {
   process.stdout.write("\nattach:\n");
+  const attachCommandOptions = isCompiledRuntime()
+    ? {
+        mode: "compiled" as const,
+        executablePath: process.execPath,
+        platform: process.platform,
+      }
+    : {
+        mode: "source" as const,
+        platform: process.platform,
+      };
   for (const agent of task.agents) {
-    process.stdout.write(`- ${agent.name} | attach: ${buildCliAttachAgentCommand(agent.name, cwd)}\n`);
+    process.stdout.write(
+      `- ${agent.name} | attach: ${buildCliAttachAgentCommand(agent.name, cwd, attachCommandOptions)}\n`,
+    );
   }
   process.stdout.write("\n");
 }

@@ -14,6 +14,8 @@
     "preview": "vite preview",
     "cli": "node cli/launcher.cjs",
     "dist:win": "bun run build && bun run build:embedded-assets && bun build --compile --target bun-windows-x64 ./cli/index.ts --outfile ./dist/agent-team.exe",
+    "dist:mac-arm64": "bun run build && bun run build:embedded-assets && bun build --compile --target bun-darwin-arm64 ./cli/index.ts --outfile ./dist/agent-team-macos-arm64",
+    "dist:mac-x64": "bun run build && bun run build:embedded-assets && bun build --compile --target bun-darwin-x64 ./cli/index.ts --outfile ./dist/agent-team-macos-x64",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

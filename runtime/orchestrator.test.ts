@@ -837,7 +837,7 @@ test("openAgentTerminal 会通过服务端终端启动器 attach 到对应 sessi
   assert.deepEqual(launches, [
     {
       cwd: project.cwd,
-      command: `opencode attach "http://127.0.0.1:4096" --session "session:demo:Build" --dir "${project.cwd}"`,
+      command: `opencode attach 'http://127.0.0.1:4096' --session 'session:demo:Build' --dir '${project.cwd}'`,
     },
   ]);
 });

@@ -9,6 +9,7 @@ const { buildCliLauncherSpec } = require("./launcher-spec.cjs") as {
     repoRoot: string;
     argv: string[];
     env: Record<string, string | undefined>;
+    platform?: NodeJS.Platform;
   }) => {
     command: string;
     args: string[];
@@ -41,4 +42,21 @@ test("buildCliLauncherSpec 直接使用当前 Node 进程启动 CLI 入口", () 
   ]);
   assert.equal(spec.cwd, "/repo/agent-team");
   assert.equal(spec.env.PATH, "/usr/bin");
+});
+
+test("buildCliLauncherSpec 在 Windows 仓库路径下也会生成合法的 loader file URL", () => {
+  const spec = buildCliLauncherSpec({
+    nodeBinary: "C:\\Program Files\\nodejs\\node.exe",
+    repoRoot: "C:\\repo\\agent-team",
+    argv: ["task", "attach", "Build"],
+    platform: "win32",
+    env: {
+      PATH: "C:\\Windows\\System32",
+    },
+  });
+
+  assert.equal(
+    spec.args[3],
+    "file:///C:/repo/agent-team/node_modules/tsx/dist/loader.mjs",
+  );
 });

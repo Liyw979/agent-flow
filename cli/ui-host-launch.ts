@@ -12,6 +12,7 @@ interface SourceUiHostLaunchInput {
   repoRoot: string;
   taskId: string;
   port: number;
+  platform?: NodeJS.Platform;
 }
 
 interface CompiledUiHostLaunchInput {
@@ -19,6 +20,7 @@ interface CompiledUiHostLaunchInput {
   executablePath: string;
   taskId: string;
   port: number;
+  platform?: NodeJS.Platform;
 }
 
 export type BuildUiHostLaunchSpecInput =
@@ -28,6 +30,8 @@ export type BuildUiHostLaunchSpecInput =
 export function buildUiHostLaunchSpec(
   input: BuildUiHostLaunchSpecInput,
 ): UiHostLaunchSpec {
+  const platform = input.platform ?? process.platform;
+  const pathModule = platform === "win32" ? path.win32 : path.posix;
   const hostArgs = [
     "internal",
     "web-host",
@@ -41,18 +45,25 @@ export function buildUiHostLaunchSpec(
     return {
       command: input.executablePath,
       args: hostArgs,
-      cwd: path.dirname(input.executablePath),
+      cwd: pathModule.dirname(input.executablePath),
     };
   }
+
+  const preflightPath = pathModule.join(input.repoRoot, "node_modules/tsx/dist/preflight.cjs");
+  const loaderPath = pathModule.join(input.repoRoot, "node_modules/tsx/dist/loader.mjs");
+  const entryPath = pathModule.join(input.repoRoot, "cli/index.ts");
+  const loaderImportUrl = platform === "win32"
+    ? `file:///${encodeURI(loaderPath.replace(/\\/g, "/"))}`
+    : `file://${encodeURI(loaderPath)}`;
 
   return {
     command: input.nodeBinary,
     args: [
       "--require",
-      path.join(input.repoRoot, "node_modules/tsx/dist/preflight.cjs"),
+      preflightPath,
       "--import",
-      `file://${path.join(input.repoRoot, "node_modules/tsx/dist/loader.mjs")}`,
-      path.join(input.repoRoot, "cli/index.ts"),
+      loaderImportUrl,
+      entryPath,
       ...hostArgs,
     ],
     cwd: input.repoRoot,
