@@ -20,6 +20,10 @@ import {
   type ParsedCliCommand,
 } from "./cli-command";
 import { resolveCliDisposeOptions } from "./cli-dispose-policy";
+import {
+  resolveCliSignalPlan,
+  shouldTreatAttachSignalAsExpected,
+} from "./cli-signal-policy";
 import { ensureRuntimeAssets, isCompiledRuntime } from "./runtime-assets";
 import { resolveCliTaskStreamingPlan } from "./task-streaming-policy";
 import { renderTaskSessionSummary } from "./task-session-summary";
@@ -217,6 +221,10 @@ async function buildAttachCommand(
 }
 
 async function runAttachCommand(command: string, cwd: string) {
+  const activeSignal = {
+    value: null as NodeJS.Signals | null,
+  };
+
   await new Promise<void>((resolve, reject) => {
     const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
     const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-c", command];
@@ -224,10 +232,40 @@ async function runAttachCommand(command: string, cwd: string) {
       cwd,
       stdio: "inherit",
     });
-    child.on("error", reject);
+    const handleSignal = (signal: NodeJS.Signals) => {
+      activeSignal.value = signal;
+    };
+    process.once("SIGINT", handleSignal);
+    process.once("SIGTERM", handleSignal);
+
+    const cleanupSignalListeners = () => {
+      process.off("SIGINT", handleSignal);
+      process.off("SIGTERM", handleSignal);
+    };
+    child.on("error", (error) => {
+      cleanupSignalListeners();
+      reject(error);
+    });
     child.on("exit", (code, signal) => {
+      cleanupSignalListeners();
       if (signal) {
+        if (shouldTreatAttachSignalAsExpected({
+          childExitCode: code,
+          childSignal: signal,
+          activeSignal: activeSignal.value,
+        })) {
+          resolve();
+          return;
+        }
         reject(new Error(`attach 被信号中断：${signal}`));
+        return;
+      }
+      if (shouldTreatAttachSignalAsExpected({
+        childExitCode: code,
+        childSignal: null,
+        activeSignal: activeSignal.value,
+      })) {
+        resolve();
         return;
       }
       if ((code ?? 0) !== 0) {
@@ -688,6 +726,30 @@ async function run() {
   const context = await createCliContext();
   let observedSettledTaskState = false;
   let forceProcessExit = false;
+  let interrupted = false;
+  const handleSignal = (signal: NodeJS.Signals) => {
+    if (interrupted) {
+      return;
+    }
+    interrupted = true;
+    const plan = resolveCliSignalPlan({
+      commandKind: command.kind,
+      signal,
+    });
+    if (!plan.shouldCleanupOpencode) {
+      process.exit(plan.exitCode);
+      return;
+    }
+    void context.orchestrator.dispose({
+      awaitPendingTaskRuns: plan.awaitPendingTaskRuns,
+    })
+      .catch(() => undefined)
+      .finally(() => {
+        process.exit(plan.exitCode);
+      });
+  };
+  process.once("SIGINT", handleSignal);
+  process.once("SIGTERM", handleSignal);
   try {
     if (command.kind === "task.headless") {
       await handleTaskHeadlessCommand(context, command);
@@ -699,14 +761,21 @@ async function run() {
       await handleTaskAttachCommand(context, command);
     }
   } finally {
-    const disposeOptions = resolveCliDisposeOptions({
-      commandKind: command.kind,
-      observedSettledTaskState,
-    });
-    forceProcessExit = disposeOptions.forceProcessExit;
-    await context.orchestrator.dispose(disposeOptions);
+    process.off("SIGINT", handleSignal);
+    process.off("SIGTERM", handleSignal);
+    if (!interrupted) {
+      const disposeOptions = resolveCliDisposeOptions({
+        commandKind: command.kind,
+        observedSettledTaskState,
+      });
+      forceProcessExit = disposeOptions.forceProcessExit;
+      await context.orchestrator.dispose(disposeOptions);
+    }
   }
 
+  if (interrupted) {
+    return;
+  }
   if (forceProcessExit) {
     process.exit(0);
   }

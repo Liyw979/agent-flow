@@ -144,6 +144,7 @@ CLI 能力分组：
 - `task headless`：运行一轮任务，结束后退出 CLI。
 - `task ui`：运行或恢复任务，并在浏览器里打开当前 Task 页面。
 - `task attach`：attach 到指定 Task 的指定 Agent OpenCode 会话。
+- CLI 主进程收到 `Ctrl+C` / `SIGTERM` 时，会先回收当前这次命令启动或连接过的全部 OpenCode serve 实例，再结束当前命令，避免遗留孤儿会话。
 
 ## 5. 存储布局与仓库结构
 
