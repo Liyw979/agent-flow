@@ -22,7 +22,7 @@ test("buildTerminalLaunchSpec 在 Windows 里通过 cmd start 拉起 attach 终�
   });
 });
 
-test("buildTerminalLaunchSpec 在 macOS 里通过 osascript 拉起 Terminal attach 会话", () => {
+test("buildTerminalLaunchSpec 在 macOS 里只打开一个 Terminal attach 窗口", () => {
   const spec = buildTerminalLaunchSpec({
     cwd: "/tmp/agent team",
     command: 'opencode attach "http://127.0.0.1:4310" --session "session-1" --dir "/tmp/agent team"',
@@ -33,7 +33,27 @@ test("buildTerminalLaunchSpec 在 macOS 里通过 osascript 拉起 Terminal atta
     command: "osascript",
     args: [
       "-e",
+      'if application "Terminal" is running then',
+      "-e",
       'tell application "Terminal" to do script "opencode attach \\"http://127.0.0.1:4310\\" --session \\"session-1\\" --dir \\"/tmp/agent team\\""',
+      "-e",
+      "else",
+      "-e",
+      'tell application "Terminal"',
+      "-e",
+      "activate",
+      "-e",
+      "repeat until (count of windows) > 0",
+      "-e",
+      "delay 0.05",
+      "-e",
+      "end repeat",
+      "-e",
+      'do script "opencode attach \\"http://127.0.0.1:4310\\" --session \\"session-1\\" --dir \\"/tmp/agent team\\"" in window 1',
+      "-e",
+      "end tell",
+      "-e",
+      "end if",
       "-e",
       'tell application "Terminal" to activate',
     ],
