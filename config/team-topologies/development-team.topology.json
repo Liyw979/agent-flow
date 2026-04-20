@@ -19,6 +19,10 @@
     }
   ],
   "topology": {
+    "langgraph": {
+      "start": "BA",
+      "end": null
+    },
     "downstream": {
       "BA": {
         "Build": "association"

@@ -3,15 +3,29 @@ import test from "node:test";
 
 import { resolveTaskSubmissionTarget } from "./task-submission";
 
-test("未显式 @Agent 时默认投递给 Build", () => {
+test("未显式 @Agent 时默认投递给 start node", () => {
   const resolution = resolveTaskSubmissionTarget({
     content: "请直接实现功能",
     availableAgents: ["BA", "Build", "TaskReview"],
+    defaultTargetAgent: "BA",
   });
 
   assert.deepEqual(resolution, {
     ok: true,
-    targetAgent: "Build",
+    targetAgent: "BA",
+  });
+});
+
+test("显式 @Agent 时仍然从该 Agent 开始，而不是回退到 start node", () => {
+  const resolution = resolveTaskSubmissionTarget({
+    content: "@TaskReview 请直接验收",
+    availableAgents: ["BA", "Build", "TaskReview"],
+    defaultTargetAgent: "BA",
+  });
+
+  assert.deepEqual(resolution, {
+    ok: true,
+    targetAgent: "TaskReview",
   });
 });
 
@@ -27,7 +41,20 @@ test("缺少 Build 时仍允许显式 @ 非 Build Agent 发送消息", () => {
   });
 });
 
-test("缺少 Build 且未显式 @ 任何 Agent 时，必须提示用户先指定目标 Agent", () => {
+test("缺少 Build 但存在 start node 时，未显式 @ 任何 Agent 仍然默认投递给 start node", () => {
+  const resolution = resolveTaskSubmissionTarget({
+    content: "请先整理需求",
+    availableAgents: ["BA"],
+    defaultTargetAgent: "BA",
+  });
+
+  assert.deepEqual(resolution, {
+    ok: true,
+    targetAgent: "BA",
+  });
+});
+
+test("未显式 @ 且当前拓扑缺少 start node 时，必须明确报错", () => {
   const resolution = resolveTaskSubmissionTarget({
     content: "请先整理需求",
     availableAgents: ["BA"],
@@ -35,8 +62,8 @@ test("缺少 Build 且未显式 @ 任何 Agent 时，必须提示用户先指定
 
   assert.deepEqual(resolution, {
     ok: false,
-    code: "missing_build_agent",
-    message: "当前 Project 缺少 Build Agent，请使用 @ 指定一个已写入 Agent 后再发送。",
+    code: "missing_start_agent",
+    message: "当前拓扑缺少 start node，请使用 @ 指定一个已写入 Agent 后再发送。",
   });
 });
 

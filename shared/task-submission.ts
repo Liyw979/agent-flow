@@ -1,5 +1,3 @@
-import { resolveBuildAgentName } from "./types";
-
 export type TaskSubmissionResolution =
   | {
       ok: true;
@@ -7,7 +5,7 @@ export type TaskSubmissionResolution =
     }
   | {
       ok: false;
-      code: "missing_agents" | "missing_build_agent" | "missing_target_agent";
+      code: "missing_agents" | "missing_start_agent" | "missing_target_agent";
       message: string;
     };
 
@@ -15,6 +13,7 @@ export function resolveTaskSubmissionTarget(input: {
   content: string;
   mentionAgent?: string;
   availableAgents: string[];
+  defaultTargetAgent?: string;
 }): TaskSubmissionResolution {
   const explicitMention = normalizeAgentName(input.mentionAgent) ?? extractMention(input.content);
   if (explicitMention) {
@@ -35,11 +34,11 @@ export function resolveTaskSubmissionTarget(input: {
     };
   }
 
-  const defaultBuildAgent = resolveBuildAgentName(input.availableAgents);
-  if (defaultBuildAgent) {
+  const defaultTargetAgent = normalizeAgentName(input.defaultTargetAgent);
+  if (defaultTargetAgent && input.availableAgents.includes(defaultTargetAgent)) {
     return {
       ok: true,
-      targetAgent: defaultBuildAgent,
+      targetAgent: defaultTargetAgent,
     };
   }
 
@@ -53,8 +52,8 @@ export function resolveTaskSubmissionTarget(input: {
 
   return {
     ok: false,
-    code: "missing_build_agent",
-    message: "当前 Project 缺少 Build Agent，请使用 @ 指定一个已写入 Agent 后再发送。",
+    code: "missing_start_agent",
+    message: "当前拓扑缺少 start node，请使用 @ 指定一个已写入 Agent 后再发送。",
   };
 }
 

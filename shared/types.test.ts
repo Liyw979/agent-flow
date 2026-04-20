@@ -27,6 +27,13 @@ test("默认拓扑只生成首节点到次节点的 association 边", () => {
     target: "BA",
     triggerOn: "association",
   });
+  assert.deepEqual(topology.langgraph, {
+    start: {
+      id: "__start__",
+      targets: ["Build"],
+    },
+    end: null,
+  });
   assert.equal(
     topology.edges.some((edge) => edge.triggerOn === "approved" || edge.triggerOn === "needs_revision"),
     false,
@@ -44,6 +51,13 @@ test("默认拓扑在缺少 Build 时不会偷偷把首个 Agent 当起点", () 
   assert.equal(Object.prototype.hasOwnProperty.call(topology, "startAgentId"), false);
   assert.deepEqual(topology.nodes, ["BA", "TaskReview"]);
   assert.deepEqual(topology.edges, []);
+  assert.deepEqual(topology.langgraph, {
+    start: {
+      id: "__start__",
+      targets: ["BA"],
+    },
+    end: null,
+  });
 });
 
 test("存在 review 出边时 isReviewAgentInTopology 返回 true", () => {

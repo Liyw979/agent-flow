@@ -134,6 +134,8 @@ export interface TaskPanelRecord {
 export type TopologyEdgeTrigger = "association" | "approved" | "needs_revision";
 
 export const DEFAULT_NEEDS_REVISION_MAX_ROUNDS = 4;
+export const LANGGRAPH_START_NODE_ID = "__start__";
+export const LANGGRAPH_END_NODE_ID = "__end__";
 
 export interface TopologyEdge {
   source: string;
@@ -142,9 +144,25 @@ export interface TopologyEdge {
   maxRevisionRounds?: number;
 }
 
+export interface TopologyLangGraphStartNode {
+  id: typeof LANGGRAPH_START_NODE_ID;
+  targets: string[];
+}
+
+export interface TopologyLangGraphEndNode {
+  id: typeof LANGGRAPH_END_NODE_ID;
+  sources: string[];
+}
+
+export interface TopologyLangGraphRecord {
+  start: TopologyLangGraphStartNode;
+  end: TopologyLangGraphEndNode | null;
+}
+
 export interface TopologyRecord {
   nodes: string[];
   edges: TopologyEdge[];
+  langgraph?: TopologyLangGraphRecord;
   nodeRecords?: TopologyNodeRecord[];
   spawnRules?: SpawnRule[];
 }
@@ -350,6 +368,16 @@ export function resolveBuildAgentName(
   return null;
 }
 
+export function resolvePrimaryTopologyStartTarget(
+  topology: Pick<TopologyRecord, "langgraph" | "nodes">,
+): string | null {
+  const explicitStartTarget = topology.langgraph?.start.targets.find((target) => target.trim().length > 0);
+  if (explicitStartTarget) {
+    return explicitStartTarget;
+  }
+  return topology.nodes[0] ?? null;
+}
+
 export function resolveTopologyStartAgent(
   agents: Array<Pick<TopologyAgentSeed, "name">>,
 ): string | null {
@@ -427,6 +455,12 @@ export function createDefaultTopology(
   return {
     nodes,
     edges,
+    langgraph: createTopologyLangGraphRecord({
+      nodes,
+      edges,
+      startTargets: [startAgent?.name ?? nodes[0] ?? ""],
+      endSources: null,
+    }),
     nodeRecords: nodes.map((name) => ({
       id: name,
       kind: "agent",
@@ -462,4 +496,43 @@ export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
     spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
     edges: rule.edges.map((edge) => ({ ...edge })),
   }));
+}
+
+export function createTopologyLangGraphRecord(input: {
+  nodes: string[];
+  edges: TopologyEdge[];
+  startTargets?: ReadonlyArray<string | null | undefined>;
+  endSources?: ReadonlyArray<string | null | undefined> | null;
+}): TopologyLangGraphRecord {
+  const knownNodes = new Set(input.nodes);
+  const normalizeRefs = (values: ReadonlyArray<string | null | undefined> | null | undefined) =>
+    (values ?? [])
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim())
+      .filter((value, index, list) => list.indexOf(value) === index)
+      .filter((value) => knownNodes.has(value));
+
+  let startTargets = normalizeRefs(input.startTargets);
+  if (startTargets.length === 0) {
+    const incomingTargets = new Set(input.edges.map((edge) => edge.target));
+    startTargets = input.nodes.filter((node) => !incomingTargets.has(node));
+  }
+  if (startTargets.length === 0 && input.nodes.length > 0) {
+    startTargets = [input.nodes[0]!];
+  }
+
+  const endSources = normalizeRefs(input.endSources);
+
+  return {
+    start: {
+      id: LANGGRAPH_START_NODE_ID,
+      targets: startTargets,
+    },
+    end: endSources.length > 0
+      ? {
+          id: LANGGRAPH_END_NODE_ID,
+          sources: endSources,
+        }
+      : null,
+  };
 }

@@ -67,3 +67,35 @@ test("StoreService 会读取 needs_revision 边的单独回流上限，并为缺
     { source: "TaskReview", target: "Build", triggerOn: "needs_revision", maxRevisionRounds: 6 },
   ]);
 });
+
+test("StoreService 读取旧 topology 时会补齐 LangGraph START，并把缺省 END 规范化为 null", () => {
+  const userDataPath = createTempDir();
+  const cwd = createTempDir();
+  const store = new StoreService(userDataPath);
+  const statePath = path.join(cwd, ".agentflow", "state.json");
+
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      version: 1,
+      topology: {
+        nodes: ["BA", "Build"],
+        edges: [{ source: "BA", target: "Build", triggerOn: "association" }],
+      },
+      tasks: [],
+      taskAgents: [],
+      taskPanels: [],
+      messages: [],
+    }, null, 2),
+  );
+
+  const topology = store.getTopology(cwd);
+  assert.deepEqual(topology.langgraph, {
+    start: {
+      id: "__start__",
+      targets: ["BA"],
+    },
+    end: null,
+  });
+});

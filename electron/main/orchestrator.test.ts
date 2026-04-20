@@ -268,6 +268,42 @@ test("task init 不再写入 Zellij session 信息，但会补齐 OpenCode 运�
   assert.equal(task.panels[0]?.cwd, projectPath);
 });
 
+test("getTaskSnapshot 在新的 Orchestrator 进程里也能按 taskId 直接定位跨工作区任务", async () => {
+  const userDataPath = createTempDir();
+  const workspacePath = createTempDir();
+
+  const writer = createTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+  });
+  stubOpenCodeSessions(writer);
+
+  let workspace = await writer.getWorkspaceSnapshot(workspacePath);
+  workspace = await replaceWorkspaceAgents(writer, workspace.cwd, [
+    { name: "Build", prompt: TEST_AGENT_PROMPTS.Build, isWritable: true },
+    { name: "BA", prompt: TEST_AGENT_PROMPTS.BA },
+  ]);
+
+  const created = await writer.initializeTask({
+    cwd: workspace.cwd,
+    title: "跨工作区 show",
+  });
+  const taskId = created.task.id;
+
+  await writer.dispose();
+  activeOrchestrators.delete(writer);
+
+  const reader = createTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+  });
+  stubOpenCodeSessions(reader);
+
+  const snapshot = await reader.getTaskSnapshot(taskId, createTempDir());
+  assert.equal(snapshot.task.id, taskId);
+  assert.equal(snapshot.task.cwd, workspacePath);
+});
+
 test("task init 不再追加 zellij 缺失提醒", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
@@ -981,7 +1017,7 @@ test("只有第一次 Agent 间传递会携带 [Initial Task]", async () => {
   assert.doesNotMatch(promptByAgent.get("QA")?.[0] ?? "", /\[Initial Task\]/u);
 });
 
-test("当前 Project 缺少 Build Agent 时，显式 @ 其他 Agent 仍可发送，但 @Build 会被拒绝", async () => {
+test("当前 Project 缺少 Build Agent 时，默认会从 start node 开始，显式 @Build 仍会被拒绝", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = createTestOrchestrator({
@@ -1036,10 +1072,13 @@ test("当前 Project 缺少 Build Agent 时，显式 @ 其他 Agent 仍可发送
   const firstUserMessage = submittedTask.messages.find((message) => message.sender === "user");
   assert.equal(firstUserMessage?.meta?.targetAgentId, "BA");
 
-  await assert.rejects(async () => orchestrator.submitTask({
+  const defaultSubmittedTask = await orchestrator.submitTask({
     cwd: project.cwd,
     content: "请先整理需求。",
-  }), /请使用 @ 指定一个已写入 Agent/u);
+  });
+
+  const defaultUserMessage = defaultSubmittedTask.messages.findLast((message) => message.sender === "user");
+  assert.equal(defaultUserMessage?.meta?.targetAgentId, "BA");
 
   await assert.rejects(async () => orchestrator.submitTask({
     cwd: project.cwd,

@@ -113,6 +113,20 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
       ...state.topology,
       nodes: [...state.topology.nodes],
       edges: state.topology.edges.map((edge) => ({ ...edge })),
+      langgraph: state.topology.langgraph
+        ? {
+            start: {
+              id: state.topology.langgraph.start.id,
+              targets: [...state.topology.langgraph.start.targets],
+            },
+            end: state.topology.langgraph.end
+              ? {
+                  id: state.topology.langgraph.end.id,
+                  sources: [...state.topology.langgraph.end.sources],
+                }
+              : null,
+          }
+        : undefined,
       nodeRecords: state.topology.nodeRecords?.map((node) => ({ ...node })),
       spawnRules: state.topology.spawnRules?.map((rule) => ({
         ...rule,

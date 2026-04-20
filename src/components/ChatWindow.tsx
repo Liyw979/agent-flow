@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { resolveBuildAgentName, type TaskSnapshot, type WorkspaceSnapshot } from "@shared/types";
+import { resolvePrimaryTopologyStartTarget, type TaskSnapshot, type WorkspaceSnapshot } from "@shared/types";
 import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import { cn } from "@/lib/utils";
 import { getAgentColorToken } from "@/lib/agent-colors";
@@ -88,8 +88,12 @@ function getCaretCoordinates(textarea: HTMLTextAreaElement, position: number) {
   return result;
 }
 
-function getDefaultAgentName(agents: string[]): string | undefined {
-  return resolveBuildAgentName(agents) ?? undefined;
+function getDefaultAgentName(
+  workspace: WorkspaceSnapshot | undefined,
+  task: TaskSnapshot | undefined,
+): string | undefined {
+  const topology = task?.topology ?? workspace?.topology;
+  return topology ? (resolvePrimaryTopologyStartTarget(topology) ?? undefined) : undefined;
 }
 
 function MessageBubble({
@@ -192,7 +196,7 @@ export function ChatWindow({
   onSubmit,
   onOpenTaskSession,
 }: ChatWindowProps) {
-  const defaultAgentName = getDefaultAgentName(availableAgents);
+  const defaultAgentName = getDefaultAgentName(workspace, task);
   const hasAvailableAgents = availableAgents.length > 0;
   const [draft, setDraft] = useState("");
   const [mentionContext, setMentionContext] = useState<MentionContext | null>(null);
@@ -345,6 +349,7 @@ export function ChatWindow({
     const resolution = resolveTaskSubmissionTarget({
       content,
       availableAgents,
+      defaultTargetAgent: defaultAgentName,
     });
     if (!resolution.ok) {
       setSubmitError(resolution.message);
@@ -565,8 +570,8 @@ export function ChatWindow({
               placeholder={
                 hasAvailableAgents
                   ? defaultAgentName
-                    ? "默认向 Build 发送消息，使用@指定Agent"
-                    : "请使用@指定Agent发送消息，@Build 当前不可用"
+                    ? `默认从 ${defaultAgentName} 开始，使用@指定Agent`
+                    : "当前拓扑缺少 start node，请使用@指定Agent发送消息"
                   : "当前还没有可用 Agent，请先配置团队成员"
               }
               className="no-drag block min-h-[68px] w-full resize-none rounded-[8px] border border-border bg-card px-4 py-2.5 text-sm leading-6 outline-none transition focus:border-primary"

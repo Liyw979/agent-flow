@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeNeedsRevisionMaxRounds } from "@shared/types";
+import { createTopologyLangGraphRecord, normalizeNeedsRevisionMaxRounds } from "@shared/types";
 import type {
   MessageRecord,
   TaskAgentRecord,
@@ -8,6 +8,12 @@ import type {
   TaskRecord,
   TopologyRecord,
 } from "@shared/types";
+import {
+  findTaskLocatorCwd,
+  removeTaskLocatorEntry,
+  upsertTaskLocatorEntry,
+  type TaskLocatorEntry,
+} from "./task-index";
 
 interface WorkspaceStateFile {
   version: number;
@@ -18,8 +24,14 @@ interface WorkspaceStateFile {
   messages: MessageRecord[];
 }
 
+interface TaskLocatorIndexFile {
+  version: number;
+  tasks: TaskLocatorEntry[];
+}
+
 const WORKSPACE_DATA_DIR_NAME = ".agentflow";
 const WORKSPACE_STATE_FILE_NAME = "state.json";
+const TASK_LOCATOR_INDEX_FILE_NAME = "task-locator.json";
 
 function sortByCreatedAtDesc<T extends { createdAt: string }>(items: T[]): T[] {
   return [...items].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
@@ -90,6 +102,11 @@ function createDefaultWorkspaceState(): WorkspaceStateFile {
     topology: {
       nodes: [],
       edges: [],
+      langgraph: createTopologyLangGraphRecord({
+        nodes: [],
+        edges: [],
+        endSources: null,
+      }),
     },
     tasks: [],
     taskAgents: [],
@@ -99,8 +116,11 @@ function createDefaultWorkspaceState(): WorkspaceStateFile {
 }
 
 export class StoreService {
+  private readonly userDataPath: string;
+
   constructor(userDataPath: string) {
-    fs.mkdirSync(userDataPath, { recursive: true });
+    this.userDataPath = path.resolve(userDataPath);
+    fs.mkdirSync(this.userDataPath, { recursive: true });
   }
 
   listTasks(cwd: string): TaskRecord[] {
@@ -120,6 +140,13 @@ export class StoreService {
       ...state,
       tasks: uniqueById([...state.tasks, record]),
     }));
+    this.updateTaskLocatorIndex((state) => ({
+      ...state,
+      tasks: upsertTaskLocatorEntry(state.tasks, {
+        taskId: record.id,
+        cwd: path.resolve(record.cwd),
+      }),
+    }));
   }
 
   deleteTask(cwd: string, taskId: string) {
@@ -129,6 +156,18 @@ export class StoreService {
       taskAgents: state.taskAgents.filter((agent) => agent.taskId !== taskId),
       taskPanels: state.taskPanels.filter((panel) => panel.taskId !== taskId),
       messages: state.messages.filter((message) => message.taskId !== taskId),
+    }));
+    this.removeTaskLocator(taskId);
+  }
+
+  getTaskLocatorCwd(taskId: string): string | null {
+    return findTaskLocatorCwd(this.readTaskLocatorIndex().tasks, taskId);
+  }
+
+  removeTaskLocator(taskId: string) {
+    this.updateTaskLocatorIndex((state) => ({
+      ...state,
+      tasks: removeTaskLocatorEntry(state.tasks, taskId),
     }));
   }
 
@@ -287,6 +326,46 @@ export class StoreService {
     return path.join(path.resolve(cwd), WORKSPACE_DATA_DIR_NAME, WORKSPACE_STATE_FILE_NAME);
   }
 
+  private getTaskLocatorIndexPath() {
+    return path.join(this.userDataPath, TASK_LOCATOR_INDEX_FILE_NAME);
+  }
+
+  private readTaskLocatorIndex(): TaskLocatorIndexFile {
+    const indexPath = this.getTaskLocatorIndexPath();
+    if (!fs.existsSync(indexPath)) {
+      const initialState: TaskLocatorIndexFile = {
+        version: 1,
+        tasks: [],
+      };
+      this.writeTaskLocatorIndex(initialState);
+      return initialState;
+    }
+
+    const raw = fs.readFileSync(indexPath, "utf8").trim();
+    if (!raw) {
+      const initialState: TaskLocatorIndexFile = {
+        version: 1,
+        tasks: [],
+      };
+      this.writeTaskLocatorIndex(initialState);
+      return initialState;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<TaskLocatorIndexFile>;
+    return {
+      version: 1,
+      tasks: Array.isArray(parsed.tasks)
+        ? parsed.tasks
+            .filter((entry): entry is Partial<TaskLocatorEntry> => Boolean(entry) && typeof entry === "object")
+            .map((entry) => ({
+              taskId: typeof entry.taskId === "string" ? entry.taskId : "",
+              cwd: typeof entry.cwd === "string" ? path.resolve(entry.cwd) : "",
+            }))
+            .filter((entry) => entry.taskId.length > 0 && entry.cwd.length > 0)
+        : [],
+    };
+  }
+
   private readWorkspaceState(cwd: string): WorkspaceStateFile {
     const normalizedCwd = path.resolve(cwd);
     const statePath = this.getWorkspaceStatePath(normalizedCwd);
@@ -361,9 +440,9 @@ export class StoreService {
 
     const topology: TopologyRecord =
       parsed.topology && typeof parsed.topology === "object"
-        ? {
-            nodes: normalizeTopologyNodes(parsed.topology),
-            edges: Array.isArray(parsed.topology.edges)
+        ? (() => {
+            const nodes = normalizeTopologyNodes(parsed.topology);
+            const edges = Array.isArray(parsed.topology.edges)
               ? parsed.topology.edges
                   .filter((edge): edge is Record<string, unknown> => Boolean(edge) && typeof edge === "object")
                   .map((edge) => ({
@@ -392,7 +471,36 @@ export class StoreService {
                         }
                       : {}),
                   }))
-              : [],
+              : [];
+
+            const rawLangGraph =
+              parsed.topology.langgraph && typeof parsed.topology.langgraph === "object"
+                ? parsed.topology.langgraph
+                : null;
+
+            return {
+              nodes,
+              edges,
+              langgraph: createTopologyLangGraphRecord({
+                nodes,
+                edges,
+                startTargets:
+                  rawLangGraph
+                  && rawLangGraph.start
+                  && typeof rawLangGraph.start === "object"
+                  && Array.isArray(rawLangGraph.start.targets)
+                    ? rawLangGraph.start.targets.filter((value): value is string => typeof value === "string")
+                    : undefined,
+                endSources:
+                  rawLangGraph
+                  && rawLangGraph.end
+                  && typeof rawLangGraph.end === "object"
+                  && Array.isArray(rawLangGraph.end.sources)
+                    ? rawLangGraph.end.sources.filter((value): value is string => typeof value === "string")
+                    : rawLangGraph?.end === null
+                      ? null
+                      : undefined,
+              }),
             nodeRecords: Array.isArray(parsed.topology.nodeRecords)
               ? parsed.topology.nodeRecords
                   .filter((node): node is Record<string, unknown> => Boolean(node) && typeof node === "object")
@@ -453,7 +561,8 @@ export class StoreService {
                       && rule.reportToTemplateName,
                   )
               : undefined,
-          }
+            };
+          })()
         : createDefaultWorkspaceState().topology;
 
     const taskPanels: TaskPanelRecord[] = Array.isArray(parsed.taskPanels)
@@ -506,10 +615,22 @@ export class StoreService {
     fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
   }
 
+  private writeTaskLocatorIndex(state: TaskLocatorIndexFile) {
+    const indexPath = this.getTaskLocatorIndexPath();
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(indexPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  }
+
   private updateWorkspaceState(cwd: string, updater: (state: WorkspaceStateFile) => WorkspaceStateFile) {
     const normalizedCwd = path.resolve(cwd);
     const current = this.readWorkspaceState(normalizedCwd);
     const next = updater(current);
     this.writeWorkspaceState(normalizedCwd, next);
+  }
+
+  private updateTaskLocatorIndex(updater: (state: TaskLocatorIndexFile) => TaskLocatorIndexFile) {
+    const current = this.readTaskLocatorIndex();
+    const next = updater(current);
+    this.writeTaskLocatorIndex(next);
   }
 }

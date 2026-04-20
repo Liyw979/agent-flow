@@ -20,6 +20,7 @@ import {
   type MessageRecord,
   type OpenAgentTerminalPayload,
   resolveBuildAgentName,
+  resolvePrimaryTopologyStartTarget,
   resolveTopologyAgentOrder,
   type SubmitTaskPayload,
   type TaskAgentRecord,
@@ -219,8 +220,10 @@ export class Orchestrator {
   }
 
   private resolveTaskCwd(taskId: string, preferredCwd?: string): string {
+    const indexedCwd = this.store.getTaskLocatorCwd(taskId);
     const candidates = [
       preferredCwd ? path.resolve(preferredCwd) : null,
+      indexedCwd,
       ...this.knownWorkspaces,
     ].filter((value, index, list): value is string => Boolean(value) && list.indexOf(value) === index);
 
@@ -228,6 +231,9 @@ export class Orchestrator {
       const task = this.store.listTasks(candidate).find((item) => item.id === taskId);
       if (task) {
         return task.cwd;
+      }
+      if (candidate === indexedCwd) {
+        this.store.removeTaskLocator(taskId);
       }
     }
 
@@ -307,10 +313,12 @@ export class Orchestrator {
     const agents = this.listWorkspaceAgents(normalizedCwd);
     validateProjectAgents(agents);
     this.syncTopology(normalizedCwd, agents);
+    const topology = this.store.getTopology(normalizedCwd);
     const resolution = resolveTaskSubmissionTarget({
       content: payload.content,
       mentionAgent: payload.mentionAgent,
       availableAgents: agents.map((agent) => agent.name),
+      defaultTargetAgent: resolvePrimaryTopologyStartTarget(topology) ?? undefined,
     });
     if (!resolution.ok) {
       throw new Error(resolution.message);

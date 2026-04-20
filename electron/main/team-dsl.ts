@@ -1,8 +1,10 @@
 import {
   type AgentRecord,
+  createTopologyLangGraphRecord,
   normalizeNeedsRevisionMaxRounds,
   type TopologyEdge,
   type TopologyEdgeTrigger,
+  type TopologyLangGraphRecord,
   type TopologyNodeRecord,
   type TopologyRecord,
   type SpawnRule,
@@ -40,6 +42,10 @@ interface CreateTopologyDslInput {
   nodes?: string[];
   downstream: DownstreamMap;
   spawn?: Record<string, SpawnTemplateInput>;
+  langgraph?: {
+    start?: string | string[];
+    end?: string | string[] | null;
+  };
 }
 
 export interface TeamDslAgentRecord {
@@ -98,13 +104,31 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
       const leftKey = `${left.source}__${left.target}__${left.triggerOn}__${left.maxRevisionRounds ?? ""}`;
       const rightKey = `${right.source}__${right.target}__${right.triggerOn}__${right.maxRevisionRounds ?? ""}`;
       return leftKey.localeCompare(rightKey);
-    }),
+      }),
+    langgraph: topology.langgraph
+      ? normalizeComparableLangGraph(topology.langgraph)
+      : undefined,
     nodeRecords: topology.nodeRecords
       ? [...topology.nodeRecords].sort((left, right) => left.id.localeCompare(right.id))
       : undefined,
     spawnRules: topology.spawnRules
       ? [...topology.spawnRules].sort((left, right) => left.id.localeCompare(right.id))
       : undefined,
+  };
+}
+
+function normalizeComparableLangGraph(langgraph: TopologyLangGraphRecord): TopologyLangGraphRecord {
+  return {
+    start: {
+      id: langgraph.start.id,
+      targets: [...langgraph.start.targets].sort((left, right) => left.localeCompare(right)),
+    },
+    end: langgraph.end
+      ? {
+          id: langgraph.end.id,
+          sources: [...langgraph.end.sources].sort((left, right) => left.localeCompare(right)),
+        }
+      : null,
   };
 }
 
@@ -178,6 +202,16 @@ function buildEdges(input: CreateTopologyDslInput): TopologyEdge[] {
   }
 
   return edges;
+}
+
+function normalizeBoundaryTargets(value: string | string[] | null | undefined): string[] | null {
+  if (value === null) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    return value;
+  }
+  return typeof value === "string" ? [value] : undefined;
 }
 
 function buildNodeRecords(
@@ -387,6 +421,8 @@ function assertTopologyAgentsDeclared(
   const known = new Set(compiledAgents.map((agent) => agent.name));
   const allNodes = new Set<string>([
     ...topology.nodes,
+    ...(topology.langgraph?.start.targets ?? []),
+    ...(topology.langgraph?.end?.sources ?? []),
     ...(topology.nodeRecords?.map((node) => node.id) ?? []),
     ...(topology.spawnRules?.flatMap((rule) => [
       rule.sourceTemplateName,
@@ -404,10 +440,17 @@ function assertTopologyAgentsDeclared(
 
 export function createTopology(input: CreateTopologyDslInput): TopologyRecord {
   const nodes = collectNodes(input);
+  const edges = buildEdges(input);
 
   return {
     nodes,
-    edges: buildEdges(input),
+    edges,
+    langgraph: createTopologyLangGraphRecord({
+      nodes,
+      edges,
+      startTargets: normalizeBoundaryTargets(input.langgraph?.start) ?? undefined,
+      endSources: normalizeBoundaryTargets(input.langgraph?.end),
+    }),
     nodeRecords: buildNodeRecords(nodes, input),
     spawnRules: buildSpawnRules(input),
   };
