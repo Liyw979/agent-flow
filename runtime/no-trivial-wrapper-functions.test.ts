@@ -29,6 +29,10 @@ test("CLI 不再保留 buildOpenAgentTerminalCommand 这类一行包装函数", 
   assert.doesNotMatch(CLI_INDEX_SOURCE, /function buildOpenAgentTerminalCommand\(/);
 });
 
+test("CLI 不再保留 openBrowser 这类一行包装函数", () => {
+  assert.doesNotMatch(CLI_INDEX_SOURCE, /async function openBrowser\(/);
+});
+
 test("UI 不再保留只有一行 return 的按钮文案包装函数", () => {
   assert.doesNotMatch(APP_SOURCE, /export function getOpenAgentTerminalButtonLabel\(/);
   assert.doesNotMatch(APP_SOURCE, /export function getOpenAgentTerminalButtonTitle\(/);

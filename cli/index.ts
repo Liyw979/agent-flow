@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import type { TaskSnapshot, WorkspaceSnapshot } from "@shared/types";
+import open from "open";
 import { appendAppLog, initAppFileLogger } from "../runtime/app-log";
 import { Orchestrator } from "../runtime/orchestrator";
 import { resolveCliUserDataPath } from "../runtime/user-data-path";
@@ -24,10 +24,7 @@ import { resolveCliTaskStreamingPlan } from "./task-streaming-policy";
 import { renderTaskSessionSummary } from "./task-session-summary";
 import { renderTaskAttachCommands } from "./task-attach-display";
 import { renderOpenCodeCleanupReport } from "./opencode-cleanup-report";
-import {
-  buildBrowserOpenSpec,
-  buildUiUrl,
-} from "./ui-host-launch";
+import { buildUiUrl } from "./ui-host-launch";
 import { startWebHost } from "./web-host";
 
 const DEFAULT_UI_PORT = 4310;
@@ -260,15 +257,6 @@ async function resolveUiPort() {
   return port;
 }
 
-async function openBrowser(url: string) {
-  const spec = buildBrowserOpenSpec({ url });
-  const child = spawn(spec.command, spec.args, {
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
-}
-
 async function ensureUiHost(
   context: CliContext,
   cwd: string,
@@ -349,7 +337,7 @@ async function handleTaskUiCommand(
   const { host, url } = await ensureUiHost(context, snapshot.task.cwd, snapshot.task.id);
   printTaskRunDiagnostics(diagnostics, snapshot.task.id);
   process.stdout.write(`[UI] ${url}\n`);
-  await openBrowser(url);
+  await open(url);
   if (streamingPlan.enabled) {
     await renderTaskMessages(context, snapshot.task.id, [], {
       includeHistory: streamingPlan.includeHistory,

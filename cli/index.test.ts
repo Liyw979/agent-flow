@@ -55,7 +55,9 @@ test("CLI 不再通过 ProjectSnapshot / ensureProjectForPath 驱动当前工作
 
 test("CLI 会在当前进程里直接启动 web-host 并打开浏览器 UI", () => {
   assert.match(CLI_SOURCE, /startWebHost/);
-  assert.match(CLI_SOURCE, /openBrowser/);
+  assert.match(CLI_SOURCE, /import open from "open";/);
+  assert.match(CLI_SOURCE, /await open\(url\);/);
+  assert.doesNotMatch(CLI_SOURCE, /async function openBrowser\(/);
   assert.doesNotMatch(CLI_SOURCE, /internal web-host/);
   assert.doesNotMatch(CLI_SOURCE, /buildUiHostLaunchSpec/);
 });

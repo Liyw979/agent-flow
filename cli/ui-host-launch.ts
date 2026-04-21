@@ -1,5 +1,3 @@
-import { resolveWindowsCmdPath } from "../runtime/windows-shell";
-
 export function buildUiUrl(input: {
   port: number;
   taskId: string;
@@ -8,28 +6,4 @@ export function buildUiUrl(input: {
     taskId: input.taskId,
   });
   return `http://127.0.0.1:${input.port}/?${query.toString()}`;
-}
-
-export function buildBrowserOpenSpec(input: {
-  url: string;
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
-}): { command: string; args: string[] } {
-  const platform = input.platform ?? process.platform;
-  if (platform === "win32") {
-    return {
-      command: resolveWindowsCmdPath(input.env),
-      args: ["/d", "/s", "/c", "start", "", `"${input.url}"`],
-    };
-  }
-  if (platform === "darwin") {
-    return {
-      command: "open",
-      args: [input.url],
-    };
-  }
-  return {
-    command: "xdg-open",
-    args: [input.url],
-  };
 }
