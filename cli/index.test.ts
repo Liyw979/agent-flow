@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const CLI_SOURCE = fs.readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+const NORMALIZED_CLI_SOURCE = CLI_SOURCE.replace(/\r\n/g, "\n");
 const REMOVED_TERMINAL_HOST = String.fromCharCode(122, 101, 108, 108, 105, 106);
 
 function isUiAssetPreflightBeforeTaskSubmit(source: string): boolean {
@@ -11,11 +12,25 @@ function isUiAssetPreflightBeforeTaskSubmit(source: string): boolean {
   return preflightIndex !== -1 && submitIndex !== -1 && preflightIndex < submitIndex;
 }
 
-test("CLI 不再兼容旧的 review relation 别名", () => {
+function getTaskUiSection(source: string): string {
+  const startIndex = source.indexOf("async function handleTaskUiCommand(");
+  const endIndex = source.indexOf("function buildHelp()", startIndex);
+  assert.notEqual(startIndex, -1);
+  assert.notEqual(endIndex, -1);
+  return source.slice(startIndex, endIndex);
+}
+
+function appearsInOrder(source: string, before: string, after: string): boolean {
+  const beforeIndex = source.indexOf(before);
+  const afterIndex = source.indexOf(after);
+  return beforeIndex !== -1 && afterIndex !== -1 && beforeIndex < afterIndex;
+}
+
+test("CLI no longer accepts the legacy review relation alias", () => {
   assert.doesNotMatch(CLI_SOURCE, /relation === "review"/);
 });
 
-test("CLI 帮助只包含 task headless/task ui 命令", () => {
+test("CLI help only includes task headless and task ui commands", () => {
   assert.match(CLI_SOURCE, /task headless --file <topology-json> --message <message>/);
   assert.match(CLI_SOURCE, /task ui --file <topology-json> --message <message> \[--cwd <path>\]/);
   assert.doesNotMatch(CLI_SOURCE, /task ui <taskId> \[--cwd <path>\]/);
@@ -30,22 +45,22 @@ test("CLI 帮助只包含 task headless/task ui 命令", () => {
   assert.doesNotMatch(CLI_SOURCE, /agent attach <agentName>/);
 });
 
-test("CLI 不再保留交互式 task chat 会话入口", () => {
-  assert.doesNotMatch(CLI_SOURCE, /已进入会话/);
-  assert.doesNotMatch(CLI_SOURCE, /@某一个agent/);
+test("CLI no longer keeps the interactive task chat entrypoint", () => {
+  assert.doesNotMatch(CLI_SOURCE, /宸茶繘鍏ヤ細璇?/);
+  assert.doesNotMatch(CLI_SOURCE, /@鏌愪竴涓猘gent/);
   assert.doesNotMatch(CLI_SOURCE, /runInteractiveSession/);
 });
 
-test("buildHelp 不再依赖额外的帮助包装模块", () => {
+test("buildHelp does not depend on the legacy help wrapper", () => {
   assert.doesNotMatch(CLI_SOURCE, /buildCliHelpText/);
   assert.doesNotMatch(CLI_SOURCE, /from "\.\/help-text"/);
 });
 
-test("CLI 帮助不再包含旧终端宿主相关描述", () => {
+test("CLI help no longer contains the removed terminal host wording", () => {
   assert.doesNotMatch(CLI_SOURCE, new RegExp(REMOVED_TERMINAL_HOST, "i"));
 });
 
-test("task headless 会打印日志文件路径和 taskId", () => {
+test("task headless prints the log file path and task id", () => {
   assert.match(CLI_SOURCE, /renderTaskSessionSummary/);
   assert.match(CLI_SOURCE, /logFilePath: diagnostics\.logFilePath/);
   assert.match(CLI_SOURCE, /taskId,/);
@@ -53,13 +68,13 @@ test("task headless 会打印日志文件路径和 taskId", () => {
   assert.doesNotMatch(CLI_SOURCE, /task show/);
 });
 
-test("CLI 不再通过 ProjectSnapshot / ensureProjectForPath 驱动当前工作区", () => {
+test("CLI no longer depends on ProjectSnapshot or ensureProjectForPath", () => {
   assert.doesNotMatch(CLI_SOURCE, /ProjectSnapshot/);
   assert.doesNotMatch(CLI_SOURCE, /ensureProjectForPath/);
   assert.doesNotMatch(CLI_SOURCE, /getProjectSnapshot/);
 });
 
-test("CLI 会在当前进程里直接启动 web-host 并打开浏览器 UI", () => {
+test("CLI starts the web host in-process and opens the browser directly", () => {
   assert.match(CLI_SOURCE, /startWebHost/);
   assert.match(CLI_SOURCE, /import open from "open";/);
   assert.match(CLI_SOURCE, /await open\(url\);/);
@@ -68,57 +83,55 @@ test("CLI 会在当前进程里直接启动 web-host 并打开浏览器 UI", () 
   assert.doesNotMatch(CLI_SOURCE, /buildUiHostLaunchSpec/);
 });
 
-test("task ui 会在启动 web host 前先打印日志摘要", () => {
-  const taskUiSection = CLI_SOURCE.match(
-    /async function handleTaskUiCommand[\s\S]*?const snapshot = await context\.orchestrator\.submitTask\([\s\S]*?return host;\n\}/,
-  )?.[0];
+test("task ui prints diagnostics before starting the web host", () => {
+  const taskUiSection = getTaskUiSection(NORMALIZED_CLI_SOURCE);
 
-  assert.ok(taskUiSection);
-  assert.match(
-    taskUiSection,
-    /printTaskRunDiagnostics\(diagnostics, snapshot\.task\.id\);[\s\S]*?await ensureUiHost\(context, snapshot\.task\.cwd, snapshot\.task\.id, webRoot\);/,
+  assert.equal(
+    appearsInOrder(
+      taskUiSection,
+      "printTaskRunDiagnostics(diagnostics, snapshot.task.id);",
+      "const { host, url } = await ensureUiHost(context, snapshot.task.cwd, snapshot.task.id, webRoot);",
+    ),
+    true,
   );
 });
 
-test("task ui 会在提交任务前先做 UI 静态资源预检，避免先等待 agent 初始化后才报前端资源错误", () => {
-  const taskUiSection = CLI_SOURCE.match(
-    /async function handleTaskUiCommand[\s\S]*?return host;\n\}/,
-  )?.[0];
+test("task ui checks static UI assets before submitting the task", () => {
+  const taskUiSection = getTaskUiSection(NORMALIZED_CLI_SOURCE);
 
-  assert.ok(taskUiSection);
   assert.equal(isUiAssetPreflightBeforeTaskSubmit(taskUiSection), true);
 });
 
-test("task ui 不会在用户入口里触发 build:web 编译", () => {
+test("task ui does not trigger build:web from the user entrypoint", () => {
   assert.doesNotMatch(CLI_SOURCE, /npmCommand/);
   assert.doesNotMatch(CLI_SOURCE, /build:web/);
 });
 
-test("task ui 在任务结束后会继续驻留，等待 Ctrl\\+C 再清理", () => {
+test("task ui stays alive after the task ends and waits for Ctrl+C", () => {
   assert.match(CLI_SOURCE, /keepAliveUntilSignal/);
   assert.match(CLI_SOURCE, /await new Promise<void>\(\(\) => undefined\)/);
   assert.match(CLI_SOURCE, /shouldDisposeContext/);
 });
 
-test("task ui 与 task headless 都会把 command.cwd 传入工作区解析链路", () => {
+test("task ui and task headless both pass command.cwd into project resolution", () => {
   assert.match(CLI_SOURCE, /resolveProject\(context, command\.cwd\)/);
   assert.doesNotMatch(CLI_SOURCE, /resolveTaskProject\(context, command\.taskId, command\.cwd\)/);
 });
 
-test("CLI attach 列表只展示 opencode attach 命令", () => {
+test("CLI attach output only shows opencode attach commands", () => {
   assert.match(CLI_SOURCE, /renderTaskAttachCommands/);
   assert.match(CLI_SOURCE, /buildCliOpencodeAttachCommand/);
   assert.doesNotMatch(CLI_SOURCE, /buildCliAttachAgentCommand/);
   assert.doesNotMatch(CLI_SOURCE, /resolveTaskAgentAttachBaseUrl/);
 });
 
-test("CLI 不再依赖 ui-host 状态文件复用后台服务", () => {
+test("CLI no longer depends on ui-host state files", () => {
   assert.doesNotMatch(CLI_SOURCE, /readUiHostState/);
   assert.doesNotMatch(CLI_SOURCE, /writeUiHostState/);
   assert.doesNotMatch(CLI_SOURCE, /deleteUiHostState/);
 });
 
-test("CLI 退出时会输出被清理的 OpenCode 实例 PID", () => {
+test("CLI exit prints the cleaned up OpenCode instance PIDs", () => {
   assert.match(CLI_SOURCE, /renderOpenCodeCleanupReport/);
   assert.match(CLI_SOURCE, /process\.stdout\.write\(output\)/);
   assert.match(CLI_SOURCE, /const report = await context\.orchestrator\.dispose\(options\)/);

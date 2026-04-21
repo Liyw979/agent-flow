@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
 import { resolveLaunchContext } from "./launch-context";
 
-test("resolveLaunchContext 在启动入口没有透传自定义 CLI 参数时，会回退读取环境变量", () => {
+test("resolveLaunchContext 鍦ㄥ惎鍔ㄥ叆鍙ｆ病鏈夐€忎紶鑷畾涔?CLI 鍙傛暟鏃讹紝浼氬洖閫€璇诲彇鐜鍙橀噺", () => {
   const launch = resolveLaunchContext({
     argv: ["node", "cli/index.ts"],
     env: {
@@ -15,11 +16,11 @@ test("resolveLaunchContext 在启动入口没有透传自定义 CLI 参数时，
 
   assert.deepEqual(launch, {
     launchTaskId: "task-123",
-    launchCwd: "/Users/demo/code/empty",
+    launchCwd: path.resolve("/Users/demo/code/empty"),
   });
 });
 
-test("resolveLaunchContext 只识别新的 agent-team 启动参数", () => {
+test("resolveLaunchContext 鍙瘑鍒柊鐨?agent-team 鍚姩鍙傛暟", () => {
   const launch = resolveLaunchContext({
     argv: ["node", "cli/index.ts", "--agent-team-task-id", "task-456", "--agent-team-cwd", "/tmp/agent-team"],
     env: {},
@@ -28,6 +29,6 @@ test("resolveLaunchContext 只识别新的 agent-team 启动参数", () => {
 
   assert.deepEqual(launch, {
     launchTaskId: "task-456",
-    launchCwd: "/tmp/agent-team",
+    launchCwd: path.resolve("/tmp/agent-team"),
   });
 });

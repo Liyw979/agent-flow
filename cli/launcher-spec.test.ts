@@ -18,11 +18,12 @@ const { buildCliLauncherSpec } = require("./launcher-spec.cjs") as {
   };
 };
 
-test("buildCliLauncherSpec 直接使用当前 Node 进程启动 CLI 入口", () => {
+test("buildCliLauncherSpec 鐩存帴浣跨敤褰撳墠 Node 杩涚▼鍚姩 CLI 鍏ュ彛", () => {
   const spec = buildCliLauncherSpec({
     nodeBinary: "/opt/homebrew/bin/node",
     repoRoot: "/repo/agent-team",
     argv: ["task", "run", "--message", "hello"],
+    platform: "darwin",
     env: {
       PATH: "/usr/bin",
     },
@@ -44,7 +45,7 @@ test("buildCliLauncherSpec 直接使用当前 Node 进程启动 CLI 入口", () 
   assert.equal(spec.env.PATH, "/usr/bin");
 });
 
-test("buildCliLauncherSpec 在 Windows 仓库路径下也会生成合法的 loader file URL", () => {
+test("buildCliLauncherSpec 鍦?Windows 浠撳簱璺緞涓嬩篃浼氱敓鎴愬悎娉曠殑 loader file URL", () => {
   const spec = buildCliLauncherSpec({
     nodeBinary: "C:\\Program Files\\nodejs\\node.exe",
     repoRoot: "C:\\repo\\agent-team",

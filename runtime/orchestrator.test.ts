@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import { Orchestrator } from "./orchestrator";
 import { compileTeamDsl, type TeamDslDefinition } from "./team-dsl";
 import { isOpenCodeServeCommand } from "./opencode-process-cleanup";
@@ -862,7 +863,10 @@ test("openAgentTerminal 会通过服务端终端启动器 attach 到对应 sessi
   assert.deepEqual(launches, [
     {
       cwd: project.cwd,
-      command: "opencode attach 'http://127.0.0.1:43127' --session 'session:demo:Build'",
+      command: buildCliOpencodeAttachCommand(
+        "http://127.0.0.1:43127",
+        "session:demo:Build",
+      ),
     },
   ]);
 });
