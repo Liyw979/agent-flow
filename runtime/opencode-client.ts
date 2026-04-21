@@ -1,11 +1,11 @@
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { buildSubmitMessageBody } from "./opencode-request-body";
 import { toOpenCodeAgentName } from "./opencode-agent-name";
 import { appendAppLog } from "./app-log";
+import { extractOpenCodeServeBaseUrl } from "./opencode-serve-launch";
 import { resolveOpenCodeRequestTimeoutMs } from "./opencode-request-timeout";
 import { pickRecentPartIndexes } from "./runtime-activity-order";
 
@@ -65,6 +65,7 @@ export interface OpenCodeSessionRuntime {
 
 const MAX_RUNTIME_MESSAGES = 100;
 const MAX_RUNTIME_ACTIVITIES = 24;
+const SERVE_BASE_URL_TIMEOUT_MS = 10_000;
 interface SessionWaiter {
   sessionId: string;
   after: number;
@@ -77,7 +78,6 @@ interface ProjectServerState {
   projectPath: string;
   runtimeDir: string;
   serverHandle: Promise<ServeHandle> | null;
-  shutdownPromise: Promise<void> | null;
   eventPump: Promise<void> | null;
   injectedConfigContent: string | null;
 }
@@ -96,7 +96,6 @@ export interface OpenCodeShutdownReport {
 export class OpenCodeClient {
   private readonly servers = new Map<string, ProjectServerState>();
   private readonly host = "127.0.0.1";
-  private readonly preferredPort = 4096;
   private readonly runtimeRoot: string;
   private readonly sessionIdleAt = new Map<string, number>();
   private readonly sessionErrors = new Map<string, string>();
@@ -148,7 +147,6 @@ export class OpenCodeClient {
       projectPath: normalized.projectPath,
       runtimeDir,
       serverHandle: null,
-      shutdownPromise: null,
       eventPump: null,
       injectedConfigContent: null,
     };
@@ -158,9 +156,6 @@ export class OpenCodeClient {
 
   async ensureServer(target: OpenCodeRuntimeTargetInput): Promise<ServeHandle> {
     const state = this.getProjectServerState(target);
-    if (state.shutdownPromise) {
-      await state.shutdownPromise;
-    }
     if (state.serverHandle) {
       const cached = await state.serverHandle;
       if (this.canReuseCachedServerHandle(cached)) {
@@ -202,28 +197,6 @@ export class OpenCodeClient {
       return;
     }
     state.injectedConfigContent = nextContent;
-    if (state.serverHandle) {
-      void this.scheduleShutdown(state.runtimeKey);
-    }
-  }
-
-  private scheduleShutdown(runtimeKey: string): Promise<void> {
-    const state = this.getProjectServerState({
-      runtimeKey,
-      projectPath: this.servers.get(runtimeKey)?.projectPath ?? runtimeKey,
-    });
-    if (state.shutdownPromise) {
-      return state.shutdownPromise;
-    }
-    const pending = this.shutdown(state.runtimeKey)
-      .catch(() => undefined)
-      .finally(() => {
-        if (state.shutdownPromise === pending) {
-          state.shutdownPromise = null;
-        }
-      });
-    state.shutdownPromise = pending;
-    return pending;
   }
 
   registerExternalServer(target: OpenCodeRuntimeTargetInput, attachBaseUrl: string) {
@@ -240,23 +213,6 @@ export class OpenCodeClient {
 
   async createSession(target: OpenCodeRuntimeTargetInput, title: string): Promise<string> {
     const normalized = this.normalizeTarget(target);
-    try {
-      return await this.createSessionOnce(normalized, title);
-    } catch (error) {
-      if (!this.isRequestTimeoutError(error)) {
-        throw error;
-      }
-      appendAppLog("error", "opencode.create_session_timed_out", {
-        projectPath: normalized.projectPath,
-        title,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      await this.shutdown(normalized.runtimeKey).catch(() => undefined);
-      return this.createSessionOnce(normalized, title);
-    }
-  }
-
-  private async createSessionOnce(normalized: OpenCodeRuntimeTarget, title: string): Promise<string> {
     const response = await this.request("/session", {
       method: "POST",
       target: normalized,
@@ -284,10 +240,6 @@ export class OpenCodeClient {
       status: response.status,
     });
     throw new Error("OpenCode 创建 session 响应缺少有效的 session id");
-  }
-
-  private isRequestTimeoutError(error: unknown): boolean {
-    return error instanceof Error && error.message.startsWith("OpenCode 请求超时:");
   }
 
   async connectEvents(target: OpenCodeRuntimeTargetInput, onEvent: (event: OpenCodeEvent) => void): Promise<void> {
@@ -461,7 +413,6 @@ export class OpenCodeClient {
         // ignore shutdown errors
       } finally {
         state.serverHandle = null;
-        state.shutdownPromise = null;
         state.eventPump = null;
       }
     }
@@ -647,8 +598,6 @@ export class OpenCodeClient {
 
   private async startServer(target: OpenCodeRuntimeTargetInput): Promise<ServeHandle> {
     const state = this.getProjectServerState(target);
-    const port = await this.resolveServerPort();
-    const baseUrl = this.buildBaseUrl(port);
 
     const serverEnv = { ...process.env };
     // Isolate the embedded runtime from parent OpenCode config injection.
@@ -666,10 +615,8 @@ export class OpenCodeClient {
     appendAppLog("info", "opencode.serve_starting", {
       projectPath: state.projectPath,
       runtimeDir: state.runtimeDir,
-      port,
-      baseUrl,
     });
-    const launchArgs = ["serve", "--port", String(port), "--hostname", this.host];
+    const launchArgs = ["serve"];
     const spawnSpec = process.platform === "win32"
       ? {
           command: "cmd.exe",
@@ -708,7 +655,21 @@ export class OpenCodeClient {
       stdoutChunks.push(this.normalizeProcessOutput(chunk));
     });
 
-    const healthy = await this.waitForHealthy(port);
+    const baseUrl = await this.waitForServeBaseUrl(childProcess, stdoutChunks, stderrChunks).catch(async (error) => {
+      await this.killChildProcessTree(childProcess).catch(() => undefined);
+      appendAppLog("error", "opencode.serve_start_failed", {
+        projectPath: state.projectPath,
+        runtimeDir: state.runtimeDir,
+        command: spawnSpec.command,
+        args: spawnSpec.args,
+        message: error instanceof Error ? error.message : String(error),
+        stdout: this.truncateLogPayload(stdoutChunks.join("")),
+        stderr: this.truncateLogPayload(stderrChunks.join("")),
+      });
+      throw error;
+    });
+    const port = this.parsePortFromBaseUrl(baseUrl);
+    const healthy = await this.waitForHealthy(baseUrl);
     if (spawnError || !healthy) {
       const message = spawnError
         ? `OpenCode serve 启动失败: ${spawnError.message}`
@@ -1695,10 +1656,10 @@ export class OpenCodeClient {
     return null;
   }
 
-  private async waitForHealthy(port: number): Promise<boolean> {
+  private async waitForHealthy(baseUrl: string): Promise<boolean> {
     for (let attempt = 0; attempt < 15; attempt += 1) {
       try {
-        const response = await fetch(`${this.buildBaseUrl(port)}/global/health`);
+        const response = await fetch(`${baseUrl}/global/health`);
         if (response.ok) {
           return true;
         }
@@ -1708,6 +1669,66 @@ export class OpenCodeClient {
     }
 
     return false;
+  }
+
+  private async waitForServeBaseUrl(
+    child: ChildProcessWithoutNullStreams,
+    stdoutChunks: string[],
+    stderrChunks: string[],
+  ): Promise<string> {
+    const readCurrent = () => extractOpenCodeServeBaseUrl(`${stdoutChunks.join("")}\n${stderrChunks.join("")}`);
+    const existing = readCurrent();
+    if (existing) {
+      return existing;
+    }
+
+    return await new Promise<string>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timeout);
+        child.off("error", handleError);
+        child.off("exit", handleExit);
+        child.stdout.off("data", handleOutput);
+        child.stderr.off("data", handleOutput);
+      };
+      const settle = (next: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        next();
+      };
+      const tryResolve = () => {
+        const baseUrl = readCurrent();
+        if (baseUrl) {
+          settle(() => resolve(baseUrl));
+        }
+      };
+      const handleOutput = () => {
+        tryResolve();
+      };
+      const handleError = (error: Error) => {
+        settle(() => reject(new Error(`OpenCode serve 启动失败: ${error.message}`)));
+      };
+      const handleExit = () => {
+        const baseUrl = readCurrent();
+        if (baseUrl) {
+          settle(() => resolve(baseUrl));
+          return;
+        }
+        settle(() => reject(new Error("OpenCode serve 启动失败: 未输出可解析的监听地址")));
+      };
+      const timeout = setTimeout(() => {
+        settle(() => reject(new Error("OpenCode serve 启动失败: 等待监听地址输出超时")));
+      }, SERVE_BASE_URL_TIMEOUT_MS);
+
+      child.on("error", handleError);
+      child.on("exit", handleExit);
+      child.stdout.on("data", handleOutput);
+      child.stderr.on("data", handleOutput);
+      tryResolve();
+    });
   }
 
   private buildBaseUrl(port: number): string {
@@ -1738,60 +1759,6 @@ export class OpenCodeClient {
     return {
       killedPids: [...new Set(reports.flatMap((report) => report.killedPids))],
     };
-  }
-
-  private async resolveServerPort(): Promise<number> {
-    if (await this.canListenOnPort(this.host, this.preferredPort)) {
-      return this.preferredPort;
-    }
-    return this.reserveAvailablePort(this.host);
-  }
-
-  private async canListenOnPort(host: string, port: number): Promise<boolean> {
-    const reserved = await this.reservePort(host, port);
-    if (!reserved) {
-      return false;
-    }
-    await reserved.close();
-    return true;
-  }
-
-  private async reserveAvailablePort(host: string): Promise<number> {
-    const reserved = await this.reservePort(host, 0);
-    if (!reserved) {
-      throw new Error("无法为 OpenCode 分配可用端口。");
-    }
-    const port = reserved.port;
-    await reserved.close();
-    return port;
-  }
-
-  private async reservePort(
-    host: string,
-    port: number,
-  ): Promise<{ port: number; close: () => Promise<void> } | null> {
-    return await new Promise((resolve) => {
-      const server = net.createServer();
-      const cleanup = async () => {
-        await new Promise<void>((closeResolve) => {
-          server.close(() => closeResolve());
-        });
-      };
-      server.once("error", () => {
-        resolve(null);
-      });
-      server.listen(port, host, () => {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          void cleanup().then(() => resolve(null));
-          return;
-        }
-        resolve({
-          port: address.port,
-          close: cleanup,
-        });
-      });
-    });
   }
 
   private extractVisibleMessageText(parts: Array<Record<string, unknown>>): string {

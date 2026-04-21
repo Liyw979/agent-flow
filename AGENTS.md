@@ -50,8 +50,8 @@
 ### 3.1 OpenCode 注入与运行时
 
 - 每个工作区都会启动各自独立的 `opencode serve`。
-- 实例会优先监听 `127.0.0.1:4096`；若端口被占用，则自动切换到本机空闲端口，并让当前工作区的 attach / 健康检查跟随实际端口。
-- 启动 `opencode serve` 前，只会一次性注入当前工作区里真正需要自定义 prompt / permission 的 Agent 配置；单个 serve 运行中不会做 reload / 二次注入。
+- 启动 OpenCode runtime 时直接执行 `opencode serve`，不再预先指定固定端口；运行时会从启动输出中解析实际监听地址，并让当前工作区的 attach / 健康检查始终跟随该实际地址。
+- 启动 `opencode serve` 前，只会一次性注入当前工作区里真正需要自定义 prompt / permission 的 Agent 配置；单个 serve 运行中不会做 reload / 二次注入 / 配置变更触发的自动重启。
 - 注入内容优先取当前拓扑 `nodeRecords` 里的 Agent prompt / writable；不会再被用户目录或前端配置覆盖。
 - 只有当前工作区中真正需要自定义 prompt / permission 的 Agent 才会写入 `OPENCODE_CONFIG_CONTENT`。
 - `Build` 这类继续复用 OpenCode 内置 prompt 的 Agent 不会出现在 `OPENCODE_CONFIG_CONTENT` 中；若当前工作区只有这类 Agent，则不会额外生成注入内容。

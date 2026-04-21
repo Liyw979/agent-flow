@@ -16,7 +16,6 @@ function createClient(projectPath = createTempDir()) {
       projectPath: string;
       runtimeDir: string;
       serverHandle: Promise<{ process: null; port: number }> | null;
-      shutdownPromise: Promise<void> | null;
       eventPump: Promise<void> | null;
       injectedConfigContent: string | null;
     }>;
@@ -26,15 +25,14 @@ function createClient(projectPath = createTempDir()) {
   };
   const normalizedProjectPath = path.resolve(projectPath);
   client.servers.set(normalizedProjectPath, {
-    projectPath: normalizedProjectPath,
-    runtimeDir: createTempDir(),
-    serverHandle: Promise.resolve({
-      process: null,
-      port: 4096,
-    }),
-    shutdownPromise: null,
-    eventPump: null,
-    injectedConfigContent: null,
+      projectPath: normalizedProjectPath,
+      runtimeDir: createTempDir(),
+      serverHandle: Promise.resolve({
+        process: null,
+        port: 43127,
+      }),
+      eventPump: null,
+      injectedConfigContent: null,
   });
   return {
     client,
@@ -49,7 +47,6 @@ test("request 会跟随当前 serverHandle 的实际端口", async () => {
       projectPath: string;
       runtimeDir: string;
       serverHandle: Promise<{ process: null; port: number }> | null;
-      shutdownPromise: Promise<void> | null;
       eventPump: Promise<void> | null;
       injectedConfigContent: string | null;
     }>;
@@ -145,7 +142,7 @@ test("session message 请求不注入 AbortSignal，确保长任务不会被请�
   assert.equal(capturedSignal, undefined);
 });
 
-test("createSession 超时后会重启当前 runtime 并自动重试一次", async () => {
+test("createSession 超时后不应重启 runtime，也不应自动重试", async () => {
   const { client, projectPath } = createClient();
   const typed = client as OpenCodeClient & {
     request: (
@@ -157,31 +154,19 @@ test("createSession 超时后会重启当前 runtime 并自动重试一次", asy
         body?: string;
       },
     ) => Promise<Response>;
-    shutdown: (runtimeKey?: string) => Promise<{ killedPids: number[] }>;
   };
 
   let requestCount = 0;
-  let shutdownCount = 0;
   typed.request = async () => {
     requestCount += 1;
-    if (requestCount === 1) {
-      throw new Error("OpenCode 请求超时: POST http://127.0.0.1:4096/session 超过 12000ms");
-    }
-    return new Response(JSON.stringify({ id: "session-1" }), { status: 200 });
-  };
-  typed.shutdown = async (runtimeKey?: string) => {
-    shutdownCount += 1;
-    assert.equal(runtimeKey, projectPath);
-    return {
-      killedPids: [],
-    };
+    throw new Error("OpenCode 请求超时: POST http://127.0.0.1:43127/session 超过 12000ms");
   };
 
-  const sessionId = await client.createSession(projectPath, "demo");
-
-  assert.equal(sessionId, "session-1");
-  assert.equal(requestCount, 2);
-  assert.equal(shutdownCount, 1);
+  await assert.rejects(
+    client.createSession(projectPath, "demo"),
+    /请求超时/,
+  );
+  assert.equal(requestCount, 1);
 });
 
 test("消息查询接口空响应体时返回空结果而不是抛错", async () => {
@@ -263,79 +248,22 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
   assert.ok(elapsed < 120, `resolveExecutionResult 耗时 ${elapsed}ms，说明仍然被 session idle 等待拖住了`);
 });
 
-test("配置变更触发 shutdown 时，ensureServer 会等待 shutdown 完成后再启动新服务", async () => {
-  const projectPath = createTempDir();
-  const client = new OpenCodeClient(createTempDir()) as OpenCodeClient & {
-    servers: Map<string, {
-      projectPath: string;
-      runtimeDir: string;
-      serverHandle: Promise<{ process: null; port: number }> | null;
-      shutdownPromise: Promise<void> | null;
-      eventPump: Promise<void> | null;
-      injectedConfigContent: string | null;
-    }>;
-    startServer: (projectPath: string) => Promise<{ process: null; port: number }>;
-    shutdown: (projectPath?: string) => Promise<void>;
-  };
-  const normalizedProjectPath = path.resolve(projectPath);
-  client.servers.set(normalizedProjectPath, {
-    projectPath: normalizedProjectPath,
-    runtimeDir: createTempDir(),
-    serverHandle: Promise.resolve({
-      process: null,
-      port: 4096,
-    }),
-    shutdownPromise: null,
-    eventPump: null,
-    injectedConfigContent: null,
-  });
-
-  let shutdownStartedResolve: (() => void) | null = null;
-  const shutdownStarted = new Promise<void>((resolve) => {
-    shutdownStartedResolve = resolve;
-  });
-  let shutdownReleaseResolve: (() => void) | null = null;
-  const shutdownRelease = new Promise<void>((resolve) => {
-    shutdownReleaseResolve = resolve;
-  });
-
-  let shutdownFinished = false;
-  client.shutdown = async (targetProjectPath?: string) => {
-    assert.equal(targetProjectPath, normalizedProjectPath);
-    shutdownStartedResolve?.();
-    await shutdownRelease;
-    const state = client.servers.get(normalizedProjectPath);
-    assert.notEqual(state, undefined);
-    state.serverHandle = null;
-    shutdownFinished = true;
+test("配置变更时不应触发 shutdown", async () => {
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
+    shutdown: (runtimeKey?: string) => Promise<{ killedPids: number[] }>;
   };
 
-  let startedAfterShutdown = false;
-  client.startServer = async (targetProjectPath: string) => {
-    assert.equal(targetProjectPath, normalizedProjectPath);
-    startedAfterShutdown = shutdownFinished;
-    return {
-      process: null,
-      port: 4096,
-    };
+  let shutdownCount = 0;
+  typed.shutdown = async () => {
+    shutdownCount += 1;
+    return { killedPids: [] };
   };
 
-  client.setInjectedConfigContent(normalizedProjectPath, '{"agent":{}}');
-  await shutdownStarted;
-
-  let ensureResolved = false;
-  const ensurePromise = client.ensureServer(normalizedProjectPath).then(() => {
-    ensureResolved = true;
-  });
-
+  client.setInjectedConfigContent(projectPath, '{"agent":{}}');
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(ensureResolved, false);
 
-  shutdownReleaseResolve?.();
-  await ensurePromise;
-
-  assert.equal(startedAfterShutdown, true);
-  assert.equal(client.servers.get(normalizedProjectPath)?.shutdownPromise, null);
+  assert.equal(shutdownCount, 0);
 });
 
 test("不同 runtimeKey 会使用各自独立的 serve 端口，即使 cwd 相同", async () => {
@@ -360,7 +288,7 @@ test("不同 runtimeKey 会使用各自独立的 serve 端口，即使 cwd 相�
 
   client.startServer = async (target) => ({
     process: null,
-    port: portByRuntime.get(target.runtimeKey) ?? 4096,
+    port: portByRuntime.get(target.runtimeKey) ?? 43129,
   });
 
   const originalFetch = globalThis.fetch;

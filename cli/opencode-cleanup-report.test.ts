@@ -6,9 +6,9 @@ import { renderOpenCodeCleanupReport } from "./opencode-cleanup-report";
 test("renderOpenCodeCleanupReport 会输出被清理的 OpenCode 实例 PID", () => {
   assert.equal(
     renderOpenCodeCleanupReport({
-      killedPids: [4096, 5120, 4096],
+      killedPids: [43127, 5120, 43127],
     }),
-    "已清理 OpenCode 实例 PID: 4096, 5120\n",
+    "已清理 OpenCode 实例 PID: 43127, 5120\n",
   );
 });
 

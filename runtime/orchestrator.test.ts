@@ -41,7 +41,7 @@ function stubOpenCodeSessions(orchestrator: Orchestrator) {
     };
   };
   typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
-  typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:4096";
+  typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
   typed.opencodeClient.reloadConfig = async () => undefined;
   return typed;
 }
@@ -52,7 +52,7 @@ function stubOpenCodeAttachBaseUrl(orchestrator: Orchestrator) {
       getAttachBaseUrl: (projectPath: string) => Promise<string>;
     };
   };
-  typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:4096";
+  typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
   return typed;
 }
 
@@ -398,7 +398,7 @@ test("OpenCode 事件会触发 runtime-updated 前端事件", async () => {
     eventHandler = onEvent;
   };
   typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
-  typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:4096";
+  typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
 
   let project = await orchestrator.getWorkspaceSnapshot(projectPath);
   project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"]);
@@ -479,7 +479,7 @@ test("dispose 在 CLI 快速退出模式下不会等待悬挂的后台 task prom
   typed.opencodeClient.shutdown = async () => {
     shutdownCalled = true;
     return {
-      killedPids: [4096],
+      killedPids: [43127],
     };
   };
   typed.pendingTaskRuns.add(new Promise<void>(() => undefined));
@@ -509,13 +509,13 @@ test("dispose 会把 OpenCode 清理报告向上返回", async () => {
   };
 
   typed.opencodeClient.shutdown = async () => ({
-    killedPids: [4096, 5120],
+    killedPids: [43127, 5120],
   });
 
   const report = await orchestrator.dispose();
 
   assert.deepEqual(report, {
-    killedPids: [4096, 5120],
+    killedPids: [43127, 5120],
   });
 });
 
@@ -820,7 +820,7 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
     injectedConfigs.push(content ?? "null");
   };
   typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
-  typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:4096";
+  typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
 
   const projectA = await orchestrator.getWorkspaceSnapshot(projectAPath);
   await addCustomAgent(orchestrator, projectA.cwd, "BA", "你是 BA。\n只做需求分析。");
@@ -869,7 +869,7 @@ test("openAgentTerminal 会通过服务端终端启动器 attach 到对应 sessi
   assert.deepEqual(launches, [
     {
       cwd: project.cwd,
-      command: "opencode attach 'http://127.0.0.1:4096' --session 'session:demo:Build'",
+      command: "opencode attach 'http://127.0.0.1:43127' --session 'session:demo:Build'",
     },
   ]);
 });
