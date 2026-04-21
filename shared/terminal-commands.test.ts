@@ -5,16 +5,16 @@ import {
   buildCliOpencodeAttachCommand,
 } from "./terminal-commands";
 
-test("CLI 支持直接构造 OpenCode attach agent session 命令", () => {
+test("CLI builds a Windows attach command without extra quotes for cmd /k", () => {
   assert.equal(
     buildCliOpencodeAttachCommand("http://127.0.0.1:43127", "session-123", {
       platform: "win32",
     }),
-    'opencode attach "http://127.0.0.1:43127" --session "session-123"',
+    "opencode attach http://127.0.0.1:43127 --session session-123",
   );
 });
 
-test("POSIX attach 命令仍会安全引用 baseUrl 与 session", () => {
+test("POSIX attach command still quotes baseUrl and session safely", () => {
   assert.equal(
     buildCliOpencodeAttachCommand("http://127.0.0.1:43127", "session-123", {
       platform: "darwin",

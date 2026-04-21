@@ -18,6 +18,27 @@ function quoteAppleScriptString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
+function buildWindowsStartArgs(input: {
+  command: string;
+  cwd: string;
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
+}): string[] {
+  const cmdPath = resolveWindowsCmdPath(input.env);
+  return [
+    "/d",
+    "/c",
+    "start",
+    "",
+    "/d",
+    input.cwd,
+    cmdPath,
+    "/d",
+    "/s",
+    "/k",
+    input.command,
+  ];
+}
+
 export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLaunchSpec {
   const platform = input.platform ?? process.platform;
 
@@ -25,7 +46,11 @@ export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLau
     const cmdPath = resolveWindowsCmdPath(input.env);
     return {
       command: cmdPath,
-      args: ["/d", "/k", input.command],
+      args: buildWindowsStartArgs({
+        command: input.command,
+        cwd: input.cwd,
+        env: input.env,
+      }),
       cwd: input.cwd,
     };
   }
@@ -74,12 +99,13 @@ export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLau
 
 export async function launchTerminalCommand(input: TerminalLaunchInput): Promise<void> {
   const spec = buildTerminalLaunchSpec(input);
+  const platform = input.platform ?? process.platform;
 
   await new Promise<void>((resolve, reject) => {
     const child = spawn(spec.command, spec.args, {
       cwd: spec.cwd,
       detached: true,
-      stdio: "ignore",
+      stdio: platform === "win32" ? "inherit" : "ignore",
     });
 
     child.once("error", reject);
