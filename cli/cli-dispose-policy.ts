@@ -8,6 +8,8 @@ interface ResolveCliDisposeOptionsInput {
 interface CliDisposeOptions {
   awaitPendingTaskRuns: boolean;
   forceProcessExit: boolean;
+  keepAliveUntilSignal: boolean;
+  shouldDisposeContext: boolean;
 }
 
 export function resolveCliDisposeOptions(
@@ -17,6 +19,8 @@ export function resolveCliDisposeOptions(
     return {
       awaitPendingTaskRuns: true,
       forceProcessExit: false,
+      keepAliveUntilSignal: false,
+      shouldDisposeContext: true,
     };
   }
 
@@ -24,11 +28,15 @@ export function resolveCliDisposeOptions(
     return {
       awaitPendingTaskRuns: false,
       forceProcessExit: true,
+      keepAliveUntilSignal: false,
+      shouldDisposeContext: true,
     };
   }
 
   return {
     awaitPendingTaskRuns: true,
     forceProcessExit: false,
+    keepAliveUntilSignal: true,
+    shouldDisposeContext: false,
   };
 }

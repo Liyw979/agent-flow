@@ -123,8 +123,8 @@
 - CLI 默认使用当前目录作为工作目录。
 - CLI 只保留 `task headless`、`task ui`。
 - `task headless --file <topology.json> --message <message>` 会新建当前 Task，打印本轮群聊，任务结束后退出到 shell。
-- `task ui --file <topology.json> --message <message> [--cwd <path>]` 会新建当前 Task，启动本地 Web Host，并在浏览器中打开当前 Task 页面。
-- `task ui <taskId> [--cwd <path>]` 会恢复已有 Task，并在浏览器中打开当前 Task 页面；传入 `--cwd` 时会作为任务定位的优先工作区。
+- `task ui --file <topology.json> --message <message> [--cwd <path>]` 会新建当前 Task，启动本地 Web Host，并在浏览器中打开当前 Task 页面；CLI 进程会继续驻留，直到收到 `Ctrl+C` / `SIGTERM` 才清理当前命令持有的 OpenCode 实例并退出。
+- `task ui <taskId> [--cwd <path>]` 会恢复已有 Task，并在浏览器中打开当前 Task 页面；传入 `--cwd` 时会作为任务定位的优先工作区；CLI 进程同样会继续驻留，直到收到 `Ctrl+C` / `SIGTERM`。
 - CLI / 终端里所有用户可见 attach 文案都直接显示底层 `opencode attach ...`，不再展示 `task attach` 包装命令。
 - `bun run cli -- ...` 需要在仓库根目录执行；若从其他目录排查目标工作区，`task headless` / `task ui` 请显式传入 `--cwd`。
 
@@ -141,9 +141,9 @@ bun run cli -- task ui <taskId> --cwd /path/to/workspace
 CLI 能力分组：
 
 - `task headless`：运行一轮任务，结束后退出 CLI。
-- `task ui`：运行或恢复任务，并在浏览器里打开当前 Task 页面。
+- `task ui`：运行或恢复任务，并在浏览器里打开当前 Task 页面；命令会保持驻留，直到收到 `Ctrl+C` / `SIGTERM`。
 - CLI 主进程收到 `Ctrl+C` / `SIGTERM` 时，会先回收当前这次命令启动或连接过的全部 OpenCode serve 实例，再结束当前命令，避免遗留孤儿会话。
-- CLI 在任务自然结束退出或收到 `Ctrl+C` / `SIGTERM` 退出时，都会打印本次回收掉的 OpenCode 实例 PID，便于排查残留进程。
+- `task headless` 在任务自然结束退出时会打印本次回收掉的 OpenCode 实例 PID，`task ui` 则只会在收到 `Ctrl+C` / `SIGTERM` 清理退出时打印，便于排查残留进程。
 
 ## 5. 存储布局与仓库结构
 

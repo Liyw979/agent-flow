@@ -12,6 +12,8 @@ test("task headless 在已经观察到任务结束后，不再等待后台 task 
     {
       awaitPendingTaskRuns: false,
       forceProcessExit: true,
+      keepAliveUntilSignal: false,
+      shouldDisposeContext: true,
     },
   );
 });
@@ -25,11 +27,13 @@ test("未观察到任务结束前，CLI 仍然保持保守关闭策略", () => {
     {
       awaitPendingTaskRuns: true,
       forceProcessExit: false,
+      keepAliveUntilSignal: false,
+      shouldDisposeContext: true,
     },
   );
 });
 
-test("task ui 即使进入 settled，也不会走强制退出分支", () => {
+test("task ui 在任务结束后会保持驻留，等待 Ctrl+C 时再清理", () => {
   assert.deepEqual(
     resolveCliDisposeOptions({
       commandKind: "task.ui",
@@ -38,6 +42,8 @@ test("task ui 即使进入 settled，也不会走强制退出分支", () => {
     {
       awaitPendingTaskRuns: true,
       forceProcessExit: false,
+      keepAliveUntilSignal: true,
+      shouldDisposeContext: false,
     },
   );
 });

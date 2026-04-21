@@ -59,6 +59,12 @@ test("CLI 会通过内部 web-host 模式拉起浏览器 UI", () => {
   assert.doesNotMatch(CLI_SOURCE, /spawnUi\(/);
 });
 
+test("task ui 在任务结束后会继续驻留，等待 Ctrl\\+C 再清理", () => {
+  assert.match(CLI_SOURCE, /keepAliveUntilSignal/);
+  assert.match(CLI_SOURCE, /await new Promise<void>\(\(\) => undefined\)/);
+  assert.match(CLI_SOURCE, /shouldDisposeContext/);
+});
+
 test("task ui 与 task headless 都会把 command.cwd 传入工作区解析链路", () => {
   assert.match(CLI_SOURCE, /resolveProject\(context, command\.cwd\)/);
   assert.match(CLI_SOURCE, /resolveTaskProject\(context, command\.taskId, command\.cwd\)/);

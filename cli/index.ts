@@ -563,7 +563,7 @@ function buildHelp() {
     "",
     "说明：",
     "  - `task headless` 只负责新建任务，运行到本轮任务结束后退出 CLI。",
-    "  - `task ui` 会通过 internal web-host 启动后台网页服务，并打开浏览器。",
+    "  - `task ui` 会通过 internal web-host 启动后台网页服务，并打开浏览器；命令本身会保持驻留，按 Ctrl+C 后才清理并退出。",
     "  - 新建任务时必须传 `--file` 和 `--message`。",
   ].join("\n");
   return `${commanderHelp}\n${appendix}`;
@@ -616,6 +616,13 @@ async function run() {
     } else if (command.kind === "task.ui") {
       await handleTaskUiCommand(context, command);
       observedSettledTaskState = true;
+      const disposeOptions = resolveCliDisposeOptions({
+        commandKind: command.kind,
+        observedSettledTaskState,
+      });
+      if (disposeOptions.keepAliveUntilSignal) {
+        await new Promise<void>(() => undefined);
+      }
     }
   } finally {
     process.off("SIGINT", handleSignal);
@@ -626,7 +633,9 @@ async function run() {
         observedSettledTaskState,
       });
       forceProcessExit = disposeOptions.forceProcessExit;
-      await disposeCliContext(context, disposeOptions);
+      if (disposeOptions.shouldDisposeContext) {
+        await disposeCliContext(context, disposeOptions);
+      }
     }
   }
 
