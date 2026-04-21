@@ -7,7 +7,7 @@ export interface AppWorkspaceLayoutMetrics {
 export function getAppWorkspaceLayoutMetrics(): AppWorkspaceLayoutMetrics {
   return {
     panelGapPx: 5,
-    teamPanelMinWidthPx: 408,
-    teamPanelMaxWidthPx: 456,
+    teamPanelMinWidthPx: 340,
+    teamPanelMaxWidthPx: 380,
   };
 }

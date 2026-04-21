@@ -122,7 +122,7 @@ test("应用主区域不能继续保留 20px 的固定外边距", () => {
   assert.doesNotMatch(APP_SOURCE, /<main className="min-h-0 flex-1 overflow-hidden px-5 py-5">/);
 });
 
-test("主布局间距缩小 50%，团队面板宽度增加 20%", () => {
+test("主布局间距缩小 50%，但团队面板宽度回退到原值", () => {
   assert.match(APP_SOURCE, /getAppWorkspaceLayoutMetrics/);
   assert.match(APP_SOURCE, /style=\{\{ gap: `\$\{workspaceLayoutMetrics\.panelGapPx\}px` \}\}/);
   assert.match(
@@ -130,5 +130,5 @@ test("主布局间距缩小 50%，团队面板宽度增加 20%", () => {
     /gridTemplateColumns: `minmax\(0, 1fr\) minmax\(\$\{workspaceLayoutMetrics\.teamPanelMinWidthPx\}px, \$\{workspaceLayoutMetrics\.teamPanelMaxWidthPx\}px\)`/,
   );
   assert.doesNotMatch(APP_SOURCE, /gap-\[10px\]/);
-  assert.doesNotMatch(APP_SOURCE, /grid-cols-\[minmax\(0,1fr\)_minmax\(340px,380px\)\]/);
+  assert.doesNotMatch(APP_SOURCE, /grid-cols-\[minmax\(0,1fr\)_minmax\(408px,456px\)\]/);
 });
