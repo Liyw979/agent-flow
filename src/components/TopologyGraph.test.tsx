@@ -68,6 +68,17 @@ test("拓扑节点头部会在状态 icon 左侧补充 attach 按钮", () => {
   assert.match(TOPOLOGY_GRAPH_SOURCE, /headerActions\.map\(\(action\) => \{/);
 });
 
+test("运行中状态 icon 必须显式围绕 SVG 自身中心旋转，避免 Windows 上按 viewBox 原点旋转", () => {
+  assert.match(
+    TOPOLOGY_GRAPH_SOURCE,
+    /className="h-3\.5 w-3\.5 animate-spin motion-reduce:animate-none origin-center \[transform-box:fill-box\]"/,
+  );
+  assert.doesNotMatch(
+    TOPOLOGY_GRAPH_SOURCE,
+    /className="h-3\.5 w-3\.5 animate-spin motion-reduce:animate-none"(?! origin-center \[transform-box:fill-box\])/,
+  );
+});
+
 test("拓扑视口不能再被固定的最小高度撑出面板", () => {
   assert.match(TOPOLOGY_GRAPH_SOURCE, /className="h-full min-h-0 w-full overflow-auto"/);
   assert.doesNotMatch(TOPOLOGY_GRAPH_SOURCE, /className="h-full min-h-\[350px\] w-full overflow-auto"/);

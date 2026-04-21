@@ -103,7 +103,7 @@ function renderStatusBadgeIcon(presentation: TopologyAgentStatusBadgePresentatio
     return (
       <svg
         viewBox="0 0 16 16"
-        className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none"
+        className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none origin-center [transform-box:fill-box]"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.8"
