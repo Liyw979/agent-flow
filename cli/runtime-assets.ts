@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 import packageJson from "../package.json";
 import { EMBEDDED_WEB_ASSETS } from "./generated-embedded-assets";
@@ -20,28 +21,20 @@ interface ResolvedRuntimeAssets {
 }
 
 interface ResolveRuntimeWebRootInput {
-  explicitWebRoot: string | null;
-  explicitIndexHtmlExists: boolean;
   fallbackWebRoot: string | null;
   fallbackIndexHtmlExists: boolean;
 }
 
 interface ResolveCompiledEmbeddedWebRootInput {
-  explicitWebRoot: string | null;
   runtimeRoot: string;
   embeddedAssetRelativePaths: string[];
 }
 
 export function resolveSourceAssetFallback(input: {
-  hasExplicitWebRoot: boolean;
   repoWebRootExists: boolean;
   distBuiltAtMs: number | null;
   latestSourceUpdatedAtMs: number | null;
 }): "webRoot" | "unavailable" {
-  if (input.hasExplicitWebRoot) {
-    return "unavailable";
-  }
-
   if (!input.repoWebRootExists) {
     return "unavailable";
   }
@@ -57,7 +50,7 @@ export function resolveSourceAssetFallback(input: {
 
 export function isCompiledRuntime(): boolean {
   const runtimeDir = (import.meta as ImportMeta & { dir?: string }).dir ?? "";
-  return isCompiledRuntimeDir(runtimeDir);
+  return isCompiledRuntimeDir(runtimeDir) || isCompiledRuntimeExecutable(process.execPath);
 }
 
 export function isCompiledRuntimeDir(runtimeDir: string): boolean {
@@ -67,12 +60,23 @@ export function isCompiledRuntimeDir(runtimeDir: string): boolean {
     || normalized === "file:///$bunfs";
 }
 
+export function isCompiledRuntimeExecutable(execPath: string): boolean {
+  const executableName = path.basename(execPath || "").toLowerCase();
+  if (!executableName) {
+    return false;
+  }
+
+  return executableName !== "node"
+    && executableName !== "node.exe"
+    && executableName !== "bun"
+    && executableName !== "bun.exe";
+}
+
 function getRepoWebDistRoot(): string {
   return path.join(REPO_ROOT, "dist", "web");
 }
 
 export function shouldReuseRepoWebDist(input: {
-  hasExplicitWebRoot: boolean;
   repoWebRootExists: boolean;
   distBuiltAtMs: number | null;
   latestSourceUpdatedAtMs: number | null;
@@ -81,20 +85,12 @@ export function shouldReuseRepoWebDist(input: {
 }
 
 export function resolveCompiledEmbeddedWebRoot(input: ResolveCompiledEmbeddedWebRootInput): string | null {
-  if (input.explicitWebRoot) {
-    return null;
-  }
-
   return input.embeddedAssetRelativePaths.includes("index.html")
     ? path.join(input.runtimeRoot, "web")
     : null;
 }
 
 export function resolveRuntimeWebRoot(input: ResolveRuntimeWebRootInput): string | null {
-  if (input.explicitWebRoot) {
-    return input.explicitIndexHtmlExists ? input.explicitWebRoot : null;
-  }
-
   if (!input.fallbackWebRoot) {
     return null;
   }
@@ -152,12 +148,10 @@ export async function ensureRuntimeAssets(userDataPath: string): Promise<Resolve
   const runtimeRoot = path.join(userDataPath, "runtime", packageJson.version);
   fs.mkdirSync(runtimeRoot, { recursive: true });
 
-  const explicitWebRoot = process.env.AGENT_TEAM_WEB_ROOT?.trim() || null;
   let fallbackWebRoot: string | null = null;
 
   if (isCompiledRuntime()) {
     const compiledEmbeddedWebRoot = resolveCompiledEmbeddedWebRoot({
-      explicitWebRoot,
       runtimeRoot,
       embeddedAssetRelativePaths: EMBEDDED_WEB_ASSETS.map((asset) => asset.relativePath),
     });
@@ -170,32 +164,21 @@ export async function ensureRuntimeAssets(userDataPath: string): Promise<Resolve
       }
     }
   } else {
-    if (!explicitWebRoot) {
-      const repoWebRoot = getRepoWebDistRoot();
-      const repoIndexPath = path.join(repoWebRoot, "index.html");
-      if (shouldReuseRepoWebDist({
-        hasExplicitWebRoot: false,
-        repoWebRootExists: fs.existsSync(repoIndexPath),
-        distBuiltAtMs: fs.existsSync(repoIndexPath) ? fs.statSync(repoIndexPath).mtimeMs : null,
-        latestSourceUpdatedAtMs: getLatestRepoWebSourceUpdatedAtMs(),
-      })) {
-        fallbackWebRoot = repoWebRoot;
-      }
+    const repoWebRoot = getRepoWebDistRoot();
+    const repoIndexPath = path.join(repoWebRoot, "index.html");
+    if (shouldReuseRepoWebDist({
+      repoWebRootExists: fs.existsSync(repoIndexPath),
+      distBuiltAtMs: fs.existsSync(repoIndexPath) ? fs.statSync(repoIndexPath).mtimeMs : null,
+      latestSourceUpdatedAtMs: getLatestRepoWebSourceUpdatedAtMs(),
+    })) {
+      fallbackWebRoot = repoWebRoot;
     }
   }
 
   const webRoot = resolveRuntimeWebRoot({
-    explicitWebRoot,
-    explicitIndexHtmlExists: hasIndexHtmlFile(explicitWebRoot),
     fallbackWebRoot,
     fallbackIndexHtmlExists: hasIndexHtmlFile(fallbackWebRoot),
   });
-
-  if (webRoot) {
-    process.env.AGENT_TEAM_WEB_ROOT = webRoot;
-  } else {
-    delete process.env.AGENT_TEAM_WEB_ROOT;
-  }
 
   return {
     webRoot,

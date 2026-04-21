@@ -283,7 +283,7 @@ async function ensureUiHost(
 
 async function ensureUiAssetsAvailable(userDataPath: string): Promise<string> {
   const assets = await ensureRuntimeAssets(userDataPath);
-  const webRoot = assets.webRoot ?? process.env.AGENT_TEAM_WEB_ROOT ?? null;
+  const webRoot = assets.webRoot;
   if (webRoot) {
     return webRoot;
   }

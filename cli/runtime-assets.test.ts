@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  isCompiledRuntimeExecutable,
   isCompiledRuntimeDir,
   resolveCompiledEmbeddedWebRoot,
   resolveRuntimeWebRoot,
@@ -9,10 +10,9 @@ import {
   shouldReuseRepoWebDist,
 } from "./runtime-assets";
 
-test("当 dist/web 不可用时，不应回退到源码目录再起 Vite", () => {
+test("does not fall back when dist/web is missing", () => {
   assert.equal(
     resolveSourceAssetFallback({
-      hasExplicitWebRoot: false,
       repoWebRootExists: false,
       distBuiltAtMs: null,
       latestSourceUpdatedAtMs: Date.UTC(2026, 3, 21, 11, 0, 0),
@@ -21,10 +21,9 @@ test("当 dist/web 不可用时，不应回退到源码目录再起 Vite", () =>
   );
 });
 
-test("当 dist/web 早于源码时，不应回退到源码目录再起 Vite", () => {
+test("does not fall back when dist/web is older than source", () => {
   assert.equal(
     resolveSourceAssetFallback({
-      hasExplicitWebRoot: false,
       repoWebRootExists: true,
       distBuiltAtMs: Date.UTC(2026, 3, 20, 20, 58, 0),
       latestSourceUpdatedAtMs: Date.UTC(2026, 3, 21, 11, 0, 0),
@@ -33,10 +32,9 @@ test("当 dist/web 早于源码时，不应回退到源码目录再起 Vite", ()
   );
 });
 
-test("当源码时间晚于 dist/web 时，源码态 task ui 不应继续复用旧前端产物", () => {
+test("source-mode task ui does not reuse stale dist/web", () => {
   assert.equal(
     shouldReuseRepoWebDist({
-      hasExplicitWebRoot: false,
       repoWebRootExists: true,
       distBuiltAtMs: Date.UTC(2026, 3, 20, 20, 58, 0),
       latestSourceUpdatedAtMs: Date.UTC(2026, 3, 21, 11, 0, 0),
@@ -45,10 +43,9 @@ test("当源码时间晚于 dist/web 时，源码态 task ui 不应继续复用�
   );
 });
 
-test("当 dist/web 不早于源码时，源码态 task ui 可以直接复用已有前端产物", () => {
+test("source-mode task ui reuses fresh dist/web", () => {
   assert.equal(
     shouldReuseRepoWebDist({
-      hasExplicitWebRoot: false,
       repoWebRootExists: true,
       distBuiltAtMs: Date.UTC(2026, 3, 21, 11, 5, 0),
       latestSourceUpdatedAtMs: Date.UTC(2026, 3, 21, 11, 0, 0),
@@ -57,34 +54,29 @@ test("当 dist/web 不早于源码时，源码态 task ui 可以直接复用已�
   );
 });
 
-test("显式指定 AGENT_TEAM_WEB_ROOT 时，不应再按仓库 dist/web 新旧判断", () => {
-  assert.equal(
-    shouldReuseRepoWebDist({
-      hasExplicitWebRoot: true,
-      repoWebRootExists: true,
-      distBuiltAtMs: Date.UTC(2026, 3, 20, 20, 58, 0),
-      latestSourceUpdatedAtMs: Date.UTC(2026, 3, 21, 11, 0, 0),
-    }),
-    false,
-  );
-});
-
-test("显式指定的静态目录缺少 index.html 时，应判定为不可用", () => {
+test("fallback resolution returns null without a web root", () => {
   assert.equal(
     resolveRuntimeWebRoot({
-      explicitWebRoot: "/tmp/custom-web-root",
-      explicitIndexHtmlExists: false,
-      fallbackWebRoot: "/repo/dist/web",
-      fallbackIndexHtmlExists: true,
+      fallbackWebRoot: null,
+      fallbackIndexHtmlExists: false,
     }),
     null,
   );
 });
 
-test("编译态内嵌资源缺少 index.html 时，不应暴露 exe 的前端静态目录", () => {
+test("fallback resolution returns dist/web when index.html exists", () => {
+  assert.equal(
+    resolveRuntimeWebRoot({
+      fallbackWebRoot: "/repo/dist/web",
+      fallbackIndexHtmlExists: true,
+    }),
+    "/repo/dist/web",
+  );
+});
+
+test("compiled runtime does not expose embedded web root without index.html", () => {
   assert.equal(
     resolveCompiledEmbeddedWebRoot({
-      explicitWebRoot: null,
       runtimeRoot: "/tmp/runtime/0.1.0",
       embeddedAssetRelativePaths: [
         "assets/index-abc123.js",
@@ -95,9 +87,39 @@ test("编译态内嵌资源缺少 index.html 时，不应暴露 exe 的前端静
   );
 });
 
-test("compiled runtime 的 bunfs URL 目录应识别为编译态", () => {
+test("compiled runtime bunfs dir is detected", () => {
   assert.equal(
     isCompiledRuntimeDir("file:///$bunfs/root/compile"),
     true,
+  );
+});
+
+test("compiled runtime executable path is detected", () => {
+  assert.equal(
+    isCompiledRuntimeExecutable("D:\\repo\\agent-team\\dist\\agent-team.exe"),
+    true,
+  );
+  assert.equal(
+    isCompiledRuntimeExecutable("/repo/agent-team/dist/agent-team-macos-arm64"),
+    true,
+  );
+});
+
+test("node and bun executables are not treated as compiled runtime", () => {
+  assert.equal(
+    isCompiledRuntimeExecutable("C:\\Program Files\\nodejs\\node.exe"),
+    false,
+  );
+  assert.equal(
+    isCompiledRuntimeExecutable("C:\\tools\\bun.exe"),
+    false,
+  );
+  assert.equal(
+    isCompiledRuntimeExecutable("/usr/local/bin/node"),
+    false,
+  );
+  assert.equal(
+    isCompiledRuntimeExecutable("/usr/local/bin/bun"),
+    false,
   );
 });
