@@ -70,6 +70,7 @@ function createAgent(input: Partial<TaskAgentRecord> & Pick<TaskAgentRecord, "na
     projectId: input.projectId ?? "project-1",
     name: input.name,
     opencodeSessionId: input.opencodeSessionId ?? null,
+    opencodeAttachBaseUrl: input.opencodeAttachBaseUrl ?? null,
     status: input.status,
     runCount: input.runCount ?? 0,
   };

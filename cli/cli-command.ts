@@ -14,12 +14,6 @@ export type ParsedCliCommand =
       file?: string;
       taskId?: string;
       message?: string;
-    }
-  | {
-      kind: "task.attach";
-      taskId: string;
-      agentName: string;
-      printOnly: boolean;
     };
 
 function configureProgram(program: Command) {
@@ -72,19 +66,6 @@ export function buildCliProgram(onCommand?: (command: ParsedCliCommand) => void)
         file: options.file,
         taskId: taskId ?? options.task,
         message: options.message,
-      });
-    });
-
-  task
-    .command("attach <taskId> <agentName>")
-    .description("attach 到指定 task 的目标 Agent")
-    .option("--print-only", "仅打印 attach 命令")
-    .action((taskId, agentName, options) => {
-      emit({
-        kind: "task.attach",
-        taskId,
-        agentName,
-        printOnly: Boolean(options.printOnly),
       });
     });
 

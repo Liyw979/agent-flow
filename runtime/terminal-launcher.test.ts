@@ -6,7 +6,7 @@ import { buildTerminalLaunchSpec } from "./terminal-launcher";
 test("buildTerminalLaunchSpec 在 Windows 里通过 cmd start 拉起 attach 终端", () => {
   const spec = buildTerminalLaunchSpec({
     cwd: "C:\\work\\agent-team",
-    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1" --dir "C:\\work\\agent-team"',
+    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1"',
     platform: "win32",
   });
 
@@ -16,7 +16,7 @@ test("buildTerminalLaunchSpec 在 Windows 里通过 cmd start 拉起 attach 终�
       "/d",
       "/s",
       "/c",
-      'start "" cmd.exe /k opencode attach "http://127.0.0.1:4310" --session "session-1" --dir "C:\\work\\agent-team"',
+      'start "" cmd.exe /k opencode attach "http://127.0.0.1:4310" --session "session-1"',
     ],
     cwd: "C:\\work\\agent-team",
   });
@@ -25,7 +25,7 @@ test("buildTerminalLaunchSpec 在 Windows 里通过 cmd start 拉起 attach 终�
 test("buildTerminalLaunchSpec 在 macOS 里只打开一个 Terminal attach 窗口", () => {
   const spec = buildTerminalLaunchSpec({
     cwd: "/tmp/agent team",
-    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1" --dir "/tmp/agent team"',
+    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1"',
     platform: "darwin",
   });
 
@@ -35,7 +35,7 @@ test("buildTerminalLaunchSpec 在 macOS 里只打开一个 Terminal attach 窗�
       "-e",
       'if application "Terminal" is running then',
       "-e",
-      'tell application "Terminal" to do script "opencode attach \\"http://127.0.0.1:4310\\" --session \\"session-1\\" --dir \\"/tmp/agent team\\""',
+      'tell application "Terminal" to do script "opencode attach \\"http://127.0.0.1:4310\\" --session \\"session-1\\""',
       "-e",
       "else",
       "-e",
@@ -49,7 +49,7 @@ test("buildTerminalLaunchSpec 在 macOS 里只打开一个 Terminal attach 窗�
       "-e",
       "end repeat",
       "-e",
-      'set attachTab to do script "opencode attach \\"http://127.0.0.1:4310\\" --session \\"session-1\\" --dir \\"/tmp/agent team\\"" in window 1',
+      'set attachTab to do script "opencode attach \\"http://127.0.0.1:4310\\" --session \\"session-1\\"" in window 1',
       "-e",
       "set selected tab of window 1 to attachTab",
       "-e",
@@ -66,13 +66,13 @@ test("buildTerminalLaunchSpec 在 macOS 里只打开一个 Terminal attach 窗�
 test("buildTerminalLaunchSpec 在 macOS 首次启动 Terminal 时必须把焦点切到 attach 所在标签页", () => {
   const spec = buildTerminalLaunchSpec({
     cwd: "/tmp/agent team",
-    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1" --dir "/tmp/agent team"',
+    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1"',
     platform: "darwin",
   });
 
   assert.match(
     spec.args.join("\n"),
-    /set attachTab to do script "opencode attach \\"http:\/\/127\.0\.0\.1:4310\\" --session \\"session-1\\" --dir \\"\/tmp\/agent team\\"" in window 1/,
+    /set attachTab to do script "opencode attach \\"http:\/\/127\.0\.0\.1:4310\\" --session \\"session-1\\"" in window 1/,
   );
   assert.match(spec.args.join("\n"), /set selected tab of window 1 to attachTab/);
 });
@@ -80,7 +80,7 @@ test("buildTerminalLaunchSpec 在 macOS 首次启动 Terminal 时必须把焦点
 test("buildTerminalLaunchSpec 在 Linux 里通过系统终端执行 attach 命令", () => {
   const spec = buildTerminalLaunchSpec({
     cwd: "/tmp/agent-team",
-    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1" --dir "/tmp/agent-team"',
+    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1"',
     platform: "linux",
   });
 
@@ -90,7 +90,7 @@ test("buildTerminalLaunchSpec 在 Linux 里通过系统终端执行 attach 命�
       "-e",
       "/bin/sh",
       "-lc",
-      'opencode attach "http://127.0.0.1:4310" --session "session-1" --dir "/tmp/agent-team"',
+      'opencode attach "http://127.0.0.1:4310" --session "session-1"',
     ],
     cwd: "/tmp/agent-team",
   });

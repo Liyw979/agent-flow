@@ -114,6 +114,20 @@ function createDefaultWorkspaceState(): WorkspaceStateFile {
   };
 }
 
+function serializeTaskRecord(task: TaskRecord) {
+  const { opencodeSessionId: _ignored, ...serialized } = task;
+  return serialized;
+}
+
+function serializeTaskAgentRecord(agent: TaskAgentRecord) {
+  const {
+    opencodeSessionId: _ignoredSessionId,
+    opencodeAttachBaseUrl: _ignoredAttachBaseUrl,
+    ...serialized
+  } = agent;
+  return serialized;
+}
+
 export function shouldMaterializeWorkspaceState(input: {
   accessMode: WorkspaceStateAccessMode;
   stateFileExists: boolean;
@@ -270,20 +284,6 @@ export class StoreService {
     }));
   }
 
-  updateTaskAgentSessionId(cwd: string, taskId: string, agentName: string, sessionId: string) {
-    this.updateWorkspaceState(cwd, (state) => ({
-      ...state,
-      taskAgents: state.taskAgents.map((agent) =>
-        agent.taskId === taskId && agent.name === agentName
-          ? {
-              ...agent,
-              opencodeSessionId: sessionId,
-            }
-          : agent,
-      ),
-    }));
-  }
-
   getTopology(cwd: string): TopologyRecord {
     return this.readWorkspaceState(cwd).topology;
   }
@@ -406,7 +406,7 @@ export class StoreService {
                 ? task.status
                 : "pending",
             cwd: typeof task.cwd === "string" ? task.cwd : normalizedCwd,
-            opencodeSessionId: typeof task.opencodeSessionId === "string" ? task.opencodeSessionId : null,
+            opencodeSessionId: null,
             agentCount: typeof task.agentCount === "number" ? task.agentCount : 0,
             createdAt: typeof task.createdAt === "string" ? task.createdAt : new Date(0).toISOString(),
             completedAt: typeof task.completedAt === "string" ? task.completedAt : null,
@@ -436,7 +436,8 @@ export class StoreService {
               id: typeof agent.id === "string" ? agent.id : "",
               taskId,
               name: typeof agent.name === "string" ? agent.name : "",
-              opencodeSessionId: typeof agent.opencodeSessionId === "string" ? agent.opencodeSessionId : null,
+              opencodeSessionId: null,
+              opencodeAttachBaseUrl: null,
               status: finishedTaskIds.has(taskId) ? "completed" : normalizedStatus,
               runCount: typeof agent.runCount === "number" && Number.isFinite(agent.runCount) ? agent.runCount : 0,
             };
@@ -602,7 +603,12 @@ export class StoreService {
   private writeWorkspaceState(cwd: string, state: WorkspaceStateFile) {
     const statePath = this.getWorkspaceStatePath(cwd);
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    const sanitized: WorkspaceStateFile = {
+      ...state,
+      tasks: state.tasks.map(serializeTaskRecord) as TaskRecord[],
+      taskAgents: state.taskAgents.map(serializeTaskAgentRecord) as TaskAgentRecord[],
+    };
+    fs.writeFileSync(statePath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf8");
   }
 
   private writeTaskLocatorIndex(state: TaskLocatorIndexFile) {

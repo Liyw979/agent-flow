@@ -14,6 +14,7 @@ const TOPOLOGY_GRAPH_HELPERS_SOURCE = fs.readFileSync(
 const SHARED_TYPES_SOURCE = fs.readFileSync(new URL("../shared/types.ts", import.meta.url), "utf8");
 const STORE_SOURCE = fs.readFileSync(new URL("./store.ts", import.meta.url), "utf8");
 const ORCHESTRATOR_SOURCE = fs.readFileSync(new URL("./orchestrator.ts", import.meta.url), "utf8");
+const OPENCODE_CLIENT_SOURCE = fs.readFileSync(new URL("./opencode-client.ts", import.meta.url), "utf8");
 
 test("不再保留一行 return 的 DSL 包装函数 defineTeamDsl", () => {
   assert.doesNotMatch(TEAM_DSL_SOURCE, /export function defineTeamDsl\(/);
@@ -69,4 +70,13 @@ test("Orchestrator 不再保留 ensureProjectForPath / createProject / getProjec
   assert.doesNotMatch(ORCHESTRATOR_SOURCE, /ensureProjectForPath\(/);
   assert.doesNotMatch(ORCHESTRATOR_SOURCE, /createProject\(/);
   assert.doesNotMatch(ORCHESTRATOR_SOURCE, /getProjectSnapshot\(/);
+});
+
+test("新的运行时链路不再依赖 host state 文件", () => {
+  assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /readOpenCodeHostState/);
+  assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /writeOpenCodeHostState/);
+  assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /deleteOpenCodeHostState/);
+  assert.doesNotMatch(CLI_INDEX_SOURCE, /readUiHostState/);
+  assert.doesNotMatch(CLI_INDEX_SOURCE, /writeUiHostState/);
+  assert.doesNotMatch(CLI_INDEX_SOURCE, /deleteUiHostState/);
 });

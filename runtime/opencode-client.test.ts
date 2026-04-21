@@ -5,10 +5,6 @@ import os from "node:os";
 import path from "node:path";
 
 import { OpenCodeClient } from "./opencode-client";
-import {
-  buildOpenCodeHostConfigDigest,
-  writeOpenCodeHostState,
-} from "./opencode-host-state";
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "agent-team-opencode-client-"));
@@ -114,6 +110,120 @@ test("createSession throws when the response is missing a session id", async () 
     client.createSession(projectPath, "demo"),
     /session id/,
   );
+});
+
+test("request 在 OpenCode 长时间不响应时会按超时失败，而不是悬挂接近一分钟", {
+  timeout: 15_000,
+}, async () => {
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
+    request: (
+      pathname: string,
+      options: {
+        method: "GET" | "POST";
+        projectPath?: string;
+        body?: string;
+      },
+    ) => Promise<Response>;
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal;
+    if (!signal) {
+      return;
+    }
+    signal.addEventListener("abort", () => {
+      reject(signal.reason ?? new Error("aborted"));
+    }, { once: true });
+  })) as typeof fetch);
+
+  const startedAt = Date.now();
+  try {
+    await assert.rejects(
+      typed.request("/session", {
+        method: "GET",
+        projectPath,
+      }),
+      /请求超时/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.ok(Date.now() - startedAt < 13_000, "request 仍然等待过久，说明短超时没有生效");
+});
+
+test("session message 请求不注入 AbortSignal，确保长任务不会被请求层超时中断", async () => {
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
+    request: (
+      pathname: string,
+      options: {
+        method: "GET" | "POST";
+        projectPath?: string;
+        body?: string;
+      },
+    ) => Promise<Response>;
+  };
+
+  const originalFetch = globalThis.fetch;
+  let capturedSignal: AbortSignal | null | undefined;
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedSignal = init?.signal;
+    return new Response("", { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    await typed.request("/session/session-1/message", {
+      method: "POST",
+      projectPath,
+      body: JSON.stringify({ parts: [] }),
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(capturedSignal, undefined);
+});
+
+test("createSession 超时后会重启当前 runtime 并自动重试一次", async () => {
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
+    request: (
+      pathname: string,
+      options: {
+        method: "GET" | "POST";
+        target?: string;
+        projectPath?: string;
+        body?: string;
+      },
+    ) => Promise<Response>;
+    shutdown: (runtimeKey?: string) => Promise<{ killedPids: number[] }>;
+  };
+
+  let requestCount = 0;
+  let shutdownCount = 0;
+  typed.request = async () => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      throw new Error("OpenCode 请求超时: POST http://127.0.0.1:4096/session 超过 12000ms");
+    }
+    return new Response(JSON.stringify({ id: "session-1" }), { status: 200 });
+  };
+  typed.shutdown = async (runtimeKey?: string) => {
+    shutdownCount += 1;
+    assert.equal(runtimeKey, projectPath);
+    return {
+      killedPids: [],
+    };
+  };
+
+  const sessionId = await client.createSession(projectPath, "demo");
+
+  assert.equal(sessionId, "session-1");
+  assert.equal(requestCount, 2);
+  assert.equal(shutdownCount, 1);
 });
 
 test("消息查询接口空响应体时返回空结果而不是抛错", async () => {
@@ -270,28 +380,29 @@ test("配置变更触发 shutdown 时，ensureServer 会等待 shutdown 完成�
   assert.equal(client.servers.get(normalizedProjectPath)?.shutdownPromise, null);
 });
 
-test("不同 Project 会使用各自独立的 serve 端口", async () => {
+test("不同 runtimeKey 会使用各自独立的 serve 端口，即使 cwd 相同", async () => {
   const client = new OpenCodeClient(createTempDir()) as OpenCodeClient & {
-    startServer: (projectPath: string) => Promise<{ process: null; port: number }>;
+    startServer: (target: { runtimeKey: string; projectPath: string }) => Promise<{ process: null; port: number }>;
     request: (
       pathname: string,
       options: {
         method: "GET" | "POST";
-        projectPath?: string;
+        target?: { runtimeKey: string; projectPath: string };
         body?: string;
       },
     ) => Promise<Response>;
   };
-  const projectA = createTempDir();
-  const projectB = createTempDir();
-  const portByProject = new Map<string, number>([
-    [path.resolve(projectA), 43127],
-    [path.resolve(projectB), 43128],
+  const projectPath = createTempDir();
+  const targetA = { runtimeKey: "task-a", projectPath };
+  const targetB = { runtimeKey: "task-b", projectPath };
+  const portByRuntime = new Map<string, number>([
+    ["task-a", 43127],
+    ["task-b", 43128],
   ]);
 
-  client.startServer = async (projectPath) => ({
+  client.startServer = async (target) => ({
     process: null,
-    port: portByProject.get(path.resolve(projectPath)) ?? 4096,
+    port: portByRuntime.get(target.runtimeKey) ?? 4096,
   });
 
   const originalFetch = globalThis.fetch;
@@ -304,11 +415,11 @@ test("不同 Project 会使用各自独立的 serve 端口", async () => {
   try {
     await client.request("/session", {
       method: "GET",
-      projectPath: projectA,
+      target: targetA,
     });
     await client.request("/session", {
       method: "GET",
-      projectPath: projectB,
+      target: targetB,
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -320,21 +431,14 @@ test("不同 Project 会使用各自独立的 serve 端口", async () => {
   ]);
 });
 
-test("getAttachBaseUrl 会优先复用工作区已持久化的 OpenCode host 端口", async () => {
+test("registerExternalServer 可以把现有 runtime 端口注册进当前进程内存", async () => {
   const projectPath = createTempDir();
-  writeOpenCodeHostState(projectPath, {
-    pid: 9527,
-    port: 43127,
-    cwd: path.resolve(projectPath),
-    startedAt: "2026-04-20T00:00:00.000Z",
-    configDigest: buildOpenCodeHostConfigDigest(null),
-  });
-
   const client = new OpenCodeClient(createTempDir()) as OpenCodeClient & {
-    startServer: (projectPath: string) => Promise<{ process: null; port: number }>;
-    waitForHealthy: (port: number) => Promise<boolean>;
-    isOpenCodeServeProcess: (pid: number) => boolean;
-    isPidAlive: (pid: number) => boolean;
+    startServer: (target: { runtimeKey: string; projectPath: string }) => Promise<{ process: null; port: number }>;
+  };
+  const target = {
+    runtimeKey: "task-1",
+    projectPath,
   };
 
   let startServerCalled = false;
@@ -345,29 +449,22 @@ test("getAttachBaseUrl 会优先复用工作区已持久化的 OpenCode host 端
       port: 43128,
     };
   };
-  client.waitForHealthy = async (port) => port === 43127;
-  client.isOpenCodeServeProcess = (pid) => pid === 9527;
-  client.isPidAlive = (pid) => pid === 9527;
+  client.registerExternalServer(target, "http://127.0.0.1:43127");
 
-  const baseUrl = await client.getAttachBaseUrl(projectPath);
+  const baseUrl = await client.getAttachBaseUrl(target);
 
   assert.equal(baseUrl, "http://127.0.0.1:43127");
   assert.equal(startServerCalled, false);
 });
 
-test("getAttachBaseUrl 在持久化 host 配置摘要不匹配时会回退新起 serve", async () => {
+test("getAttachBaseUrl 在未注册外部 runtime 时会启动当前 task 自己的 serve", async () => {
   const projectPath = createTempDir();
-  writeOpenCodeHostState(projectPath, {
-    pid: 9527,
-    port: 43127,
-    cwd: path.resolve(projectPath),
-    startedAt: "2026-04-20T00:00:00.000Z",
-    configDigest: buildOpenCodeHostConfigDigest(null),
-  });
-
   const client = new OpenCodeClient(createTempDir()) as OpenCodeClient & {
-    startServer: (projectPath: string) => Promise<{ process: null; port: number }>;
-    setInjectedConfigContent: (projectPath: string, content: string | null) => void;
+    startServer: (target: { runtimeKey: string; projectPath: string }) => Promise<{ process: null; port: number }>;
+  };
+  const target = {
+    runtimeKey: "task-1",
+    projectPath,
   };
 
   let startServerCalled = false;
@@ -378,9 +475,8 @@ test("getAttachBaseUrl 在持久化 host 配置摘要不匹配时会回退新起
       port: 43128,
     };
   };
-  client.setInjectedConfigContent(projectPath, "{\"agent\":{\"mode\":\"build\"}}");
 
-  const baseUrl = await client.getAttachBaseUrl(projectPath);
+  const baseUrl = await client.getAttachBaseUrl(target);
 
   assert.equal(baseUrl, "http://127.0.0.1:43128");
   assert.equal(startServerCalled, true);

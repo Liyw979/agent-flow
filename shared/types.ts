@@ -116,6 +116,7 @@ export interface TaskAgentRecord {
   taskId: string;
   name: string;
   opencodeSessionId: string | null;
+  opencodeAttachBaseUrl: string | null;
   status: AgentStatus;
   runCount: number;
 }

@@ -121,12 +121,12 @@
 ## 4. CLI 约定
 
 - CLI 默认使用当前目录作为工作目录。
-- CLI 只保留 `task headless`、`task ui`、`task attach`。
+- CLI 只保留 `task headless`、`task ui`。
 - `task headless --file <topology.json> --message <message>` 会新建当前 Task，打印本轮群聊，任务结束后退出到 shell。
-- `task ui --file <topology.json> --message <message> [--cwd <path>]` 会新建当前 Task，后台启动本地 Web Host，并在浏览器中打开当前 Task 页面。
+- `task ui --file <topology.json> --message <message> [--cwd <path>]` 会新建当前 Task，启动本地 Web Host，并在浏览器中打开当前 Task 页面。
 - `task ui <taskId> [--cwd <path>]` 会恢复已有 Task，并在浏览器中打开当前 Task 页面；传入 `--cwd` 时会作为任务定位的优先工作区。
-- `task attach <taskId> <agentName>` 会 attach 到指定 Task 的目标 Agent OpenCode session；所有用户可见 attach 文案都统一显示这条高层命令，不展示底层 `opencode attach ...`。
-- `bun run cli -- ...` 需要在仓库根目录执行；若从其他目录排查目标工作区，`task headless` 请显式传入 `--cwd`；`task attach` 则应直接传入目标 `taskId`。
+- CLI / 终端里所有用户可见 attach 文案都直接显示底层 `opencode attach ...`，不再展示 `task attach` 包装命令。
+- `bun run cli -- ...` 需要在仓库根目录执行；若从其他目录排查目标工作区，`task headless` / `task ui` 请显式传入 `--cwd`。
 
 常用命令示例：
 
@@ -136,14 +136,12 @@ bun run cli -- help
 bun run cli -- task headless --file config/team-topologies/development-team.topology.json --message "请开始一轮开发团队协作。"
 bun run cli -- task ui --file config/team-topologies/development-team.topology.json --message "请开始一轮开发团队协作。" --cwd /path/to/workspace
 bun run cli -- task ui <taskId> --cwd /path/to/workspace
-bun run cli -- task attach <taskId> <agentName>
 ```
 
 CLI 能力分组：
 
 - `task headless`：运行一轮任务，结束后退出 CLI。
 - `task ui`：运行或恢复任务，并在浏览器里打开当前 Task 页面。
-- `task attach`：attach 到指定 Task 的指定 Agent OpenCode 会话。
 - CLI 主进程收到 `Ctrl+C` / `SIGTERM` 时，会先回收当前这次命令启动或连接过的全部 OpenCode serve 实例，再结束当前命令，避免遗留孤儿会话。
 - CLI 在任务自然结束退出或收到 `Ctrl+C` / `SIGTERM` 退出时，都会打印本次回收掉的 OpenCode 实例 PID，便于排查残留进程。
 
@@ -153,11 +151,10 @@ CLI 能力分组：
 
 - 命令执行失败等诊断日志位于用户数据目录下的 `logs/agent-team.log`。
 - 当前工作区的拓扑、Task、消息与运行态数据位于 `<cwd>/.agent-team/state.json`。
-- 当前工作区网页界面 Host 的运行态位于 `<cwd>/.agent-team/ui-host.json`。
 - 团队拓扑 JSON 编译后的 Agent prompt / writable 元数据会跟随当前拓扑保存在 `<cwd>/.agent-team/state.json` 的 `topology.nodeRecords` 中。
 - 团队拓扑 JSON 编译后的 LangGraph 边界信息会跟随当前拓扑保存在 `<cwd>/.agent-team/state.json` 的 `topology.langgraph` 中。
 - 每个 Task 的 LangGraph checkpoint 位于 `<cwd>/.agent-team/langgraph/`。
-- OpenCode runtime 也统一落到 `.agent-team/` 下，便于随当前工作区一起迁移。
+- OpenCode runtime 仍统一落到 `.agent-team/` 下，便于随当前工作区一起迁移；但 OpenCode serve 端口、Agent session id 与 Web Host 定位信息不再落盘到独立 host 文件。
 
 ### 5.2 仓库结构
 

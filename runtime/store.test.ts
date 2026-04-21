@@ -104,3 +104,90 @@ test("StoreService 读取旧 topology 时会补齐 LangGraph START，并把缺�
     end: null,
   });
 });
+
+test("StoreService 读取旧 state 时会忽略已持久化的 OpenCode session/attach 地址", () => {
+  const userDataPath = createTempDir();
+  const cwd = createTempDir();
+  const store = new StoreService(userDataPath);
+  const statePath = path.join(cwd, ".agent-team", "state.json");
+
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      version: 1,
+      topology: {
+        nodes: ["Build"],
+        edges: [],
+      },
+      tasks: [
+        {
+          id: "task-1",
+          title: "demo",
+          status: "running",
+          cwd,
+          opencodeSessionId: "legacy-task-session",
+          agentCount: 1,
+          createdAt: "2026-04-21T00:00:00.000Z",
+          completedAt: null,
+          initializedAt: null,
+        },
+      ],
+      taskAgents: [
+        {
+          id: "task-1:Build",
+          taskId: "task-1",
+          name: "Build",
+          opencodeSessionId: "legacy-agent-session",
+          opencodeAttachBaseUrl: "http://127.0.0.1:4999",
+          status: "running",
+          runCount: 1,
+        },
+      ],
+      messages: [],
+    }, null, 2),
+  );
+
+  const [task] = store.listTasks(cwd);
+  const [agent] = store.listTaskAgents(cwd, "task-1");
+
+  assert.equal(task?.opencodeSessionId ?? null, null);
+  assert.equal(agent?.opencodeSessionId ?? null, null);
+  assert.equal(agent?.opencodeAttachBaseUrl ?? null, null);
+});
+
+test("StoreService 写回 state.json 时不会落盘 OpenCode session/attach 地址", () => {
+  const userDataPath = createTempDir();
+  const cwd = createTempDir();
+  const store = new StoreService(userDataPath);
+
+  store.insertTask({
+    id: "task-1",
+    title: "demo",
+    status: "running",
+    cwd,
+    opencodeSessionId: "runtime-only-task-session",
+    agentCount: 1,
+    createdAt: "2026-04-21T00:00:00.000Z",
+    completedAt: null,
+    initializedAt: null,
+  });
+  store.insertTaskAgent(cwd, {
+    id: "task-1:Build",
+    taskId: "task-1",
+    name: "Build",
+    opencodeSessionId: "runtime-only-agent-session",
+    opencodeAttachBaseUrl: "http://127.0.0.1:4999",
+    status: "running",
+    runCount: 1,
+  });
+
+  const statePath = path.join(cwd, ".agent-team", "state.json");
+  const raw = fs.readFileSync(statePath, "utf8");
+
+  assert.doesNotMatch(raw, /runtime-only-task-session/);
+  assert.doesNotMatch(raw, /runtime-only-agent-session/);
+  assert.doesNotMatch(raw, /127\.0\.0\.1:4999/);
+  assert.doesNotMatch(raw, /"opencodeSessionId"/);
+  assert.doesNotMatch(raw, /"opencodeAttachBaseUrl"/);
+});

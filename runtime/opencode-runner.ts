@@ -1,7 +1,13 @@
-import { OpenCodeClient, type OpenCodeExecutionResult, type SubmitMessagePayload } from "./opencode-client";
+import {
+  OpenCodeClient,
+  type OpenCodeExecutionResult,
+  type OpenCodeRuntimeTarget,
+  type SubmitMessagePayload,
+} from "./opencode-client";
 
 export interface RunAgentPayload extends SubmitMessagePayload {
-  projectPath: string;
+  runtimeTarget?: OpenCodeRuntimeTarget;
+  projectPath?: string;
   sessionId: string;
 }
 
@@ -10,13 +16,17 @@ export class OpenCodeRunner {
 
   async run(payload: RunAgentPayload): Promise<OpenCodeExecutionResult> {
     const startedAt = new Date().toISOString();
+    const runtimeTarget = payload.runtimeTarget ?? payload.projectPath;
+    if (!runtimeTarget) {
+      throw new Error("OpenCode runner 缺少 runtimeTarget/projectPath");
+    }
 
     try {
-      const submitted = await this.client.submitMessage(payload.projectPath, payload.sessionId, payload);
-      const result = await this.client.resolveExecutionResult(payload.projectPath, payload.sessionId, submitted);
+      const submitted = await this.client.submitMessage(runtimeTarget, payload.sessionId, payload);
+      const result = await this.client.resolveExecutionResult(runtimeTarget, payload.sessionId, submitted);
       if (result.status === "error") {
         const recovered = await this.client.recoverExecutionResultAfterTransportError(
-          payload.projectPath,
+          runtimeTarget,
           payload.sessionId,
           startedAt,
           result.rawMessage.error || result.finalMessage,
@@ -28,7 +38,7 @@ export class OpenCodeRunner {
       return result;
     } catch (error) {
       const recovered = await this.client.recoverExecutionResultAfterTransportError(
-        payload.projectPath,
+        runtimeTarget,
         payload.sessionId,
         startedAt,
         error instanceof Error ? error.message : String(error),

@@ -46,9 +46,9 @@ test("resolveDefaultSelectedAgentIdForFrontend 会回到 JSON 中的第一个 ag
       { name: "BA", prompt: "" },
     ],
     taskAgents: [
-      { id: "task-1:Build", taskId: "task-1", name: "Build", opencodeSessionId: null, status: "running", runCount: 1 },
-      { id: "task-1:TaskReview", taskId: "task-1", name: "TaskReview", opencodeSessionId: null, status: "idle", runCount: 0 },
-      { id: "task-1:BA", taskId: "task-1", name: "BA", opencodeSessionId: null, status: "completed", runCount: 1 },
+      { id: "task-1:Build", taskId: "task-1", name: "Build", opencodeSessionId: null, opencodeAttachBaseUrl: null, status: "running", runCount: 1 },
+      { id: "task-1:TaskReview", taskId: "task-1", name: "TaskReview", opencodeSessionId: null, opencodeAttachBaseUrl: null, status: "idle", runCount: 0 },
+      { id: "task-1:BA", taskId: "task-1", name: "BA", opencodeSessionId: null, opencodeAttachBaseUrl: null, status: "completed", runCount: 1 },
     ],
     topology: {
       nodes: ["BA", "Build", "TaskReview"],

@@ -6,8 +6,7 @@ import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import packageJson from "../package.json";
-import { buildCliAttachAgentCommand, buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
+import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import type { TaskSnapshot, WorkspaceSnapshot } from "@shared/types";
 import { appendAppLog, initAppFileLogger } from "../runtime/app-log";
 import { Orchestrator } from "../runtime/orchestrator";
@@ -20,10 +19,7 @@ import {
   type ParsedCliCommand,
 } from "./cli-command";
 import { resolveCliDisposeOptions } from "./cli-dispose-policy";
-import {
-  resolveCliSignalPlan,
-  shouldTreatAttachSignalAsExpected,
-} from "./cli-signal-policy";
+import { resolveCliSignalPlan } from "./cli-signal-policy";
 import { ensureRuntimeAssets, isCompiledRuntime } from "./runtime-assets";
 import { resolveCliTaskStreamingPlan } from "./task-streaming-policy";
 import { renderTaskSessionSummary } from "./task-session-summary";
@@ -34,13 +30,6 @@ import {
   buildUiHostLaunchSpec,
   buildUiUrl,
 } from "./ui-host-launch";
-import {
-  deleteUiHostState,
-  isUiHostStateReusable,
-  readUiHostState,
-  writeUiHostState,
-  type UiHostStateRecord,
-} from "./ui-host-state";
 import { startWebHost } from "./web-host";
 
 const CLI_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -64,6 +53,8 @@ interface InternalWebHostCommand {
   taskId: string;
   port: number;
 }
+
+const INTERNAL_WEB_HOST_RUNTIME_ENV = "AGENT_TEAM_INTERNAL_WEB_HOST_RUNTIME";
 
 function fail(message: string): never {
   throw new Error(message);
@@ -204,100 +195,20 @@ function validateTaskUiCommand(
 }
 
 async function printTaskAttachCommands(context: CliContext, task: TaskSnapshot) {
-  const attachCommandOptions = isCompiledRuntime()
-    ? {
-        mode: "compiled" as const,
-        executablePath: process.execPath,
-        platform: process.platform,
-      }
-      : {
-        mode: "source" as const,
-        platform: process.platform,
-      };
-  const attachBaseUrl = await (context.orchestrator as Orchestrator & {
-    opencodeClient: { getAttachBaseUrl: (projectPath: string) => Promise<string> };
-  }).opencodeClient.getAttachBaseUrl(task.task.cwd).catch(() => null);
   process.stdout.write(
     renderTaskAttachCommands(
       task.agents.map((agent) => ({
         agentName: agent.name,
-        taskAttachCommand: buildCliAttachAgentCommand(task.task.id, agent.name, attachCommandOptions),
         opencodeAttachCommand:
-          attachBaseUrl && agent.opencodeSessionId
-            ? buildCliOpencodeAttachCommand(attachBaseUrl, agent.opencodeSessionId, task.task.cwd)
+          agent.opencodeAttachBaseUrl && agent.opencodeSessionId
+            ? buildCliOpencodeAttachCommand(
+                agent.opencodeAttachBaseUrl,
+                agent.opencodeSessionId,
+              )
             : null,
       })),
     ),
   );
-}
-
-async function buildAttachCommand(
-  context: CliContext,
-  projectPath: string,
-  cwd: string,
-  opencodeSessionId: string,
-) {
-  const attachBaseUrl = await (context.orchestrator as Orchestrator & {
-    opencodeClient: { getAttachBaseUrl: (projectPath: string) => Promise<string> };
-  }).opencodeClient.getAttachBaseUrl(projectPath);
-  return buildCliOpencodeAttachCommand(attachBaseUrl, opencodeSessionId, cwd);
-}
-
-async function runAttachCommand(command: string, cwd: string) {
-  const activeSignal = {
-    value: null as NodeJS.Signals | null,
-  };
-
-  await new Promise<void>((resolve, reject) => {
-    const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
-    const args = process.platform === "win32" ? ["/d", "/s", "/c", command] : ["-c", command];
-    const child = spawn(shell, args, {
-      cwd,
-      stdio: "inherit",
-    });
-    const handleSignal = (signal: NodeJS.Signals) => {
-      activeSignal.value = signal;
-    };
-    process.once("SIGINT", handleSignal);
-    process.once("SIGTERM", handleSignal);
-
-    const cleanupSignalListeners = () => {
-      process.off("SIGINT", handleSignal);
-      process.off("SIGTERM", handleSignal);
-    };
-    child.on("error", (error) => {
-      cleanupSignalListeners();
-      reject(error);
-    });
-    child.on("exit", (code, signal) => {
-      cleanupSignalListeners();
-      if (signal) {
-        if (shouldTreatAttachSignalAsExpected({
-          childExitCode: code,
-          childSignal: signal,
-          activeSignal: activeSignal.value,
-        })) {
-          resolve();
-          return;
-        }
-        reject(new Error(`attach 被信号中断：${signal}`));
-        return;
-      }
-      if (shouldTreatAttachSignalAsExpected({
-        childExitCode: code,
-        childSignal: null,
-        activeSignal: activeSignal.value,
-      })) {
-        resolve();
-        return;
-      }
-      if ((code ?? 0) !== 0) {
-        reject(new Error(`attach 退出码异常：${code ?? 0}`));
-        return;
-      }
-      resolve();
-    });
-  });
 }
 
 async function renderTaskMessages(
@@ -406,19 +317,6 @@ async function resolveUiPort() {
   return port;
 }
 
-async function isUiHostAlive(record: UiHostStateRecord): Promise<boolean> {
-  try {
-    const response = await fetch(`http://127.0.0.1:${record.port}/healthz`);
-    if (!response.ok) {
-      return false;
-    }
-    const payload = await response.json() as { taskId?: string };
-    return payload.taskId === record.taskId;
-  } catch {
-    return false;
-  }
-}
-
 async function waitForUiHost(port: number, taskId: string) {
   const startTime = Date.now();
   while (Date.now() - startTime < HEALTHCHECK_TIMEOUT_MS) {
@@ -470,30 +368,8 @@ async function ensureUiHost(
   taskId: string,
 ): Promise<{ port: number; url: string }> {
   await ensureWebRoot(context.userDataPath);
-  const state = readUiHostState(cwd);
-  if (
-    state
-    && isUiHostStateReusable(state, {
-      cwd,
-      taskId,
-      version: packageJson.version,
-    })
-    && await isUiHostAlive(state)
-  ) {
-    return {
-      port: state.port,
-      url: buildUiUrl({
-        port: state.port,
-        taskId,
-      }),
-    };
-  }
-
-  if (state) {
-    deleteUiHostState(cwd);
-  }
-
   const port = await resolveUiPort();
+  const runtimeSeed = context.orchestrator.exportTaskRuntime(taskId, cwd);
   const spec = isCompiledRuntime()
     ? buildUiHostLaunchSpec({
         mode: "compiled",
@@ -513,20 +389,13 @@ async function ensureUiHost(
     env: {
       ...process.env,
       AGENT_TEAM_WEB_ROOT: process.env.AGENT_TEAM_WEB_ROOT,
+      [INTERNAL_WEB_HOST_RUNTIME_ENV]: runtimeSeed ? JSON.stringify(runtimeSeed) : "",
     },
     detached: true,
     stdio: "ignore",
   });
   child.unref();
   await waitForUiHost(port, taskId);
-  writeUiHostState(cwd, {
-    pid: child.pid ?? 0,
-    port,
-    cwd,
-    taskId,
-    startedAt: new Date().toISOString(),
-    version: packageJson.version,
-  });
   return {
     port,
     url: buildUiUrl({
@@ -573,15 +442,14 @@ async function runInternalWebHost(command: InternalWebHostCommand) {
 
   const task = await context.orchestrator.getTaskSnapshot(command.taskId);
   const cwd = path.resolve(task.task.cwd);
-
-  writeUiHostState(cwd, {
-    pid: process.pid,
-    port: command.port,
-    cwd,
-    taskId: command.taskId,
-    startedAt: new Date().toISOString(),
-    version: packageJson.version,
-  });
+  const runtimeSeedRaw = process.env[INTERNAL_WEB_HOST_RUNTIME_ENV];
+  if (runtimeSeedRaw) {
+    try {
+      context.orchestrator.importTaskRuntime(JSON.parse(runtimeSeedRaw));
+    } catch {
+      // ignore invalid runtime seed and fall back to persisted product state only
+    }
+  }
 
   const host = await startWebHost({
     orchestrator: context.orchestrator,
@@ -592,7 +460,6 @@ async function runInternalWebHost(command: InternalWebHostCommand) {
   });
 
   const shutdown = async () => {
-    deleteUiHostState(command.cwd);
     await host.close().catch(() => undefined);
     await disposeCliContext(context, {
       awaitPendingTaskRuns: false,
@@ -685,35 +552,6 @@ async function handleTaskUiCommand(
   }
 }
 
-async function handleTaskAttachCommand(
-  context: CliContext,
-  command: Extract<ParsedCliCommand, { kind: "task.attach" }>,
-) {
-  const workspace = await resolveTaskProject(context, command.taskId);
-  const task = findTaskOrThrow(workspace, command.taskId);
-  const agent = task.agents.find((item) => item.name === command.agentName);
-  if (!agent) {
-    fail(`未找到 Agent：${command.agentName}`);
-  }
-  if (!agent.opencodeSessionId) {
-    fail(`Agent ${command.agentName} 当前还没有可 attach 的 OpenCode session。`);
-  }
-
-  const attachCommand = await buildAttachCommand(
-    context,
-    workspace.cwd,
-    task.task.cwd,
-    agent.opencodeSessionId,
-  );
-
-  if (command.printOnly) {
-    process.stdout.write(`${attachCommand}\n`);
-    return;
-  }
-
-  await runAttachCommand(attachCommand, task.task.cwd);
-}
-
 function buildHelp() {
   const commanderHelp = buildCliProgram().helpInformation().trimEnd();
   const appendix = [
@@ -722,13 +560,11 @@ function buildHelp() {
     "  task headless --file <topology-json> --message <message> [--cwd <path>]",
     "  task ui --file <topology-json> --message <message> [--cwd <path>]",
     "  task ui <taskId> [--cwd <path>]",
-    "  task attach <taskId> <agentName> [--print-only]",
     "",
     "说明：",
     "  - `task headless` 只负责新建任务，运行到本轮任务结束后退出 CLI。",
     "  - `task ui` 会通过 internal web-host 启动后台网页服务，并打开浏览器。",
     "  - 新建任务时必须传 `--file` 和 `--message`。",
-    "  - `task attach <taskId> <agentName>` 会 attach 到指定 Task 的对应 Agent。",
   ].join("\n");
   return `${commanderHelp}\n${appendix}`;
 }
@@ -780,8 +616,6 @@ async function run() {
     } else if (command.kind === "task.ui") {
       await handleTaskUiCommand(context, command);
       observedSettledTaskState = true;
-    } else if (command.kind === "task.attach") {
-      await handleTaskAttachCommand(context, command);
     }
   } finally {
     process.off("SIGINT", handleSignal);

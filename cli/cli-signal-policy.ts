@@ -11,12 +11,6 @@ interface CliSignalPlan {
   exitCode: number;
 }
 
-interface AttachSignalMatchInput {
-  childExitCode: number | null;
-  childSignal: NodeJS.Signals | null;
-  activeSignal: NodeJS.Signals | null;
-}
-
 export function resolveCliSignalPlan(
   input: ResolveCliSignalPlanInput,
 ): CliSignalPlan {
@@ -26,20 +20,6 @@ export function resolveCliSignalPlan(
     awaitPendingTaskRuns: false,
     exitCode,
   };
-}
-
-export function shouldTreatAttachSignalAsExpected(
-  input: AttachSignalMatchInput,
-): boolean {
-  if (!input.activeSignal) {
-    return false;
-  }
-
-  if (input.childSignal === input.activeSignal) {
-    return true;
-  }
-
-  return input.childExitCode === resolveSignalExitCode(input.activeSignal);
 }
 
 function resolveSignalExitCode(signal: NodeJS.Signals): number {

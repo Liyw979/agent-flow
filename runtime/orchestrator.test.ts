@@ -390,13 +390,19 @@ test("OpenCode 事件会触发 runtime-updated 前端事件", async () => {
   const typed = orchestrator as unknown as Orchestrator & {
     opencodeClient: {
       connectEvents: (projectPath: string, onEvent: (event: unknown) => void) => Promise<void>;
+      createSession: (projectPath: string, title: string) => Promise<string>;
+      getAttachBaseUrl: (projectPath: string) => Promise<string>;
     };
   };
   typed.opencodeClient.connectEvents = async (_projectPath, onEvent) => {
     eventHandler = onEvent;
   };
+  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:4096";
 
-  const project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"]);
+  await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
   assert.notEqual(eventHandler, null);
 
   eventHandler?.({
@@ -863,9 +869,34 @@ test("openAgentTerminal 会通过服务端终端启动器 attach 到对应 sessi
   assert.deepEqual(launches, [
     {
       cwd: project.cwd,
-      command: `opencode attach 'http://127.0.0.1:4096' --session 'session:demo:Build' --dir '${project.cwd}'`,
+      command: "opencode attach 'http://127.0.0.1:4096' --session 'session:demo:Build'",
     },
   ]);
+});
+
+test("恢复旧 task 页面但没有当前进程运行时 overlay 时，attach session 不会从 state.json 复活", async () => {
+  const userDataPath = createTempDir();
+  const projectPath = createTempDir();
+  const writer = createTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+  });
+  stubOpenCodeSessions(writer);
+
+  let project = await writer.getWorkspaceSnapshot(projectPath);
+  project = await addBuiltinAgents(writer, project.cwd, ["Build"]);
+  const created = await writer.initializeTask({ cwd: project.cwd, title: "demo" });
+
+  assert.equal(created.agents[0]?.opencodeSessionId, "session:demo:Build");
+
+  const reloaded = createTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+  });
+  const restored = await reloaded.getTaskSnapshot(created.task.id, project.cwd);
+
+  assert.equal(restored.agents[0]?.opencodeSessionId ?? null, null);
+  assert.equal(restored.agents[0]?.opencodeAttachBaseUrl ?? null, null);
 });
 
 test("未写入 Build 时当前 Project 可以没有可写 Agent", async () => {
