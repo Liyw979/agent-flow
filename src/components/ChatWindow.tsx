@@ -11,6 +11,7 @@ import {
 } from "@/lib/chat-mentions";
 import { MarkdownMessage } from "@/lib/chat-markdown";
 import { PANEL_HEADER_ACTION_BUTTON_CLASS } from "@/lib/panel-header-action-button";
+import { getPanelFullscreenButtonCopy } from "@/lib/panel-fullscreen-label";
 import {
   PANEL_HEADER_CLASS,
   PANEL_HEADER_LEADING_CLASS,
@@ -24,6 +25,8 @@ interface ChatWindowProps {
   workspace: WorkspaceSnapshot | undefined;
   task: TaskSnapshot | undefined;
   availableAgents: string[];
+  isMaximized?: boolean;
+  onToggleMaximize?: () => void;
   onSubmit: (payload: { content: string; mentionAgent?: string }) => Promise<void>;
 }
 
@@ -206,6 +209,8 @@ export function ChatWindow({
   workspace,
   task,
   availableAgents,
+  isMaximized = false,
+  onToggleMaximize,
   onSubmit,
 }: ChatWindowProps) {
   const defaultAgentName = getDefaultAgentName(workspace, task);
@@ -223,6 +228,7 @@ export function ChatWindow({
   const shouldStickToBottomRef = useRef(true);
   const copyResetTimerRef = useRef<number | null>(null);
   const mentionQuery = mentionContext?.query ?? null;
+  const fullscreenButtonCopy = getPanelFullscreenButtonCopy(isMaximized);
 
   useEffect(() => {
     if (task) {
@@ -424,6 +430,14 @@ export function ChatWindow({
         </div>
         {task ? (
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onToggleMaximize}
+              className={cn(PANEL_HEADER_ACTION_BUTTON_CLASS, "no-drag")}
+              aria-label={fullscreenButtonCopy.ariaLabel}
+            >
+              {fullscreenButtonCopy.label}
+            </button>
             <button
               type="button"
               disabled={messages.length === 0}

@@ -13,6 +13,8 @@ import {
   PANEL_HEADER_TITLE_CLASS,
   PANEL_SURFACE_CLASS,
 } from "@/lib/panel-header";
+import { PANEL_HEADER_ACTION_BUTTON_CLASS } from "@/lib/panel-header-action-button";
+import { getPanelFullscreenButtonCopy } from "@/lib/panel-fullscreen-label";
 import {
   getTopologyAgentStatusBadgePresentation,
   getTopologyNodeHeaderActionOrder,
@@ -31,6 +33,8 @@ interface TopologyGraphProps {
   task: TaskSnapshot | undefined;
   selectedAgentId: string | null;
   onSelectAgent: (agentId: string) => void;
+  isMaximized?: boolean;
+  onToggleMaximize?: () => void;
   openingAgentTerminalId?: string | null;
   onOpenAgentTerminal?: (agentId: string) => void;
   runtimeSnapshots?: Record<string, AgentRuntimeSnapshot>;
@@ -171,11 +175,14 @@ export function TopologyGraph({
   task,
   selectedAgentId,
   onSelectAgent,
+  isMaximized = false,
+  onToggleMaximize,
   openingAgentTerminalId = null,
   onOpenAgentTerminal,
   runtimeSnapshots = {},
 }: TopologyGraphProps) {
   const topologyPanelBodyClassName = getTopologyPanelBodyClassName();
+  const fullscreenButtonCopy = getPanelFullscreenButtonCopy(isMaximized);
   const canvasViewportRef = useRef<HTMLDivElement | null>(null);
   const historyViewportRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const historyShouldStickToBottomRef = useRef<Record<string, boolean>>({});
@@ -354,6 +361,16 @@ export function TopologyGraph({
           <div className={PANEL_HEADER_LEADING_CLASS}>
             <p className={PANEL_HEADER_TITLE_CLASS}>拓扑</p>
           </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onToggleMaximize}
+              className={`${PANEL_HEADER_ACTION_BUTTON_CLASS} no-drag`}
+              aria-label={fullscreenButtonCopy.ariaLabel}
+            >
+              {fullscreenButtonCopy.label}
+            </button>
+          </div>
         </header>
         <div className={topologyPanelBodyClassName}>
           <div className="flex h-full min-h-0 items-center justify-center rounded-[8px] border border-border/60 bg-card/70 text-sm text-muted-foreground">
@@ -369,6 +386,16 @@ export function TopologyGraph({
       <header className={PANEL_HEADER_CLASS}>
         <div className={PANEL_HEADER_LEADING_CLASS}>
           <p className={PANEL_HEADER_TITLE_CLASS}>拓扑</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggleMaximize}
+            className={`${PANEL_HEADER_ACTION_BUTTON_CLASS} no-drag`}
+            aria-label={fullscreenButtonCopy.ariaLabel}
+          >
+            {fullscreenButtonCopy.label}
+          </button>
         </div>
       </header>
 

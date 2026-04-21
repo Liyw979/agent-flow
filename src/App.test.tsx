@@ -15,6 +15,8 @@ test("App 已裁成单 Task 展示面板", () => {
 
 test("App 保留聊天输入，但团队面板不再提供 attach 按钮", () => {
   assert.match(APP_SOURCE, /<ChatWindow/);
+  assert.match(APP_SOURCE, /resolveAppPanelVisibility/);
+  assert.match(APP_SOURCE, /panelMode/);
   assert.doesNotMatch(APP_SOURCE, /buildAgentPanelAttachButtonState/);
   assert.doesNotMatch(APP_SOURCE, /aria-label=\{`打开 \$\{agent\.name\} 的 attach 终端`\}/);
   assert.match(APP_SOURCE, />团队</);
@@ -131,4 +133,20 @@ test("主布局间距缩小 50%，但团队面板宽度回退到原值", () => {
   );
   assert.doesNotMatch(APP_SOURCE, /gap-\[10px\]/);
   assert.doesNotMatch(APP_SOURCE, /grid-cols-\[minmax\(0,1fr\)_minmax\(408px,456px\)\]/);
+});
+
+test("消息全屏模式会切到只显示消息面板的单栏布局", () => {
+  assert.match(
+    APP_SOURCE,
+    /panelVisibility\.showChatPanel && !panelVisibility\.showTopologyPanel && !panelVisibility\.showTeamPanel/,
+  );
+  assert.match(APP_SOURCE, /current === "chat-only" \? "default" : "chat-only"/);
+});
+
+test("拓扑全屏模式会切到只显示拓扑面板的单栏布局", () => {
+  assert.match(
+    APP_SOURCE,
+    /!panelVisibility\.showChatPanel && panelVisibility\.showTopologyPanel && !panelVisibility\.showTeamPanel/,
+  );
+  assert.match(APP_SOURCE, /current === "topology-only" \? "default" : "topology-only"/);
 });

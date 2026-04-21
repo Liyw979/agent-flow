@@ -106,6 +106,7 @@
 
 - 右下角团队成员面板展示当前 Task 的 Agent 运行态与 prompt 摘要。App[App]、agent-prompt-preview[buildAgentPromptPreviewText]
 - 右上角拓扑图支持整块面板放大查看；放大视图会直接把当前拓扑图放大，Agent 卡片会随视口横向和纵向一起拉伸铺满面板，连线固定走在 Agent 顶部上方的通道内，不会越出拓扑 panel；节点下游关系可通过点击节点编辑。TopologyGraph[TopologyGraph]、topology-canvas[buildTopologyCanvasLayout]
+- 拓扑面板 Header 右侧与消息面板 Header 右侧都提供统一的“全屏”入口；点击拓扑面板会进入仅显示拓扑的单面板视图，点击消息面板会进入仅显示消息的单面板视图；对应全屏态内都可通过“退出全屏”恢复默认三栏布局。App[App]、TopologyGraph[TopologyGraph]、ChatWindow[ChatWindow]
 - 拓扑图历史区会优先展示 Agent 最近的运行活动，并明确区分思考、普通消息、步骤与 Tool Call 参数摘要，而不只是单行运行状态。agent-history[buildAgentHistoryItems]、TopologyGraph[TopologyGraph]、opencode-client[getSessionRuntime]
 - 每个 Agent 都会按名称自动分配一套稳定配色；聊天记录里会使用对应的浅色底、描边与标签色来区分不同 Agent。agent-colors[getAgentColorToken]、ChatWindow[MessageBubble]、App[App]
 - 右下角展示当前工作区拓扑中的全部 Agent，以及它们在当前 Task 语境下的状态。frontend-agent-order[orderAgentsForFrontend]、App[App]

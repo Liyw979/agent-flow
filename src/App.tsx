@@ -38,6 +38,7 @@ import {
 } from "./lib/agent-prompt-dialog";
 import { decideUiSnapshotRefreshAcceptance } from "./lib/ui-snapshot-refresh-gate";
 import { getUiSnapshotPollingIntervalMs } from "./lib/ui-snapshot-polling";
+import { resolveAppPanelVisibility, type AppPanelMode } from "./lib/app-panel-visibility";
 
 function App() {
   const launchParams = useMemo(() => readLaunchParams(), []);
@@ -50,6 +51,7 @@ function App() {
   const [agentTerminalActionError, setAgentTerminalActionError] = useState<string | null>(null);
   const [promptLineCount, setPromptLineCount] = useState(1);
   const [agentCardGapPx, setAgentCardGapPx] = useState(6);
+  const [panelMode, setPanelMode] = useState<AppPanelMode>("default");
   const [selectedAgentPromptDialog, setSelectedAgentPromptDialog] = useState<AgentPromptDialogState | null>(null);
   const agentPanelViewportRef = useRef<HTMLDivElement | null>(null);
   const latestUiSnapshotRef = useRef<UiSnapshotPayload | null>(null);
@@ -59,6 +61,7 @@ function App() {
   const workspace = uiSnapshot?.workspace ?? null;
   const task = uiSnapshot?.task ?? null;
   const uiSnapshotPollingIntervalMs = getUiSnapshotPollingIntervalMs(launchParams.taskId);
+  const panelVisibility = resolveAppPanelVisibility(panelMode);
 
   function applyUiSnapshotRefreshResult(nextUiSnapshot: UiSnapshotPayload, requestId: number) {
     const acceptance = decideUiSnapshotRefreshAcceptance({
@@ -322,128 +325,176 @@ function App() {
   return (
     <div className="flex h-screen flex-col overflow-hidden text-foreground">
       <main className={`min-h-0 flex-1 overflow-hidden ${appShellClassName}`}>
-        <div
-          className="grid h-full overflow-hidden grid-rows-[minmax(320px,42%)_minmax(0,1fr)]"
-          style={{ gap: `${workspaceLayoutMetrics.panelGapPx}px` }}
-        >
-          <TopologyGraph
-            workspace={workspace}
-            task={task}
-            selectedAgentId={selectedAgentId}
-            onSelectAgent={setSelectedAgentId}
-            openingAgentTerminalId={openingAgentTerminalId}
-            onOpenAgentTerminal={(agentName) => {
-              void handleOpenAgentTerminal(agentName);
-            }}
-            runtimeSnapshots={runtimeSnapshots}
-          />
-
-          <div
-            className="grid min-h-0 overflow-hidden"
-            style={{
-              gap: `${workspaceLayoutMetrics.panelGapPx}px`,
-              gridTemplateColumns: `minmax(0, 1fr) minmax(${workspaceLayoutMetrics.teamPanelMinWidthPx}px, ${workspaceLayoutMetrics.teamPanelMaxWidthPx}px)`,
-            }}
-          >
-            <div className="min-h-0">
-              <ChatWindow
-                workspace={workspace}
-                task={task}
-                availableAgents={availableAgents}
-                onSubmit={async ({ content, mentionAgent }) => {
-                  await submitTask({
-                    cwd: workspace.cwd,
-                    taskId: task.task.id,
-                    content,
-                    mentionAgent,
-                  });
-                }}
-              />
-            </div>
-
-            <aside className={PANEL_SURFACE_CLASS}>
-              <header className={PANEL_HEADER_CLASS}>
-                <div className={PANEL_HEADER_LEADING_CLASS}>
-                  <p className={PANEL_HEADER_TITLE_CLASS}>团队</p>
-                </div>
-              </header>
-
-              <div
-                ref={agentPanelViewportRef}
-                className={`min-h-0 flex-1 overflow-y-auto ${PANEL_SECTION_BODY_CLASS}`}
-              >
-                {agentTerminalActionError ? (
-                  <div className="mb-1.5 rounded-[8px] border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
-                    {agentTerminalActionError}
-                  </div>
-                ) : null}
-
-                <div className="flex flex-col" style={{ gap: `${agentCardGapPx}px` }}>
-                  {agentCards.map((agent) => {
-                    const color = getAgentColorToken(agent.name);
-                    const promptPreviewLine = agent.promptPreview.replace(/\s+/gu, "");
-                    return (
-                      <div
-                        key={agent.name}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => {
-                          handleOpenAgentPromptDialog(agent);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            handleOpenAgentPromptDialog(agent);
-                          }
-                        }}
-                        className="rounded-[8px] border px-3 py-2 text-left shadow-sm transition"
-                        style={{
-                          background: color.soft,
-                          borderColor: color.border,
-                          color: color.text,
-                        }}
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <span
-                              className="inline-flex max-w-full shrink-0 rounded-[8px] px-2 py-px text-center text-[14px] font-semibold leading-[1.2] tracking-[0.02em]"
-                              style={{
-                                background: color.solid,
-                                color: color.badgeText,
-                              }}
-                            >
-                              {agent.name}
-                            </span>
-                          </div>
-                        </div>
-                        {agent.promptPreview !== "-" ? (
-                          <div className="mt-1 min-w-0">
-                            <p
-                              title={agent.promptPreview}
-                              className="min-w-0 overflow-hidden break-all text-[13px] leading-[18px]"
-                              style={{
-                                color: color.mutedText,
-                                display: "-webkit-box",
-                                WebkitBoxOrient: "vertical",
-                                WebkitLineClamp: promptLineCount,
-                              }}
-                            >
-                              {promptPreviewLine}
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="mt-1 min-w-0 text-[13px] leading-5" style={{ color: color.mutedText }}>
-                            -
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </aside>
+        {!panelVisibility.showChatPanel && panelVisibility.showTopologyPanel && !panelVisibility.showTeamPanel ? (
+          <div className="h-full min-h-0 overflow-hidden">
+            <TopologyGraph
+              workspace={workspace}
+              task={task}
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={setSelectedAgentId}
+              isMaximized={panelMode === "topology-only"}
+              onToggleMaximize={() => {
+                setPanelMode((current) => (current === "topology-only" ? "default" : "topology-only"));
+              }}
+              openingAgentTerminalId={openingAgentTerminalId}
+              onOpenAgentTerminal={(agentName) => {
+                void handleOpenAgentTerminal(agentName);
+              }}
+              runtimeSnapshots={runtimeSnapshots}
+            />
           </div>
-        </div>
+        ) : panelVisibility.showChatPanel && !panelVisibility.showTopologyPanel && !panelVisibility.showTeamPanel ? (
+          <div className="h-full min-h-0 overflow-hidden">
+            <ChatWindow
+              workspace={workspace}
+              task={task}
+              availableAgents={availableAgents}
+              isMaximized={panelMode === "chat-only"}
+              onToggleMaximize={() => {
+                setPanelMode((current) => (current === "chat-only" ? "default" : "chat-only"));
+              }}
+              onSubmit={async ({ content, mentionAgent }) => {
+                await submitTask({
+                  cwd: workspace.cwd,
+                  taskId: task.task.id,
+                  content,
+                  mentionAgent,
+                });
+              }}
+            />
+          </div>
+        ) : (
+          <div
+            className="grid h-full overflow-hidden grid-rows-[minmax(320px,42%)_minmax(0,1fr)]"
+            style={{ gap: `${workspaceLayoutMetrics.panelGapPx}px` }}
+          >
+            <TopologyGraph
+              workspace={workspace}
+              task={task}
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={setSelectedAgentId}
+              isMaximized={panelMode === "topology-only"}
+              onToggleMaximize={() => {
+                setPanelMode((current) => (current === "topology-only" ? "default" : "topology-only"));
+              }}
+              openingAgentTerminalId={openingAgentTerminalId}
+              onOpenAgentTerminal={(agentName) => {
+                void handleOpenAgentTerminal(agentName);
+              }}
+              runtimeSnapshots={runtimeSnapshots}
+            />
+
+            <div
+              className="grid min-h-0 overflow-hidden"
+              style={{
+                gap: `${workspaceLayoutMetrics.panelGapPx}px`,
+                gridTemplateColumns: `minmax(0, 1fr) minmax(${workspaceLayoutMetrics.teamPanelMinWidthPx}px, ${workspaceLayoutMetrics.teamPanelMaxWidthPx}px)`,
+              }}
+            >
+              <div className="min-h-0">
+                <ChatWindow
+                  workspace={workspace}
+                  task={task}
+                  availableAgents={availableAgents}
+                  isMaximized={panelMode === "chat-only"}
+                  onToggleMaximize={() => {
+                    setPanelMode((current) => (current === "chat-only" ? "default" : "chat-only"));
+                  }}
+                  onSubmit={async ({ content, mentionAgent }) => {
+                    await submitTask({
+                      cwd: workspace.cwd,
+                      taskId: task.task.id,
+                      content,
+                      mentionAgent,
+                    });
+                  }}
+                />
+              </div>
+
+              <aside className={PANEL_SURFACE_CLASS}>
+                <header className={PANEL_HEADER_CLASS}>
+                  <div className={PANEL_HEADER_LEADING_CLASS}>
+                    <p className={PANEL_HEADER_TITLE_CLASS}>团队</p>
+                  </div>
+                </header>
+
+                <div
+                  ref={agentPanelViewportRef}
+                  className={`min-h-0 flex-1 overflow-y-auto ${PANEL_SECTION_BODY_CLASS}`}
+                >
+                  {agentTerminalActionError ? (
+                    <div className="mb-1.5 rounded-[8px] border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
+                      {agentTerminalActionError}
+                    </div>
+                  ) : null}
+
+                  <div className="flex flex-col" style={{ gap: `${agentCardGapPx}px` }}>
+                    {agentCards.map((agent) => {
+                      const color = getAgentColorToken(agent.name);
+                      const promptPreviewLine = agent.promptPreview.replace(/\s+/gu, "");
+                      return (
+                        <div
+                          key={agent.name}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => {
+                            handleOpenAgentPromptDialog(agent);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              handleOpenAgentPromptDialog(agent);
+                            }
+                          }}
+                          className="rounded-[8px] border px-3 py-2 text-left shadow-sm transition"
+                          style={{
+                            background: color.soft,
+                            borderColor: color.border,
+                            color: color.text,
+                          }}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <span
+                                className="inline-flex max-w-full shrink-0 rounded-[8px] px-2 py-px text-center text-[14px] font-semibold leading-[1.2] tracking-[0.02em]"
+                                style={{
+                                  background: color.solid,
+                                  color: color.badgeText,
+                                }}
+                              >
+                                {agent.name}
+                              </span>
+                            </div>
+                          </div>
+                          {agent.promptPreview !== "-" ? (
+                            <div className="mt-1 min-w-0">
+                              <p
+                                title={agent.promptPreview}
+                                className="min-w-0 overflow-hidden break-all text-[13px] leading-[18px]"
+                                style={{
+                                  color: color.mutedText,
+                                  display: "-webkit-box",
+                                  WebkitBoxOrient: "vertical",
+                                  WebkitLineClamp: promptLineCount,
+                                }}
+                              >
+                                {promptPreviewLine}
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="mt-1 min-w-0 text-[13px] leading-5" style={{ color: color.mutedText }}>
+                              -
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        )}
       </main>
 
       {selectedAgentPromptDialog ? (
