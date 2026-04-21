@@ -15,10 +15,18 @@ test("build:embedded-assets 会改为调用 cli 目录下的生成脚本", () =>
   );
 });
 
-test("generated-embedded-assets.ts 会在 .gitattributes 里标记为 generated 并关闭默认 diff", () => {
-  const gitAttributes = fs.readFileSync(new URL("../.gitattributes", import.meta.url), "utf8");
-  assert.match(
-    gitAttributes,
-    /^cli\/generated-embedded-assets\.ts linguist-generated=true -diff$/m,
+test("build 和 test 会先生成 generated-embedded-assets.ts", () => {
+  assert.equal(
+    PACKAGE_JSON.scripts?.build,
+    "bun run build:web && bun run build:embedded-assets && tsc --noEmit",
   );
+  assert.equal(
+    PACKAGE_JSON.scripts?.test,
+    "bun run build:embedded-assets && tsx --test",
+  );
+});
+
+test("generated-embedded-assets.ts 会被 git ignore", () => {
+  const gitIgnore = fs.readFileSync(new URL("../.gitignore", import.meta.url), "utf8");
+  assert.match(gitIgnore, /^cli\/generated-embedded-assets\.ts$/m);
 });
