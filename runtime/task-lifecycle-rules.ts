@@ -56,7 +56,7 @@ export function getPersistedCompletionSeedAgentNames(input: {
   return [...seeds].filter((name) => validNames.has(name));
 }
 
-export function collectReachableTopologyNodes(
+function collectReachableTopologyNodes(
   topology: TopologyRecord,
   startNames: Iterable<string>,
 ): Set<string> {

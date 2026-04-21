@@ -30,7 +30,7 @@ export function stripTargetMention(content: string, targetAgentName: string): st
   return strippedTrailing || trimmed;
 }
 
-export function normalizeContentForDedup(value: string): string {
+function normalizeContentForDedup(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 

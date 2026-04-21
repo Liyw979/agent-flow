@@ -10,6 +10,7 @@
     "build": "bun run build:web && bun run build:embedded-assets && tsc --noEmit",
     "build:web": "vite build",
     "build:embedded-assets": "node cli/generate-embedded-assets.mjs",
+    "knip": "bun run build:embedded-assets && knip",
     "test": "bun run build:embedded-assets && tsx --test",
     "preview": "vite preview",
     "cli": "node cli/launcher.cjs",
@@ -20,8 +21,6 @@
   },
   "dependencies": {
     "@langchain/langgraph": "^1.2.9",
-    "@opencode-ai/sdk": "^0.4.0",
-    "@radix-ui/react-dialog": "^1.1.6",
     "@tanstack/react-query": "^5.66.8",
     "boxen": "^8.0.1",
     "clsx": "^2.1.1",
@@ -31,8 +30,7 @@
     "react-markdown": "^10.1.0",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
-    "tailwind-merge": "^2.6.0",
-    "zustand": "^5.0.3"
+    "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.5",

@@ -1,6 +1,6 @@
 import type { AgentStatus } from "@shared/types";
 
-export type RevisionRequestContinuationInput = {
+type RevisionRequestContinuationInput = {
   continuation: {
     pendingTargets: string[];
     repairReviewerAgentId: string | null;
@@ -12,7 +12,7 @@ export type RevisionRequestContinuationInput = {
   >;
 };
 
-export type RevisionRequestContinuationAction =
+type RevisionRequestContinuationAction =
   | "ignore"
   | "wait_pending_reviewers"
   | "trigger_repair_review"

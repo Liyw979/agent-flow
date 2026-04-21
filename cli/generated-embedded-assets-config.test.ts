@@ -21,6 +21,10 @@ test("build 和 test 会先生成 generated-embedded-assets.ts", () => {
     "bun run build:web && bun run build:embedded-assets && tsc --noEmit",
   );
   assert.equal(
+    PACKAGE_JSON.scripts?.knip,
+    "bun run build:embedded-assets && knip",
+  );
+  assert.equal(
     PACKAGE_JSON.scripts?.test,
     "bun run build:embedded-assets && tsx --test",
   );

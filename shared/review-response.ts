@@ -3,7 +3,7 @@ export const REVIEW_NEEDS_REVISION_END_LABEL = "</needs_revision>";
 export const REVIEW_APPROVED_LABEL = "<approved>";
 export const REVIEW_APPROVED_END_LABEL = "</approved>";
 
-export type ReviewSignalKind = "needs_revision" | "approved";
+type ReviewSignalKind = "needs_revision" | "approved";
 
 const REVIEW_SIGNAL_TAG_PATTERN = /<\/?(?:needs_revision|approved)>/gu;
 
@@ -18,7 +18,7 @@ const REVIEW_SIGNAL_TOKENS: Record<ReviewSignalKind, { start: string; end: strin
   },
 };
 
-export function formatReviewResponseBlock(
+function formatReviewResponseBlock(
   content: string,
   kind: ReviewSignalKind = "needs_revision",
 ): string {

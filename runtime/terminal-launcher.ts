@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
 
-export interface TerminalLaunchInput {
+interface TerminalLaunchInput {
   cwd: string;
   command: string;
   platform?: NodeJS.Platform;
 }
 
-export interface TerminalLaunchSpec {
+interface TerminalLaunchSpec {
   command: string;
   args: string[];
   cwd: string;

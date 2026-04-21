@@ -1,6 +1,6 @@
 import type { TopologyEdgeTrigger, TopologyRecord } from "@shared/types";
 
-export interface TopologyIndex {
+interface TopologyIndex {
   associationTargetsBySource: Record<string, string[]>;
   approvedTargetsBySource: Record<string, string[]>;
   needsRevisionTargetsBySource: Record<string, string[]>;

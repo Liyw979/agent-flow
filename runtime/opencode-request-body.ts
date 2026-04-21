@@ -1,6 +1,6 @@
 import { toOpenCodeAgentName } from "./opencode-agent-name";
 
-export interface SubmitMessageBodyInput {
+interface SubmitMessageBodyInput {
   agent: string;
   content: string;
   system?: string;

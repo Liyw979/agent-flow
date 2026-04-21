@@ -1,4 +1,4 @@
-export type TaskSubmissionResolution =
+type TaskSubmissionResolution =
   | {
       ok: true;
       targetAgent: string;

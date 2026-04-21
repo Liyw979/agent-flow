@@ -1,6 +1,6 @@
 import type { SpawnRule, TopologyNodeRecord, TopologyRecord } from "@shared/types";
 
-export interface DebateSpawnDraftInput {
+interface DebateSpawnDraftInput {
   teamName: string;
   sourceTemplateName: string;
   proTemplateName: string;

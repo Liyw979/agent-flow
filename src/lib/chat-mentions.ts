@@ -4,7 +4,7 @@ export interface MentionContext {
   query: string;
 }
 
-export interface MentionOptionItem {
+interface MentionOptionItem {
   agentName: string;
   displayName: string;
   mentionLabel: string;

@@ -1,10 +1,10 @@
-export type TopologyHistoryAutoScrollInput = {
+type TopologyHistoryAutoScrollInput = {
   previousLastItemId: string | null;
   nextLastItemId: string | null;
   shouldStickToBottom: boolean;
 };
 
-export type TopologyHistoryViewportMetrics = {
+type TopologyHistoryViewportMetrics = {
   scrollHeight: number;
   clientHeight: number;
   scrollTop: number;

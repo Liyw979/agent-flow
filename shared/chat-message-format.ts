@@ -11,7 +11,7 @@ export function buildMentionSuffix(agentIds: string[]): string {
   return mentions.join(" ");
 }
 
-export function stripLeadingMentions(content: string): string {
+function stripLeadingMentions(content: string): string {
   const trimmed = content.trim();
   if (!trimmed) {
     return "";

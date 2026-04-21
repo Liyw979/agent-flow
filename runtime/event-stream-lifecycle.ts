@@ -1,4 +1,4 @@
-export interface EventStreamReconnectContext {
+interface EventStreamReconnectContext {
   hasProjectRecord: boolean;
   isDisposing: boolean;
 }

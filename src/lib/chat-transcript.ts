@@ -1,6 +1,6 @@
 import type { ChatMessageItem } from "./chat-messages";
 
-export const SYSTEM_SENDER_LABEL = "Orchestrator";
+const SYSTEM_SENDER_LABEL = "Orchestrator";
 
 interface FormatChatTranscriptOptions {
   locale?: string;
@@ -14,7 +14,7 @@ export function getChatSenderLabel(sender: string) {
   return sender;
 }
 
-export function formatChatTranscriptTimestamp(
+function formatChatTranscriptTimestamp(
   timestamp: string,
   options: FormatChatTranscriptOptions = {},
 ) {

@@ -49,7 +49,7 @@ interface ParsedScenario {
   normalizeAgentRef: (name: string) => string;
 }
 
-export interface AssertSchedulerScriptOptions {
+interface AssertSchedulerScriptOptions {
   topology: TopologyRecord;
   script: string[];
 }

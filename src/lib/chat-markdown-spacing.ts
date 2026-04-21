@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 
-export type ChatMarkdownSpacing = {
+type ChatMarkdownSpacing = {
   blockSpacingEm: number;
   listItemSpacingRem: number;
 };

@@ -1,6 +1,6 @@
 import type { SpawnRule, TopologyEdge, TopologyNodeRecord, TopologyRecord } from "@shared/types";
 
-export type DownstreamMode = "spawn" | "association" | "review_pass" | "review_fail";
+type DownstreamMode = "spawn" | "association" | "review_pass" | "review_fail";
 
 function getNodeRecords(topology: TopologyRecord): TopologyNodeRecord[] {
   if (topology.nodeRecords && topology.nodeRecords.length > 0) {

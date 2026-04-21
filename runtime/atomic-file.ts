@@ -3,7 +3,7 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 
-export function buildAtomicWriteTempPath(filePath: string, nonce = `${process.pid}-${randomUUID()}`) {
+function buildAtomicWriteTempPath(filePath: string, nonce = `${process.pid}-${randomUUID()}`) {
   return path.join(path.dirname(filePath), `.${path.basename(filePath)}.${nonce}.tmp`);
 }
 

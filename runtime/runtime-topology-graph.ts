@@ -75,7 +75,7 @@ export function buildSpawnItemId(spawnRuleId: string, sequence: number): string 
   return `${spawnRuleId}-${String(sequence).padStart(4, "0")}`;
 }
 
-export function ensureRuntimeNodeStatuses(state: GraphTaskState): void {
+function ensureRuntimeNodeStatuses(state: GraphTaskState): void {
   for (const node of state.runtimeNodes) {
     if (!state.agentStatusesByName[node.id]) {
       state.agentStatusesByName[node.id] = "idle";

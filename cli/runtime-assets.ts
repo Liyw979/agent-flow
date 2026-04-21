@@ -15,7 +15,7 @@ const WEB_SOURCE_WATCH_PATHS = [
   "vite.config.ts",
 ] as const;
 
-export interface ResolvedRuntimeAssets {
+interface ResolvedRuntimeAssets {
   webRoot: string | null;
 }
 
@@ -47,7 +47,7 @@ export function isCompiledRuntime(): boolean {
   return runtimeDir.startsWith("/$bunfs");
 }
 
-export function getRepoWebDistRoot(): string {
+function getRepoWebDistRoot(): string {
   return path.join(REPO_ROOT, "dist", "web");
 }
 

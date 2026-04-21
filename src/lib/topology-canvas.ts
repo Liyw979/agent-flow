@@ -1,4 +1,4 @@
-export interface TopologyCanvasNodeLayout {
+interface TopologyCanvasNodeLayout {
   id: string;
   x: number;
   y: number;
@@ -6,7 +6,7 @@ export interface TopologyCanvasNodeLayout {
   height: number;
 }
 
-export interface TopologyCanvasLayout {
+interface TopologyCanvasLayout {
   width: number;
   height: number;
   nodes: TopologyCanvasNodeLayout[];

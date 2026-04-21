@@ -1,6 +1,6 @@
 const SESSION_CREATE_TIMEOUT_MS = 12_000;
 
-export interface ResolveOpenCodeRequestTimeoutInput {
+interface ResolveOpenCodeRequestTimeoutInput {
   pathname: string;
   method: "GET" | "POST";
 }

@@ -6,4 +6,4 @@ export const IPC_CHANNELS = {
   eventStream: "agent-team/event-stream",
 } as const;
 
-export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
+type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

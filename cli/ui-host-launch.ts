@@ -1,6 +1,6 @@
 import path from "node:path";
 
-export interface UiHostLaunchSpec {
+interface UiHostLaunchSpec {
   command: string;
   args: string[];
   cwd: string;
@@ -23,7 +23,7 @@ interface CompiledUiHostLaunchInput {
   platform?: NodeJS.Platform;
 }
 
-export type BuildUiHostLaunchSpecInput =
+type BuildUiHostLaunchSpecInput =
   | SourceUiHostLaunchInput
   | CompiledUiHostLaunchInput;
 

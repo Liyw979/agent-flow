@@ -5,7 +5,7 @@ import {
   type SubmitMessagePayload,
 } from "./opencode-client";
 
-export interface RunAgentPayload extends SubmitMessagePayload {
+interface RunAgentPayload extends SubmitMessagePayload {
   runtimeTarget?: OpenCodeRuntimeTarget;
   projectPath?: string;
   sessionId: string;

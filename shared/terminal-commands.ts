@@ -1,8 +1,8 @@
-export interface BuildCliOpencodeAttachCommandOptions {
+interface BuildCliOpencodeAttachCommandOptions {
   platform?: NodeJS.Platform;
 }
 
-export function quotePortableShellArg(
+function quotePortableShellArg(
   value: string,
   platform: NodeJS.Platform = process.platform,
 ): string {

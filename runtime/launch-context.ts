@@ -1,12 +1,12 @@
 import path from "node:path";
 
-export interface ResolveLaunchContextInput {
+interface ResolveLaunchContextInput {
   argv: string[];
   env: NodeJS.ProcessEnv;
   defaultCwd: string;
 }
 
-export interface LaunchContext {
+interface LaunchContext {
   launchTaskId: string | null;
   launchCwd: string;
 }

@@ -1,4 +1,4 @@
-export interface AgentPanelColorToken {
+interface AgentPanelColorToken {
   background: string;
   border: string;
 }

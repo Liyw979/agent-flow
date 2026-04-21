@@ -1,4 +1,4 @@
-export interface TaskAttachCommandEntry {
+interface TaskAttachCommandEntry {
   agentName: string;
   opencodeAttachCommand: string | null;
 }

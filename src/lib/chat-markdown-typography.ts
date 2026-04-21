@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 
-export type ChatMarkdownTypography = {
+type ChatMarkdownTypography = {
   bodyFontSizeRem: number;
   headingFontSizeEm: number;
   codeFontSizeEm: number;
