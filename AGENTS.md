@@ -200,6 +200,7 @@ bun run cli -- help
 ```
 
 - 前端开发或修改 UI 相关文件后，必须执行 `bun run build`，生成最新的 `dist/web/`，避免浏览器继续读取旧 UI 产物。
+- `task ui` 与内部 `web-host` 只会读取已构建好的 `dist/web/` 或编译产物内嵌的网页资源；源码运行时若缺少最新 `dist/web/`，会直接报错，不会再自动起 Vite 开发服务器兜底。
 
 常用构建命令：
 

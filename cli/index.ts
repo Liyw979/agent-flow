@@ -325,10 +325,10 @@ async function openBrowser(url: string) {
 
 async function ensureWebAssets(userDataPath: string) {
   const assets = await ensureRuntimeAssets(userDataPath);
-  if (assets.webRoot || assets.sourceRoot) {
+  if (assets.webRoot) {
     return assets;
   }
-  fail("网页资源不可用，无法启动浏览器 UI。");
+  fail("网页资源不可用，无法启动浏览器 UI。源码运行前请先执行 bun run build 生成 dist/web。");
 }
 
 async function ensureUiHost(
@@ -405,9 +405,8 @@ async function runInternalWebHost(command: InternalWebHostCommand) {
   });
   const assets = await ensureRuntimeAssets(context.userDataPath);
   const webRoot = assets.webRoot ?? process.env.AGENT_TEAM_WEB_ROOT ?? null;
-  const sourceRoot = assets.sourceRoot;
-  if (!webRoot && !sourceRoot) {
-    fail("网页资源不可用，无法启动内部 web-host。");
+  if (!webRoot) {
+    fail("网页资源不可用，无法启动内部 web-host。源码运行前请先执行 bun run build 生成 dist/web。");
   }
 
   const task = await context.orchestrator.getTaskSnapshot(command.taskId);
@@ -427,7 +426,6 @@ async function runInternalWebHost(command: InternalWebHostCommand) {
     taskId: command.taskId,
     port: command.port,
     webRoot,
-    sourceRoot,
   });
 
   const shutdown = async () => {

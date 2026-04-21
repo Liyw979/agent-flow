@@ -17,7 +17,29 @@ const WEB_SOURCE_WATCH_PATHS = [
 
 export interface ResolvedRuntimeAssets {
   webRoot: string | null;
-  sourceRoot: string | null;
+}
+
+export function resolveSourceAssetFallback(input: {
+  hasExplicitWebRoot: boolean;
+  repoWebRootExists: boolean;
+  distBuiltAtMs: number | null;
+  latestSourceUpdatedAtMs: number | null;
+}): "webRoot" | "unavailable" {
+  if (input.hasExplicitWebRoot) {
+    return "unavailable";
+  }
+
+  if (!input.repoWebRootExists) {
+    return "unavailable";
+  }
+
+  if (!Number.isFinite(input.distBuiltAtMs) || !Number.isFinite(input.latestSourceUpdatedAtMs)) {
+    return "unavailable";
+  }
+
+  return (input.distBuiltAtMs ?? 0) >= (input.latestSourceUpdatedAtMs ?? 0)
+    ? "webRoot"
+    : "unavailable";
 }
 
 export function isCompiledRuntime(): boolean {
@@ -35,19 +57,7 @@ export function shouldReuseRepoWebDist(input: {
   distBuiltAtMs: number | null;
   latestSourceUpdatedAtMs: number | null;
 }) {
-  if (input.hasExplicitWebRoot) {
-    return false;
-  }
-
-  if (!input.repoWebRootExists) {
-    return false;
-  }
-
-  if (!Number.isFinite(input.distBuiltAtMs) || !Number.isFinite(input.latestSourceUpdatedAtMs)) {
-    return false;
-  }
-
-  return (input.distBuiltAtMs ?? 0) >= (input.latestSourceUpdatedAtMs ?? 0);
+  return resolveSourceAssetFallback(input) === "webRoot";
 }
 
 function getLatestMtimeMs(targetPath: string): number | null {
@@ -92,7 +102,6 @@ export async function ensureRuntimeAssets(userDataPath: string): Promise<Resolve
   fs.mkdirSync(runtimeRoot, { recursive: true });
 
   let webRoot: string | null = process.env.AGENT_TEAM_WEB_ROOT?.trim() || null;
-  let sourceRoot: string | null = null;
 
   if (isCompiledRuntime()) {
     if (!webRoot && EMBEDDED_WEB_ASSETS.length > 0) {
@@ -114,8 +123,6 @@ export async function ensureRuntimeAssets(userDataPath: string): Promise<Resolve
         latestSourceUpdatedAtMs: getLatestRepoWebSourceUpdatedAtMs(),
       })) {
         webRoot = repoWebRoot;
-      } else {
-        sourceRoot = REPO_ROOT;
       }
     }
   }
@@ -128,6 +135,5 @@ export async function ensureRuntimeAssets(userDataPath: string): Promise<Resolve
 
   return {
     webRoot,
-    sourceRoot,
   };
 }
