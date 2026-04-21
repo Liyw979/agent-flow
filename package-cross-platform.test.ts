@@ -27,3 +27,9 @@ test("AGENTS.md 同步记录 macOS 打包产物", () => {
   assert.match(AGENTS_MD, /dist\/agent-team-macos-arm64/);
   assert.match(AGENTS_MD, /dist\/agent-team-macos-x64/);
 });
+
+test("AGENTS.md 记录前端修改后需要执行 bun run build 刷新最新 UI", () => {
+  assert.match(AGENTS_MD, /bun run build/);
+  assert.match(AGENTS_MD, /每次修改.*bun run build|修改.*需要执行 `bun run build`/);
+  assert.match(AGENTS_MD, /dist\/web/);
+});

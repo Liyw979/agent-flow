@@ -59,6 +59,11 @@ test("CLI 会通过内部 web-host 模式拉起浏览器 UI", () => {
   assert.doesNotMatch(CLI_SOURCE, /spawnUi\(/);
 });
 
+test("task ui 不会在用户入口里触发 build:web 编译", () => {
+  assert.doesNotMatch(CLI_SOURCE, /npmCommand/);
+  assert.doesNotMatch(CLI_SOURCE, /build:web/);
+});
+
 test("task ui 在任务结束后会继续驻留，等待 Ctrl\\+C 再清理", () => {
   assert.match(CLI_SOURCE, /keepAliveUntilSignal/);
   assert.match(CLI_SOURCE, /await new Promise<void>\(\(\) => undefined\)/);

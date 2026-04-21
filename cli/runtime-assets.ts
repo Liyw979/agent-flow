@@ -5,9 +5,19 @@ import packageJson from "../package.json";
 import { EMBEDDED_WEB_ASSETS } from "./generated-embedded-assets";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const WEB_SOURCE_WATCH_PATHS = [
+  "src",
+  "shared",
+  "index.html",
+  "package.json",
+  "postcss.config.js",
+  "tailwind.config.ts",
+  "vite.config.ts",
+] as const;
 
 export interface ResolvedRuntimeAssets {
   webRoot: string | null;
+  sourceRoot: string | null;
 }
 
 export function isCompiledRuntime(): boolean {
@@ -19,11 +29,70 @@ export function getRepoWebDistRoot(): string {
   return path.join(REPO_ROOT, "dist", "web");
 }
 
+export function shouldReuseRepoWebDist(input: {
+  hasExplicitWebRoot: boolean;
+  repoWebRootExists: boolean;
+  distBuiltAtMs: number | null;
+  latestSourceUpdatedAtMs: number | null;
+}) {
+  if (input.hasExplicitWebRoot) {
+    return false;
+  }
+
+  if (!input.repoWebRootExists) {
+    return false;
+  }
+
+  if (!Number.isFinite(input.distBuiltAtMs) || !Number.isFinite(input.latestSourceUpdatedAtMs)) {
+    return false;
+  }
+
+  return (input.distBuiltAtMs ?? 0) >= (input.latestSourceUpdatedAtMs ?? 0);
+}
+
+function getLatestMtimeMs(targetPath: string): number | null {
+  if (!fs.existsSync(targetPath)) {
+    return null;
+  }
+
+  const stat = fs.statSync(targetPath);
+  if (stat.isFile()) {
+    return stat.mtimeMs;
+  }
+
+  if (!stat.isDirectory()) {
+    return null;
+  }
+
+  let latest = stat.mtimeMs;
+  for (const entry of fs.readdirSync(targetPath, { withFileTypes: true })) {
+    const childLatest = getLatestMtimeMs(path.join(targetPath, entry.name));
+    if (typeof childLatest === "number" && childLatest > latest) {
+      latest = childLatest;
+    }
+  }
+  return latest;
+}
+
+function getLatestRepoWebSourceUpdatedAtMs() {
+  let latest: number | null = null;
+
+  for (const relativePath of WEB_SOURCE_WATCH_PATHS) {
+    const candidate = getLatestMtimeMs(path.join(REPO_ROOT, relativePath));
+    if (typeof candidate === "number" && (latest === null || candidate > latest)) {
+      latest = candidate;
+    }
+  }
+
+  return latest;
+}
+
 export async function ensureRuntimeAssets(userDataPath: string): Promise<ResolvedRuntimeAssets> {
   const runtimeRoot = path.join(userDataPath, "runtime", packageJson.version);
   fs.mkdirSync(runtimeRoot, { recursive: true });
 
   let webRoot: string | null = process.env.AGENT_TEAM_WEB_ROOT?.trim() || null;
+  let sourceRoot: string | null = null;
 
   if (isCompiledRuntime()) {
     if (!webRoot && EMBEDDED_WEB_ASSETS.length > 0) {
@@ -37,17 +106,28 @@ export async function ensureRuntimeAssets(userDataPath: string): Promise<Resolve
   } else {
     if (!webRoot) {
       const repoWebRoot = getRepoWebDistRoot();
-      if (fs.existsSync(path.join(repoWebRoot, "index.html"))) {
+      const repoIndexPath = path.join(repoWebRoot, "index.html");
+      if (shouldReuseRepoWebDist({
+        hasExplicitWebRoot: false,
+        repoWebRootExists: fs.existsSync(repoIndexPath),
+        distBuiltAtMs: fs.existsSync(repoIndexPath) ? fs.statSync(repoIndexPath).mtimeMs : null,
+        latestSourceUpdatedAtMs: getLatestRepoWebSourceUpdatedAtMs(),
+      })) {
         webRoot = repoWebRoot;
+      } else {
+        sourceRoot = REPO_ROOT;
       }
     }
   }
 
   if (webRoot) {
     process.env.AGENT_TEAM_WEB_ROOT = webRoot;
+  } else {
+    delete process.env.AGENT_TEAM_WEB_ROOT;
   }
 
   return {
     webRoot,
+    sourceRoot,
   };
 }

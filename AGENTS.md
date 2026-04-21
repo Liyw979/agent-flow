@@ -199,6 +199,8 @@ bun install
 bun run cli -- help
 ```
 
+- 前端开发或修改 UI 相关文件后，必须执行 `bun run build`，生成最新的 `dist/web/`，避免浏览器继续读取旧 UI 产物。
+
 常用构建命令：
 
 ```bash
@@ -220,6 +222,7 @@ bun run dist:mac-x64
 - Windows 主程序位于 `dist/agent-team.exe`。
 - 打包后的网页静态资源会内嵌在编译产物中，并在运行时自动释放到本地 runtime 目录。
 - 如果只想单独刷新网页产物，可以执行 `bun run build`。
+- 每次修改前端页面、样式或共享前端数据结构后，都必须执行 `bun run build`，把最新的 UI 产物刷新到 `dist/web/`。
 
 ## 7. 文档同步要求
 

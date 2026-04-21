@@ -10,13 +10,15 @@ import type {
   UiBootstrapPayload,
 } from "@shared/types";
 import type { Orchestrator } from "../runtime/orchestrator";
+import type { ViteDevServer } from "vite";
 
 interface StartWebHostOptions {
   orchestrator: Orchestrator;
   cwd: string;
   taskId: string;
   port: number;
-  webRoot: string;
+  webRoot: string | null;
+  sourceRoot: string | null;
 }
 
 function json(response: http.ServerResponse, statusCode: number, body: unknown) {
@@ -106,6 +108,20 @@ export async function startWebHost(
   options: StartWebHostOptions,
 ): Promise<{ close: () => Promise<void> }> {
   const subscriptions = new Set<http.ServerResponse>();
+  let viteServer: ViteDevServer | null = null;
+
+  if (!options.webRoot && options.sourceRoot) {
+    const { createServer } = await import("vite");
+    viteServer = await createServer({
+      root: options.sourceRoot,
+      appType: "spa",
+      clearScreen: false,
+      server: {
+        middlewareMode: true,
+      },
+    });
+  }
+
   const unsubscribe = options.orchestrator.subscribe((event: AgentTeamEvent) => {
     if (event.cwd !== options.cwd) {
       return;
@@ -184,9 +200,21 @@ export async function startWebHost(
         return;
       }
 
-      const filePath = resolveStaticFilePath(options.webRoot, url.pathname);
-      response.writeHead(200, buildStaticFileHeaders(filePath));
-      fs.createReadStream(filePath).pipe(response);
+      if (options.webRoot) {
+        const filePath = resolveStaticFilePath(options.webRoot, url.pathname);
+        response.writeHead(200, buildStaticFileHeaders(filePath));
+        fs.createReadStream(filePath).pipe(response);
+        return;
+      }
+
+      if (viteServer) {
+        viteServer.middlewares(request, response, () => {
+          text(response, 404, "not found");
+        });
+        return;
+      }
+
+      text(response, 500, "web assets unavailable");
     } catch (error) {
       json(response, 500, {
         message: error instanceof Error ? error.message : String(error),
@@ -206,6 +234,7 @@ export async function startWebHost(
         response.end();
       }
       subscriptions.clear();
+      await viteServer?.close();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {

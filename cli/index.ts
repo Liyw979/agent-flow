@@ -253,28 +253,6 @@ async function renderTaskMessages(
   }
 }
 
-async function buildWebAssetsFromSource() {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(npmCommand, ["run", "build:web"], {
-      cwd: CLI_REPO_ROOT,
-      stdio: "inherit",
-    });
-    child.on("error", reject);
-    child.on("exit", (code, signal) => {
-      if (signal) {
-        reject(new Error(`build:web 被信号中断：${signal}`));
-        return;
-      }
-      if ((code ?? 0) !== 0) {
-        reject(new Error(`build:web 退出码异常：${code ?? 0}`));
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
 async function reservePort(
   host: string,
   port: number,
@@ -345,20 +323,11 @@ async function openBrowser(url: string) {
   child.unref();
 }
 
-async function ensureWebRoot(userDataPath: string): Promise<string> {
-  let assets = await ensureRuntimeAssets(userDataPath);
-  if (assets.webRoot) {
-    return assets.webRoot;
+async function ensureWebAssets(userDataPath: string) {
+  const assets = await ensureRuntimeAssets(userDataPath);
+  if (assets.webRoot || assets.sourceRoot) {
+    return assets;
   }
-
-  if (!isCompiledRuntime()) {
-    await buildWebAssetsFromSource();
-    assets = await ensureRuntimeAssets(userDataPath);
-    if (assets.webRoot) {
-      return assets.webRoot;
-    }
-  }
-
   fail("网页资源不可用，无法启动浏览器 UI。");
 }
 
@@ -367,7 +336,7 @@ async function ensureUiHost(
   cwd: string,
   taskId: string,
 ): Promise<{ port: number; url: string }> {
-  await ensureWebRoot(context.userDataPath);
+  await ensureWebAssets(context.userDataPath);
   const port = await resolveUiPort();
   const runtimeSeed = context.orchestrator.exportTaskRuntime(taskId, cwd);
   const spec = isCompiledRuntime()
@@ -436,7 +405,8 @@ async function runInternalWebHost(command: InternalWebHostCommand) {
   });
   const assets = await ensureRuntimeAssets(context.userDataPath);
   const webRoot = assets.webRoot ?? process.env.AGENT_TEAM_WEB_ROOT ?? null;
-  if (!webRoot) {
+  const sourceRoot = assets.sourceRoot;
+  if (!webRoot && !sourceRoot) {
     fail("网页资源不可用，无法启动内部 web-host。");
   }
 
@@ -457,6 +427,7 @@ async function runInternalWebHost(command: InternalWebHostCommand) {
     taskId: command.taskId,
     port: command.port,
     webRoot,
+    sourceRoot,
   });
 
   const shutdown = async () => {
