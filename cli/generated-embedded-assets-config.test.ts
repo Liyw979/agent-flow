@@ -34,3 +34,11 @@ test("generated-embedded-assets.ts 会被 git ignore", () => {
   const gitIgnore = fs.readFileSync(new URL("../.gitignore", import.meta.url), "utf8");
   assert.match(gitIgnore, /^cli\/generated-embedded-assets\.ts$/m);
 });
+
+test("generated-embedded-assets.ts 会包含 index.html，确保 exe 内嵌前端入口页", () => {
+  const generatedSource = fs.readFileSync(
+    new URL("./generated-embedded-assets.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(generatedSource, /relativePath: "index\.html"/);
+});

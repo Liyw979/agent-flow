@@ -5,6 +5,12 @@ import fs from "node:fs";
 const CLI_SOURCE = fs.readFileSync(new URL("./index.ts", import.meta.url), "utf8");
 const REMOVED_TERMINAL_HOST = String.fromCharCode(122, 101, 108, 108, 105, 106);
 
+function isUiAssetPreflightBeforeTaskSubmit(source: string): boolean {
+  const preflightIndex = source.indexOf("await ensureUiAssetsAvailable(context.userDataPath)");
+  const submitIndex = source.indexOf("const snapshot = await context.orchestrator.submitTask(");
+  return preflightIndex !== -1 && submitIndex !== -1 && preflightIndex < submitIndex;
+}
+
 test("CLI 不再兼容旧的 review relation 别名", () => {
   assert.doesNotMatch(CLI_SOURCE, /relation === "review"/);
 });
@@ -60,6 +66,27 @@ test("CLI 会在当前进程里直接启动 web-host 并打开浏览器 UI", () 
   assert.doesNotMatch(CLI_SOURCE, /async function openBrowser\(/);
   assert.doesNotMatch(CLI_SOURCE, /internal web-host/);
   assert.doesNotMatch(CLI_SOURCE, /buildUiHostLaunchSpec/);
+});
+
+test("task ui 会在启动 web host 前先打印日志摘要", () => {
+  const taskUiSection = CLI_SOURCE.match(
+    /async function handleTaskUiCommand[\s\S]*?const snapshot = await context\.orchestrator\.submitTask\([\s\S]*?return host;\n\}/,
+  )?.[0];
+
+  assert.ok(taskUiSection);
+  assert.match(
+    taskUiSection,
+    /printTaskRunDiagnostics\(diagnostics, snapshot\.task\.id\);[\s\S]*?await ensureUiHost\(context, snapshot\.task\.cwd, snapshot\.task\.id, webRoot\);/,
+  );
+});
+
+test("task ui 会在提交任务前先做 UI 静态资源预检，避免先等待 agent 初始化后才报前端资源错误", () => {
+  const taskUiSection = CLI_SOURCE.match(
+    /async function handleTaskUiCommand[\s\S]*?return host;\n\}/,
+  )?.[0];
+
+  assert.ok(taskUiSection);
+  assert.equal(isUiAssetPreflightBeforeTaskSubmit(taskUiSection), true);
 });
 
 test("task ui 不会在用户入口里触发 build:web 编译", () => {

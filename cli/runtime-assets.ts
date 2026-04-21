@@ -19,6 +19,19 @@ interface ResolvedRuntimeAssets {
   webRoot: string | null;
 }
 
+interface ResolveRuntimeWebRootInput {
+  explicitWebRoot: string | null;
+  explicitIndexHtmlExists: boolean;
+  fallbackWebRoot: string | null;
+  fallbackIndexHtmlExists: boolean;
+}
+
+interface ResolveCompiledEmbeddedWebRootInput {
+  explicitWebRoot: string | null;
+  runtimeRoot: string;
+  embeddedAssetRelativePaths: string[];
+}
+
 export function resolveSourceAssetFallback(input: {
   hasExplicitWebRoot: boolean;
   repoWebRootExists: boolean;
@@ -58,6 +71,37 @@ export function shouldReuseRepoWebDist(input: {
   latestSourceUpdatedAtMs: number | null;
 }) {
   return resolveSourceAssetFallback(input) === "webRoot";
+}
+
+export function resolveCompiledEmbeddedWebRoot(input: ResolveCompiledEmbeddedWebRootInput): string | null {
+  if (input.explicitWebRoot) {
+    return null;
+  }
+
+  return input.embeddedAssetRelativePaths.includes("index.html")
+    ? path.join(input.runtimeRoot, "web")
+    : null;
+}
+
+export function resolveRuntimeWebRoot(input: ResolveRuntimeWebRootInput): string | null {
+  if (input.explicitWebRoot) {
+    return input.explicitIndexHtmlExists ? input.explicitWebRoot : null;
+  }
+
+  if (!input.fallbackWebRoot) {
+    return null;
+  }
+
+  return input.fallbackIndexHtmlExists ? input.fallbackWebRoot : null;
+}
+
+function hasIndexHtmlFile(webRoot: string | null): boolean {
+  if (!webRoot) {
+    return false;
+  }
+
+  const indexPath = path.join(webRoot, "index.html");
+  return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
 }
 
 function getLatestMtimeMs(targetPath: string): number | null {
@@ -101,19 +145,25 @@ export async function ensureRuntimeAssets(userDataPath: string): Promise<Resolve
   const runtimeRoot = path.join(userDataPath, "runtime", packageJson.version);
   fs.mkdirSync(runtimeRoot, { recursive: true });
 
-  let webRoot: string | null = process.env.AGENT_TEAM_WEB_ROOT?.trim() || null;
+  const explicitWebRoot = process.env.AGENT_TEAM_WEB_ROOT?.trim() || null;
+  let fallbackWebRoot: string | null = null;
 
   if (isCompiledRuntime()) {
-    if (!webRoot && EMBEDDED_WEB_ASSETS.length > 0) {
-      webRoot = path.join(runtimeRoot, "web");
+    const compiledEmbeddedWebRoot = resolveCompiledEmbeddedWebRoot({
+      explicitWebRoot,
+      runtimeRoot,
+      embeddedAssetRelativePaths: EMBEDDED_WEB_ASSETS.map((asset) => asset.relativePath),
+    });
+    if (compiledEmbeddedWebRoot) {
+      fallbackWebRoot = compiledEmbeddedWebRoot;
       for (const asset of EMBEDDED_WEB_ASSETS) {
-        const targetPath = path.join(webRoot, asset.relativePath);
+        const targetPath = path.join(fallbackWebRoot, asset.relativePath);
         fs.mkdirSync(path.dirname(targetPath), { recursive: true });
         fs.writeFileSync(targetPath, Buffer.from(asset.base64, "base64"));
       }
     }
   } else {
-    if (!webRoot) {
+    if (!explicitWebRoot) {
       const repoWebRoot = getRepoWebDistRoot();
       const repoIndexPath = path.join(repoWebRoot, "index.html");
       if (shouldReuseRepoWebDist({
@@ -122,10 +172,17 @@ export async function ensureRuntimeAssets(userDataPath: string): Promise<Resolve
         distBuiltAtMs: fs.existsSync(repoIndexPath) ? fs.statSync(repoIndexPath).mtimeMs : null,
         latestSourceUpdatedAtMs: getLatestRepoWebSourceUpdatedAtMs(),
       })) {
-        webRoot = repoWebRoot;
+        fallbackWebRoot = repoWebRoot;
       }
     }
   }
+
+  const webRoot = resolveRuntimeWebRoot({
+    explicitWebRoot,
+    explicitIndexHtmlExists: hasIndexHtmlFile(explicitWebRoot),
+    fallbackWebRoot,
+    fallbackIndexHtmlExists: hasIndexHtmlFile(fallbackWebRoot),
+  });
 
   if (webRoot) {
     process.env.AGENT_TEAM_WEB_ROOT = webRoot;

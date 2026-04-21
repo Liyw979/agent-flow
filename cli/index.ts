@@ -19,7 +19,7 @@ import {
 } from "./cli-command";
 import { resolveCliDisposeOptions } from "./cli-dispose-policy";
 import { resolveCliSignalPlan } from "./cli-signal-policy";
-import { ensureRuntimeAssets } from "./runtime-assets";
+import { ensureRuntimeAssets, isCompiledRuntime } from "./runtime-assets";
 import { resolveCliTaskStreamingPlan } from "./task-streaming-policy";
 import { renderTaskSessionSummary } from "./task-session-summary";
 import { renderTaskAttachCommands } from "./task-attach-display";
@@ -261,12 +261,8 @@ async function ensureUiHost(
   context: CliContext,
   cwd: string,
   taskId: string,
+  webRoot: string,
 ) : Promise<{ host: ActiveUiHost; port: number; url: string }> {
-  const assets = await ensureRuntimeAssets(context.userDataPath);
-  const webRoot = assets.webRoot ?? process.env.AGENT_TEAM_WEB_ROOT ?? null;
-  if (!webRoot) {
-    fail("网页资源不可用，无法启动浏览器 UI。源码运行前请先执行 bun run build 生成 dist/web。");
-  }
   const port = await resolveUiPort();
   const host = await startWebHost({
     orchestrator: context.orchestrator,
@@ -283,6 +279,20 @@ async function ensureUiHost(
       taskId,
     }),
   };
+}
+
+async function ensureUiAssetsAvailable(userDataPath: string): Promise<string> {
+  const assets = await ensureRuntimeAssets(userDataPath);
+  const webRoot = assets.webRoot ?? process.env.AGENT_TEAM_WEB_ROOT ?? null;
+  if (webRoot) {
+    return webRoot;
+  }
+
+  fail(
+    isCompiledRuntime()
+      ? "网页资源不可用：当前编译产物未内嵌可访问的静态入口文件 index.html，无法启动浏览器 UI。请先执行 bun run build，再重新运行 bun run dist:win 生成新的 agent-team.exe。"
+      : "网页资源不可用：缺少可访问的静态入口文件 index.html，无法启动浏览器 UI。源码运行前请先执行 bun run build 生成 dist/web。",
+  );
 }
 
 async function handleTaskHeadlessCommand(
@@ -329,13 +339,14 @@ async function handleTaskUiCommand(
 
   let workspace = await resolveProject(context, command.cwd);
   workspace = await ensureJsonTopologyApplied(context, workspace, command.file!);
+  const webRoot = await ensureUiAssetsAvailable(context.userDataPath);
   const snapshot = await context.orchestrator.submitTask({
     cwd: workspace.cwd,
     taskId: null,
     content: command.message!.trim(),
   });
-  const { host, url } = await ensureUiHost(context, snapshot.task.cwd, snapshot.task.id);
   printTaskRunDiagnostics(diagnostics, snapshot.task.id);
+  const { host, url } = await ensureUiHost(context, snapshot.task.cwd, snapshot.task.id, webRoot);
   process.stdout.write(`[UI] ${url}\n`);
   await open(url);
   if (streamingPlan.enabled) {
