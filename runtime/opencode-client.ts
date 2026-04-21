@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { buildSubmitMessageBody } from "./opencode-request-body";
 import { toOpenCodeAgentName } from "./opencode-agent-name";
@@ -77,7 +77,6 @@ interface SessionWaiter {
 interface ProjectServerState {
   runtimeKey: string;
   projectPath: string;
-  runtimeDir: string;
   serverHandle: Promise<ServeHandle> | null;
   eventPump: Promise<void> | null;
   injectedConfigContent: string | null;
@@ -97,16 +96,11 @@ export interface OpenCodeShutdownReport {
 export class OpenCodeClient {
   private readonly servers = new Map<string, ProjectServerState>();
   private readonly host = "127.0.0.1";
-  private readonly runtimeRoot: string;
   private readonly sessionIdleAt = new Map<string, number>();
   private readonly sessionErrors = new Map<string, string>();
   private readonly sessionWaiters = new Map<string, SessionWaiter[]>();
 
-  constructor(runtimeRoot?: string) {
-    const baseDir = runtimeRoot ? path.resolve(runtimeRoot) : path.join(process.cwd(), ".agent-team");
-    this.runtimeRoot = path.join(baseDir, "opencode-runtime", "servers");
-    fs.mkdirSync(this.runtimeRoot, { recursive: true });
-  }
+  constructor(_runtimeRoot?: string) {}
 
   private normalizeTarget(target: OpenCodeRuntimeTargetInput): OpenCodeRuntimeTarget {
     if (typeof target === "string") {
@@ -137,16 +131,9 @@ export class OpenCodeClient {
       return existing;
     }
 
-    const basename = path.basename(normalized.projectPath) || "project";
-    const safeBasename = basename.replace(/[^a-zA-Z0-9._-]/g, "_") || "project";
-    const digest = createHash("sha1").update(key).digest("hex").slice(0, 12);
-    const runtimeDir = path.join(this.runtimeRoot, `${safeBasename}-${digest}`);
-    fs.mkdirSync(runtimeDir, { recursive: true });
-
     const created: ProjectServerState = {
       runtimeKey: key,
       projectPath: normalized.projectPath,
-      runtimeDir,
       serverHandle: null,
       eventPump: null,
       injectedConfigContent: null,
@@ -432,9 +419,6 @@ export class OpenCodeClient {
     }
 
     this.servers.delete(key);
-    if (fs.existsSync(state.runtimeDir)) {
-      fs.rmSync(state.runtimeDir, { recursive: true, force: true });
-    }
   }
 
   private async terminateServeHandle(server: ServeHandle): Promise<OpenCodeShutdownReport> {
@@ -607,7 +591,6 @@ export class OpenCodeClient {
     delete serverEnv.OPENCODE_CONFIG_DIR;
     delete serverEnv.OPENCODE_DB;
     delete serverEnv.OPENCODE_CLIENT;
-    serverEnv.OPENCODE_DB = path.join(state.runtimeDir, "opencode-server.db");
     serverEnv.OPENCODE_CLIENT = "agent-team-orchestrator";
     serverEnv.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
     if (state.injectedConfigContent) {
@@ -615,7 +598,6 @@ export class OpenCodeClient {
     }
     appendAppLog("info", "opencode.serve_starting", {
       projectPath: state.projectPath,
-      runtimeDir: state.runtimeDir,
     });
     const launchArgs = ["serve"];
     const spawnSpec = process.platform === "win32"
@@ -660,7 +642,6 @@ export class OpenCodeClient {
       await this.killChildProcessTree(childProcess).catch(() => undefined);
       appendAppLog("error", "opencode.serve_start_failed", {
         projectPath: state.projectPath,
-        runtimeDir: state.runtimeDir,
         command: spawnSpec.command,
         args: spawnSpec.args,
         message: error instanceof Error ? error.message : String(error),
@@ -678,7 +659,6 @@ export class OpenCodeClient {
       await this.killChildProcessTree(childProcess).catch(() => undefined);
       appendAppLog("error", "opencode.serve_start_failed", {
         projectPath: state.projectPath,
-        runtimeDir: state.runtimeDir,
         port,
         baseUrl,
         command: spawnSpec.command,
@@ -692,7 +672,6 @@ export class OpenCodeClient {
 
     appendAppLog("info", "opencode.serve_started", {
       projectPath: state.projectPath,
-      runtimeDir: state.runtimeDir,
       port,
       baseUrl,
       command: spawnSpec.command,

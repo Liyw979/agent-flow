@@ -14,7 +14,6 @@ function createClient(projectPath = createTempDir()) {
   const client = new OpenCodeClient(createTempDir()) as OpenCodeClient & {
     servers: Map<string, {
       projectPath: string;
-      runtimeDir: string;
       serverHandle: Promise<{ process: null; port: number }> | null;
       eventPump: Promise<void> | null;
       injectedConfigContent: string | null;
@@ -26,7 +25,6 @@ function createClient(projectPath = createTempDir()) {
   const normalizedProjectPath = path.resolve(projectPath);
   client.servers.set(normalizedProjectPath, {
       projectPath: normalizedProjectPath,
-      runtimeDir: createTempDir(),
       serverHandle: Promise.resolve({
         process: null,
         port: 43127,
@@ -45,7 +43,6 @@ test("request 会跟随当前 serverHandle 的实际端口", async () => {
   const typed = client as OpenCodeClient & {
     servers: Map<string, {
       projectPath: string;
-      runtimeDir: string;
       serverHandle: Promise<{ process: null; port: number }> | null;
       eventPump: Promise<void> | null;
       injectedConfigContent: string | null;

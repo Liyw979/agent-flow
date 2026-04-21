@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-
 import { Annotation, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 
 import {
@@ -15,18 +12,12 @@ import type {
   LangGraphInputEvent,
   LangGraphTaskLoopHost,
 } from "./langgraph-host";
-import { writeFileAtomic } from "./atomic-file";
 
 interface RuntimeEnvelope {
   graphState: GraphTaskState | null;
   pendingInput: LangGraphInputEvent | null;
   lastDecision: GraphRoutingDecision | null;
   lastError: string | null;
-}
-
-interface SerializedThreadState {
-  storage: Record<string, Record<string, [string, string, string | undefined]>>;
-  writes: Record<string, Record<string, [string, string, string]>>;
 }
 
 const RuntimeAnnotation = Annotation.Root({
@@ -48,152 +39,6 @@ const RuntimeAnnotation = Annotation.Root({
   }),
 });
 
-class FileMemorySaver extends MemorySaver {
-  private readonly loadedThreads = new Set<string>();
-
-  constructor(private readonly baseDir: string) {
-    super();
-  }
-
-  override async getTuple(config: { configurable?: { thread_id?: string } }) {
-    await this.ensureLoaded(config.configurable?.thread_id);
-    return super.getTuple(config);
-  }
-
-  override async put(config: Parameters<MemorySaver["put"]>[0], checkpoint: Parameters<MemorySaver["put"]>[1], metadata: Parameters<MemorySaver["put"]>[2]) {
-    await this.ensureLoaded(config.configurable?.thread_id);
-    const nextConfig = await super.put(config, checkpoint, metadata);
-    await this.flushThread(config.configurable?.thread_id);
-    return nextConfig;
-  }
-
-  override async putWrites(
-    config: Parameters<MemorySaver["putWrites"]>[0],
-    writes: Parameters<MemorySaver["putWrites"]>[1],
-    taskId: Parameters<MemorySaver["putWrites"]>[2],
-  ) {
-    await this.ensureLoaded(config.configurable?.thread_id);
-    await super.putWrites(config, writes, taskId);
-    await this.flushThread(config.configurable?.thread_id);
-  }
-
-  override async deleteThread(threadId: string) {
-    await super.deleteThread(threadId);
-    this.loadedThreads.delete(threadId);
-    await fs.rm(this.getThreadPath(threadId), { force: true }).catch(() => undefined);
-  }
-
-  private async ensureLoaded(threadId: string | undefined) {
-    if (!threadId || this.loadedThreads.has(threadId)) {
-      return;
-    }
-    await fs.mkdir(this.baseDir, { recursive: true });
-    const filePath = this.getThreadPath(threadId);
-    const fileContent = await fs.readFile(filePath, "utf8").catch(() => "");
-    if (fileContent) {
-      let parsed: SerializedThreadState;
-      try {
-        parsed = JSON.parse(fileContent) as SerializedThreadState;
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        throw new Error(`${filePath} JSON 解析失败：${reason}`);
-      }
-      this.storage[threadId] = Object.fromEntries(
-        Object.entries(parsed.storage ?? {}).map(([namespace, checkpoints]) => [
-          namespace,
-          Object.fromEntries(
-            Object.entries(checkpoints).map(([checkpointId, tuple]) => [
-              checkpointId,
-              [
-                decodeBinary(tuple[0]),
-                decodeBinary(tuple[1]),
-                tuple[2],
-              ] as [Uint8Array, Uint8Array, string | undefined],
-            ]),
-          ),
-        ]),
-      );
-      for (const [outerKey, nestedWrites] of Object.entries(parsed.writes ?? {})) {
-        this.writes[outerKey] = Object.fromEntries(
-          Object.entries(nestedWrites).map(([innerKey, value]) => [
-            innerKey,
-            [
-              value[0],
-              value[1],
-              decodeBinary(value[2]),
-            ] as [string, string, Uint8Array],
-          ]),
-        );
-      }
-    }
-    this.loadedThreads.add(threadId);
-  }
-
-  private async flushThread(threadId: string | undefined) {
-    if (!threadId) {
-      return;
-    }
-    await fs.mkdir(this.baseDir, { recursive: true });
-    const filePath = this.getThreadPath(threadId);
-    const threadWrites = Object.fromEntries(
-      Object.entries(this.writes)
-        .filter(([outerKey]) => outerKey.includes(`"${threadId}"`))
-        .map(([outerKey, nestedWrites]) => [
-          outerKey,
-          Object.fromEntries(
-            Object.entries(nestedWrites).map(([innerKey, value]) => [
-              innerKey,
-              [
-                value[0],
-                value[1],
-                encodeBinary(value[2]),
-              ] as [string, string, string],
-            ]),
-          ),
-        ]),
-    );
-    const threadStorage = Object.fromEntries(
-      Object.entries(this.storage[threadId] ?? {}).map(([namespace, checkpoints]) => [
-        namespace,
-        Object.fromEntries(
-          Object.entries(checkpoints).map(([checkpointId, tuple]) => [
-            checkpointId,
-            [
-              encodeBinary(tuple[0]),
-              encodeBinary(tuple[1]),
-              tuple[2],
-            ] as [string, string, string | undefined],
-          ]),
-        ),
-      ]),
-    );
-    await writeFileAtomic(
-      filePath,
-      JSON.stringify(
-        {
-          storage: threadStorage,
-          writes: threadWrites,
-        } satisfies SerializedThreadState,
-        null,
-        2,
-      ),
-      "utf8",
-    );
-  }
-
-  private getThreadPath(threadId: string) {
-    return path.join(this.baseDir, `${threadId}.json`);
-  }
-}
-
-function encodeBinary(value: Uint8Array): string {
-  return Buffer.from(value).toString("base64");
-}
-
-function decodeBinary(value: string): Uint8Array {
-  return Uint8Array.from(Buffer.from(value, "base64"));
-}
-
 function runtimeConfig(taskId: string) {
   return {
     configurable: {
@@ -203,16 +48,15 @@ function runtimeConfig(taskId: string) {
 }
 
 export class LangGraphRuntime {
-  private readonly checkpointer: FileMemorySaver;
+  private readonly checkpointer: MemorySaver;
   private readonly graph;
 
   constructor(
     private readonly options: {
-      checkpointDir: string;
       host: LangGraphTaskLoopHost;
     },
   ) {
-    this.checkpointer = new FileMemorySaver(options.checkpointDir);
+    this.checkpointer = new MemorySaver();
 
     const builder = new StateGraph(RuntimeAnnotation)
       .addNode("task_loop", async (state: RuntimeEnvelope) => this.runTaskLoop(state))

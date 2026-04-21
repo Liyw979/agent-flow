@@ -33,17 +33,17 @@
 
 ### 2.2 工作区状态与 Task 定位
 
-- 当前工作区的拓扑、Task、消息与运行态统一存放在 `<cwd>/.agent-team/state.json`。store[getWorkspaceStatePath, readWorkspaceState, writeWorkspaceState]
+- 当前工作区的拓扑、Task、消息与运行态由当前 CLI 进程内存维护；不会再物化旧的 `<cwd>/.agent-team/state.json`。store[getState, hasWorkspaceState]、orchestrator[hydrateWorkspace, hydrateTask]
 - 新建 Task 需要显式传入团队拓扑 JSON 文件，CLI 会先校验参数再加载并应用定义。cli[validateTaskHeadlessCommand, validateTaskUiCommand, loadTeamDslDefinition, ensureJsonTopologyApplied]
 - Task 快照读取当前工作区拓扑与 Agent 定义，`TaskRecord` 本身只保存任务状态与定位信息。store[getTopology]、orchestrator[hydrateTask]、project-agent-source[extractDslAgentsFromTopology]
-- 用户数据目录维护 `task-locator.json` 作为 `taskId -> cwd` 的定位索引，恢复 Task 时会先按这份索引解析工作区。store[readTaskLocatorIndex]、task-index[findTaskLocatorCwd]、orchestrator[resolveTaskCwd]
-- LangGraph 运行时把每个 Task 的 checkpoint 写入 `<cwd>/.agent-team/langgraph/`，并以 `taskId` 作为任务级调度标识。orchestrator[getLangGraphRuntime]、langgraph-runtime[deleteTask]
+- Task 定位索引同样只保存在当前进程内存；删除 Task 时会同步移除对应 locator。store[getTaskLocatorCwd, removeTaskLocator, deleteTask]、orchestrator[resolveTaskCwd]
+- LangGraph 运行时同样只在当前进程内存里维护每个 Task 的 checkpoint；删除 Task 时会同步清掉对应 thread。orchestrator[getLangGraphRuntime]、langgraph-runtime[deleteTask]
 
 ### 2.3 用户数据目录与日志
 
 - CLI 启动时会解析用户数据目录并初始化 `logs/agent-team.log`。user-data-path[resolveCliUserDataPath]、app-log[initAppFileLogger]、cli[createCliContext]
 - Windows 上的默认用户数据目录按 `%APPDATA%\\agent-team` 解析，因此日志路径对应为 `%APPDATA%\\agent-team\\logs\\agent-team.log`。user-data-path[resolveDefaultUserDataPath]、app-log[initAppFileLogger]
-- 全局用户数据目录使用 `task-locator.json` 保存 Task 定位信息，默认目录不可写时需要显式设置 `AGENT_TEAM_USER_DATA_DIR`。store[getTaskLocatorIndexPath, readTaskLocatorIndex]、user-data-path[resolveCliUserDataPath]
+- 全局用户数据目录主要承载日志与编译态运行时释放出的 Web 资源；默认目录不可写时需要显式设置 `AGENT_TEAM_USER_DATA_DIR`。user-data-path[resolveCliUserDataPath]、runtime-assets[ensureRuntimeAssets]
 - 诊断日志会以 JSON Lines 形式追加写入 `logs/agent-team.log`。app-log[appendAppLog]
 
 ## 3. 运行时与编排功能地图
@@ -152,8 +152,9 @@ CLI 能力分组：
 - 命令执行失败等诊断日志位于用户数据目录下的 `logs/agent-team.log`。
 - 当前工作区的拓扑、Task、消息与运行态数据只在当前 CLI 进程内存中维护，不再落盘旧的工作区快照文件。
 - 团队拓扑 JSON 编译后的 Agent prompt / writable 元数据与 LangGraph 边界信息也只保留在当前运行时内存快照中。
-- 每个 Task 的 LangGraph checkpoint 位于 `<cwd>/.agent-team/langgraph/`。
-- OpenCode runtime 统一落到 `.agent-team/` 下，便于随当前工作区一起迁移；OpenCode serve 端口、Agent session id 与 Web Host 定位信息由运行时内存态管理。
+- 每个 Task 的 LangGraph checkpoint 只保存在当前进程内存里，不再额外写入工作区目录。
+- 编译态 CLI 首次启动时，会把内嵌的 Web 静态资源释放到用户数据目录下的 `runtime/<version>/web/`；源码运行时优先直接复用仓库里的 `dist/web/`。runtime-assets[ensureRuntimeAssets]
+- OpenCode serve 端口、Agent session id 与 Web Host 定位信息由运行时内存态管理；agent-team 不再额外为 OpenCode 注入专用数据库落盘路径。opencode-client[startServer]
 
 ### 5.2 仓库结构
 

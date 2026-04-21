@@ -12,6 +12,10 @@ test("OpenCode serve 启动进程时不再注入 OPENCODE_CONFIG_DIR，避免 /s
   assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /serverEnv\.OPENCODE_CONFIG_DIR\s*=/);
 });
 
+test("OpenCode serve 启动进程时不再注入 OPENCODE_DB，避免 agent-team 额外落盘 runtime 数据库", () => {
+  assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /serverEnv\.OPENCODE_DB\s*=/);
+});
+
 test("OpenCode serve 启动进程时不再显式传入 --port，改为解析实际监听地址", () => {
   assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /["']--port["']/);
 });

@@ -1401,7 +1401,6 @@ export class Orchestrator {
         this.completeTask(cwd, taskId, status, failureReason),
     };
     runtime = new LangGraphRuntime({
-      checkpointDir: path.join(cwd, ".agent-team", "langgraph"),
       host,
     });
     this.langGraphRuntimes.set(cwd, runtime);
