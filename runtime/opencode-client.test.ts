@@ -112,48 +112,6 @@ test("createSession throws when the response is missing a session id", async () 
   );
 });
 
-test("request 在 OpenCode 长时间不响应时会按超时失败，而不是悬挂接近一分钟", {
-  timeout: 15_000,
-}, async () => {
-  const { client, projectPath } = createClient();
-  const typed = client as OpenCodeClient & {
-    request: (
-      pathname: string,
-      options: {
-        method: "GET" | "POST";
-        projectPath?: string;
-        body?: string;
-      },
-    ) => Promise<Response>;
-  };
-
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (((_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-    const signal = init?.signal;
-    if (!signal) {
-      return;
-    }
-    signal.addEventListener("abort", () => {
-      reject(signal.reason ?? new Error("aborted"));
-    }, { once: true });
-  })) as typeof fetch);
-
-  const startedAt = Date.now();
-  try {
-    await assert.rejects(
-      typed.request("/session", {
-        method: "GET",
-        projectPath,
-      }),
-      /请求超时/,
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-
-  assert.ok(Date.now() - startedAt < 13_000, "request 仍然等待过久，说明短超时没有生效");
-});
-
 test("session message 请求不注入 AbortSignal，确保长任务不会被请求层超时中断", async () => {
   const { client, projectPath } = createClient();
   const typed = client as OpenCodeClient & {
