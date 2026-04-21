@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { quoteWindowsShellValue, resolveWindowsCmdPath } from "./windows-shell";
+import { resolveWindowsCmdPath } from "./windows-shell";
 
 interface TerminalLaunchInput {
   cwd: string;
@@ -25,7 +25,7 @@ export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLau
     const cmdPath = resolveWindowsCmdPath(input.env);
     return {
       command: cmdPath,
-      args: ["/d", "/s", "/c", `start "" ${quoteWindowsShellValue(cmdPath)} /k ${input.command}`],
+      args: ["/d", "/k", input.command],
       cwd: input.cwd,
     };
   }

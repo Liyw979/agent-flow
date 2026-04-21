@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { buildTerminalLaunchSpec } from "./terminal-launcher";
 
-test("buildTerminalLaunchSpec 在 Windows 里通过 cmd start 拉起 attach 终端", () => {
+test("buildTerminalLaunchSpec 在 Windows 里直接通过 cmd /k 拉起 attach 终端", () => {
   const spec = buildTerminalLaunchSpec({
     cwd: "C:\\work\\agent-team",
     command: 'opencode attach "http://127.0.0.1:4310" --session "session-1"',
@@ -17,9 +17,29 @@ test("buildTerminalLaunchSpec 在 Windows 里通过 cmd start 拉起 attach 终�
     command: "C:\\Windows\\System32\\cmd.exe",
     args: [
       "/d",
-      "/s",
-      "/c",
-      'start "" "C:\\Windows\\System32\\cmd.exe" /k opencode attach "http://127.0.0.1:4310" --session "session-1"',
+      "/k",
+      'opencode attach "http://127.0.0.1:4310" --session "session-1"',
+    ],
+    cwd: "C:\\work\\agent-team",
+  });
+});
+
+test("buildTerminalLaunchSpec 在 Windows 不再通过 start 嵌套第二层 cmd.exe，避免 attach 弹出找不到路径的系统对话框", () => {
+  const spec = buildTerminalLaunchSpec({
+    cwd: "C:\\work\\agent-team",
+    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1"',
+    platform: "win32",
+    env: {
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+    },
+  });
+
+  assert.deepEqual(spec, {
+    command: "C:\\Windows\\System32\\cmd.exe",
+    args: [
+      "/d",
+      "/k",
+      'opencode attach "http://127.0.0.1:4310" --session "session-1"',
     ],
     cwd: "C:\\work\\agent-team",
   });
