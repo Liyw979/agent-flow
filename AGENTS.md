@@ -27,7 +27,8 @@
 - 团队拓扑 JSON 会先编译为 Agent 与拓扑记录，再应用到当前工作区，Task 启动时读取这份编译结果。team-dsl[compileTeamDsl]、cli[ensureJsonTopologyApplied]、orchestrator[applyTeamDsl]
 - Agent 的 prompt 与可写权限从当前拓扑的 `nodeRecords` 中提取，并在读取工作区 Agent 列表时即时恢复。project-agent-source[extractDslAgentsFromTopology]、orchestrator[listWorkspaceAgents]
 - `Build` 使用 OpenCode 内置 prompt，拓扑归一化时会被识别为默认可写 Agent。types[usesOpenCodeBuiltinPrompt]、project-agent-source[extractDslAgentsFromTopology]
-- 同一工作区只允许一个可写 Agent，提交 Task 和初始化 Task 时都会执行校验。project-agent-source[validateProjectAgents]、orchestrator[submitTask, initializeTask]
+- 团队拓扑 JSON 的 `agents` 数组统一使用对象格式；不再支持直接写成 `"Build"` 这类字符串简写。`Build` 即使未显式配置 `writable`，运行时也会默认视为可写。team-dsl[compileTeamDsl]、project-agent-source[extractDslAgentsFromTopology]
+- 团队拓扑 JSON 中每个 Agent 都可以通过 `writable` 字段显式声明是否具备写能力；系统允许多个可写 Agent 同时存在。project-agent-source[extractDslAgentsFromTopology, validateProjectAgents, buildInjectedConfigFromAgents]、orchestrator[submitTask, initializeTask]
 - 新的团队拓扑 JSON 可以覆盖当前工作区拓扑，后续读取工作区或 Task 快照时会使用最新持久化结果。cli[ensureJsonTopologyApplied]、store[upsertTopology]、orchestrator[hydrateWorkspace, hydrateTask]
 
 ### 2.2 工作区状态与 Task 定位
