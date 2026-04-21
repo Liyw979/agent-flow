@@ -1,3 +1,5 @@
+import { resolveWindowsCmdPath } from "../runtime/windows-shell";
+
 export function buildUiUrl(input: {
   port: number;
   taskId: string;
@@ -11,11 +13,12 @@ export function buildUiUrl(input: {
 export function buildBrowserOpenSpec(input: {
   url: string;
   platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
 }): { command: string; args: string[] } {
   const platform = input.platform ?? process.platform;
   if (platform === "win32") {
     return {
-      command: "cmd.exe",
+      command: resolveWindowsCmdPath(input.env),
       args: ["/d", "/s", "/c", "start", "", `"${input.url}"`],
     };
   }

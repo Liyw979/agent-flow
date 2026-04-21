@@ -8,6 +8,7 @@ import { appendAppLog } from "./app-log";
 import { extractOpenCodeServeBaseUrl } from "./opencode-serve-launch";
 import { resolveOpenCodeRequestTimeoutMs } from "./opencode-request-timeout";
 import { pickRecentPartIndexes } from "./runtime-activity-order";
+import { resolveWindowsCmdPath } from "./windows-shell";
 
 interface ServeHandle {
   process: ChildProcessWithoutNullStreams | null;
@@ -619,7 +620,7 @@ export class OpenCodeClient {
     const launchArgs = ["serve"];
     const spawnSpec = process.platform === "win32"
       ? {
-          command: "cmd.exe",
+          command: resolveWindowsCmdPath(serverEnv),
           args: [
             "/d",
             "/s",

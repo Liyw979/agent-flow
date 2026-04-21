@@ -8,18 +8,34 @@ test("buildTerminalLaunchSpec 在 Windows 里通过 cmd start 拉起 attach 终�
     cwd: "C:\\work\\agent-team",
     command: 'opencode attach "http://127.0.0.1:4310" --session "session-1"',
     platform: "win32",
+    env: {
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+    },
   });
 
   assert.deepEqual(spec, {
-    command: "cmd.exe",
+    command: "C:\\Windows\\System32\\cmd.exe",
     args: [
       "/d",
       "/s",
       "/c",
-      'start "" cmd.exe /k opencode attach "http://127.0.0.1:4310" --session "session-1"',
+      'start "" "C:\\Windows\\System32\\cmd.exe" /k opencode attach "http://127.0.0.1:4310" --session "session-1"',
     ],
     cwd: "C:\\work\\agent-team",
   });
+});
+
+test("buildTerminalLaunchSpec 在 Windows 优先使用 ComSpec 里的 cmd 绝对路径", () => {
+  const spec = buildTerminalLaunchSpec({
+    cwd: "C:\\work\\agent-team",
+    command: 'opencode attach "http://127.0.0.1:4310" --session "session-1"',
+    platform: "win32",
+    env: {
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+    },
+  } as never);
+
+  assert.equal(spec.command, "C:\\Windows\\System32\\cmd.exe");
 });
 
 test("buildTerminalLaunchSpec 在 macOS 里只打开一个 Terminal attach 窗口", () => {

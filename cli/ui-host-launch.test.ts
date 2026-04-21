@@ -20,9 +20,12 @@ test("buildBrowserOpenSpec 在 Windows 使用 start 打开浏览器", () => {
   const spec = buildBrowserOpenSpec({
     url: "http://127.0.0.1:4310/?taskId=task-123",
     platform: "win32",
+    env: {
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+    },
   });
 
-  assert.equal(spec.command, "cmd.exe");
+  assert.equal(spec.command, "C:\\Windows\\System32\\cmd.exe");
   assert.deepEqual(spec.args, [
     "/d",
     "/s",
@@ -31,6 +34,18 @@ test("buildBrowserOpenSpec 在 Windows 使用 start 打开浏览器", () => {
     "",
     "\"http://127.0.0.1:4310/?taskId=task-123\"",
   ]);
+});
+
+test("buildBrowserOpenSpec 在 Windows 优先使用 ComSpec 里的 cmd 绝对路径", () => {
+  const spec = buildBrowserOpenSpec({
+    url: "http://127.0.0.1:4310/?taskId=task-123",
+    platform: "win32",
+    env: {
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+    },
+  } as never);
+
+  assert.equal(spec.command, "C:\\Windows\\System32\\cmd.exe");
 });
 
 test("buildBrowserOpenSpec 在 macOS 与 Linux 使用系统默认浏览器命令", () => {

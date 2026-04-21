@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
+import { quoteWindowsShellValue, resolveWindowsCmdPath } from "./windows-shell";
 
 interface TerminalLaunchInput {
   cwd: string;
   command: string;
   platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
 }
 
 interface TerminalLaunchSpec {
@@ -20,9 +22,10 @@ export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLau
   const platform = input.platform ?? process.platform;
 
   if (platform === "win32") {
+    const cmdPath = resolveWindowsCmdPath(input.env);
     return {
-      command: "cmd.exe",
-      args: ["/d", "/s", "/c", `start "" cmd.exe /k ${input.command}`],
+      command: cmdPath,
+      args: ["/d", "/s", "/c", `start "" ${quoteWindowsShellValue(cmdPath)} /k ${input.command}`],
       cwd: input.cwd,
     };
   }
