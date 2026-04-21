@@ -1840,6 +1840,78 @@ test("审视通过但没有可展示结果正文时返回简洁兜底文案", ()
   assert.equal(displayContent, "通过");
 });
 
+test("单 Agent 且没有下游时，任务结束后仍保留该 Agent 的最终聊天消息", async () => {
+  const userDataPath = createTempDir();
+  const projectPath = createTempDir();
+  const orchestrator = createTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+  });
+  const typed = stubOpenCodeSessions(orchestrator) as unknown as Orchestrator & {
+    ensureTaskPanels: (task: { id: string; cwd: string }) => Promise<void>;
+    ensureAgentSession: (cwd: string, task: { id: string; cwd: string }, agent: { name: string }) => Promise<string>;
+    opencodeRunner: {
+      run: (input: { agent: string }) => Promise<{
+        status: "completed" | "error";
+        finalMessage: string;
+        fallbackMessage: string | null;
+        messageId: string;
+        timestamp: string;
+        rawMessage: Record<string, string>;
+      }>;
+    };
+  };
+
+  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。");
+  await orchestrator.saveTopology({
+    cwd: project.cwd,
+    topology: {
+      cwd: project.cwd,
+      nodes: ["BA"],
+      edges: [],
+    },
+  });
+
+  typed.ensureTaskPanels = async () => undefined;
+  typed.ensureAgentSession = async (_cwd, task, agent) => `session:${task.id}:${agent.name}`;
+  typed.opencodeRunner.run = async () => ({
+    status: "completed",
+    finalMessage: "验证成功。",
+    fallbackMessage: null,
+    messageId: "msg-single-agent-final",
+    timestamp: "2026-04-21T13:10:00.000Z",
+    rawMessage: {
+      content: "验证成功。",
+    },
+  });
+
+  const submittedTask = await orchestrator.submitTask({
+    cwd: project.cwd,
+    content: "@BA 请输出一句验证成功。",
+    mentionAgent: "BA",
+  });
+
+  const snapshot = await waitForTaskSnapshot(
+    orchestrator,
+    submittedTask.task.id,
+    (current) => current.task.status === "finished",
+    8000,
+  );
+
+  const baFinalMessageIndex = snapshot.messages.findIndex(
+    (message) => message.sender === "BA" && message.meta?.kind === "agent-final",
+  );
+  const completionMessageIndex = snapshot.messages.findIndex(
+    (message) => message.sender === "system" && message.meta?.kind === "task-completed",
+  );
+
+  assert.notEqual(baFinalMessageIndex, -1);
+  assert.notEqual(completionMessageIndex, -1);
+  assert.equal(snapshot.messages[baFinalMessageIndex]?.content, "验证成功。");
+  assert.equal(baFinalMessageIndex < completionMessageIndex, true);
+});
+
 test("审视不通过且只返回 needs_revision 标签时，群聊展示会去掉标签", () => {
   const orchestrator = createTestOrchestrator({
     userDataPath: createTempDir(),

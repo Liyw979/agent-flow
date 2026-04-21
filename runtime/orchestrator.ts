@@ -1792,11 +1792,12 @@ export class Orchestrator {
     }
     this.store.updateTaskStatus(cwd, taskId, status, completedAt);
     const snapshot = this.hydrateTask(cwd, taskId);
+    const completionTimestamp = this.createTrailingMessageTimestamp(cwd, taskId);
     const completionMessage: MessageRecord = {
       id: randomUUID(),
       taskId,
       sender: "system",
-      timestamp: new Date().toISOString(),
+      timestamp: completionTimestamp,
       content: buildTaskCompletionMessageContent({
         status,
         taskTitle: snapshot.task.title,
@@ -1818,6 +1819,16 @@ export class Orchestrator {
       cwd,
       payload: snapshot,
     });
+  }
+
+  private createTrailingMessageTimestamp(cwd: string, taskId: string): string {
+    const latestTimestamp = this.store.listMessages(cwd, taskId).at(-1)?.timestamp ?? null;
+    const nowMs = Date.now();
+    const latestMs = latestTimestamp ? Date.parse(latestTimestamp) : Number.NaN;
+    const nextMs = Number.isFinite(latestMs)
+      ? Math.max(nowMs, latestMs + 1)
+      : nowMs;
+    return new Date(nextMs).toISOString();
   }
 
   private getOutgoingEdges(
