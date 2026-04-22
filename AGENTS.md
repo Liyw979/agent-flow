@@ -125,6 +125,7 @@
 ## 4. CLI 约定
 
 - CLI 默认使用当前目录作为工作目录。
+- `task headless`、`task ui` 在解析 `--cwd`（或默认当前目录）时，要求目标路径必须真实存在且为目录；不存在或传入普通文件时会直接报错，不会静默创建内存工作区。
 - CLI 提供 `task headless`、`task ui`。
 - `task headless --file <topology.json> --message <message>` 会新建当前 Task，打印本轮群聊，任务结束后退出到 shell。
 - `task ui --file <topology.json> --message <message> [--cwd <path>]` 会新建当前 Task，启动本地 Web Host，并在浏览器中打开当前 Task 页面；CLI 进程会继续驻留，直到收到 `Ctrl+C` / `SIGTERM` 才清理当前命令持有的 OpenCode 实例并退出。

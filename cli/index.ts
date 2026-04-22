@@ -27,6 +27,7 @@ import { renderTaskAttachCommands } from "./task-attach-display";
 import { renderOpenCodeCleanupReport } from "./opencode-cleanup-report";
 import { buildUiUrl, UI_LOOPBACK_HOST } from "./ui-host-launch";
 import { startWebHost } from "./web-host";
+import { resolveWorkspaceCwdFromFilesystem } from "./workspace-cwd";
 
 const DEFAULT_UI_PORT = 4310;
 
@@ -108,7 +109,9 @@ async function resolveProject(
   context: CliContext,
   cwd?: string,
 ): Promise<WorkspaceSnapshot> {
-  return context.orchestrator.getWorkspaceSnapshot(path.resolve(cwd || process.cwd()));
+  return context.orchestrator.getWorkspaceSnapshot(
+    resolveWorkspaceCwdFromFilesystem(cwd, process.cwd()),
+  );
 }
 
 async function loadTeamDslDefinition(file: string) {
