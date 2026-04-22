@@ -7,8 +7,8 @@ import { buildAgentHistoryItems } from "./agent-history";
 const topology: TopologyRecord = {
   nodes: ["Build", "TaskReview"],
   edges: [
-    { source: "Build", target: "TaskReview", triggerOn: "association" },
-    { source: "TaskReview", target: "Build", triggerOn: "needs_revision" },
+    { source: "Build", target: "TaskReview", triggerOn: "handoff" },
+    { source: "TaskReview", target: "Build", triggerOn: "action_required" },
   ],
 };
 
@@ -93,8 +93,8 @@ test("buildAgentHistoryItems 会把审查标签去掉并标记为审视不通过
       timestamp: "2026-04-20T09:05:00.000Z",
       meta: {
         kind: "agent-final",
-        reviewDecision: "needs_revision",
-        finalMessage: "缺少测试。\n\n<needs_revision>请补充测试</needs_revision>",
+        reviewDecision: "action_required",
+        finalMessage: "缺少测试。\n\n<continue>请补充测试</continue>",
       },
     },
   ];

@@ -28,12 +28,12 @@
     }
   ],
   "links": [
-    ["BA", "Build", "association"],
-    ["Build", "CodeReview", "association"],
-    ["Build", "UnitTest", "association"],
-    ["Build", "TaskReview", "association"],
-    ["CodeReview", "Build", "needs_revision"],
-    ["UnitTest", "Build", "needs_revision"],
-    ["TaskReview", "Build", "needs_revision"]
+    ["BA", "Build", "handoff"],
+    ["Build", "CodeReview", "handoff"],
+    ["Build", "UnitTest", "handoff"],
+    ["Build", "TaskReview", "handoff"],
+    ["CodeReview", "Build", "action_required"],
+    ["UnitTest", "Build", "action_required"],
+    ["TaskReview", "Build", "action_required"]
   ]
 }

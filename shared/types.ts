@@ -3,7 +3,7 @@ export type AgentStatus =
   | "running"
   | "completed"
   | "failed"
-  | "needs_revision";
+  | "action_required";
 
 export type TaskStatus =
   | "pending"
@@ -11,7 +11,7 @@ export type TaskStatus =
   | "waiting"
   | "finished"
   | "failed"
-  | "needs_revision";
+  | "action_required";
 
 export type PermissionMode = "allow" | "ask" | "deny";
 
@@ -125,10 +125,10 @@ export interface TaskAgentRecord {
   runCount: number;
 }
 
-export type TopologyEdgeTrigger = "association" | "approved" | "needs_revision";
+export type TopologyEdgeTrigger = "handoff" | "approved" | "action_required";
 export type TopologyEdgeMessageMode = "none" | "last" | "all";
 
-export const DEFAULT_NEEDS_REVISION_MAX_ROUNDS = 4;
+export const DEFAULT_ACTION_REQUIRED_MAX_ROUNDS = 4;
 export const DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE: TopologyEdgeMessageMode = "last";
 export const LANGGRAPH_START_NODE_ID = "__start__";
 export const LANGGRAPH_END_NODE_ID = "__end__";
@@ -209,15 +209,15 @@ export interface SpawnActivationRecord {
   dispatched: boolean;
 }
 
-export function normalizeNeedsRevisionMaxRounds(value: unknown): number {
+export function normalizeActionRequiredMaxRounds(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    return DEFAULT_NEEDS_REVISION_MAX_ROUNDS;
+    return DEFAULT_ACTION_REQUIRED_MAX_ROUNDS;
   }
 
   return Math.max(1, Math.floor(value));
 }
 
-export function getNeedsRevisionEdgeLoopLimit(
+export function getActionRequiredEdgeLoopLimit(
   topology: Pick<TopologyRecord, "edges">,
   sourceAgentId: string,
   targetAgentId: string,
@@ -226,9 +226,9 @@ export function getNeedsRevisionEdgeLoopLimit(
     (item) =>
       item.source === sourceAgentId
       && item.target === targetAgentId
-      && item.triggerOn === "needs_revision",
+      && item.triggerOn === "action_required",
   );
-  return normalizeNeedsRevisionMaxRounds(edge?.maxRevisionRounds);
+  return normalizeActionRequiredMaxRounds(edge?.maxRevisionRounds);
 }
 
 export interface MessageRecord {
@@ -377,7 +377,7 @@ export function isReviewAgentInTopology(
   return topology.edges.some(
     (edge) =>
       edge.source === agentName &&
-      (edge.triggerOn === "approved" || edge.triggerOn === "needs_revision"),
+      (edge.triggerOn === "approved" || edge.triggerOn === "action_required"),
   );
 }
 
@@ -468,15 +468,15 @@ export function createDefaultTopology(
       target,
       triggerOn,
       messageMode: DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE,
-      ...(triggerOn === "needs_revision"
+      ...(triggerOn === "action_required"
         ? {
-            maxRevisionRounds: DEFAULT_NEEDS_REVISION_MAX_ROUNDS,
+            maxRevisionRounds: DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
           }
         : {}),
     });
   };
 
-  push(startAgent?.name, nextAgent?.name, "association");
+  push(startAgent?.name, nextAgent?.name, "handoff");
 
   return {
     nodes,

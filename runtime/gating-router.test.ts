@@ -15,11 +15,11 @@ function createTopology(): TopologyRecord {
     projectId: "router-project",
     nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "association" },
-      { source: "Build", target: "CodeReview", triggerOn: "association" },
-      { source: "Build", target: "UnitTest", triggerOn: "association" },
-      { source: "Build", target: "TaskReview", triggerOn: "association" },
-      { source: "CodeReview", target: "Build", triggerOn: "needs_revision" },
+      { source: "BA", target: "Build", triggerOn: "handoff" },
+      { source: "Build", target: "CodeReview", triggerOn: "handoff" },
+      { source: "Build", target: "UnitTest", triggerOn: "handoff" },
+      { source: "Build", target: "TaskReview", triggerOn: "handoff" },
+      { source: "CodeReview", target: "Build", triggerOn: "action_required" },
       { source: "CodeReview", target: "TaskReview", triggerOn: "approved" },
     ],
   };
@@ -36,8 +36,8 @@ test("resolveExecutionReviewAgent 会把 spawn 子图里带 approved 出边的�
       { id: "裁决总结", kind: "agent", templateName: "裁决总结" },
     ],
     edges: [
-      { source: "初筛", target: "疑点辩论", triggerOn: "association" },
-      { source: "疑点辩论", target: "初筛", triggerOn: "association" },
+      { source: "初筛", target: "疑点辩论", triggerOn: "handoff" },
+      { source: "疑点辩论", target: "初筛", triggerOn: "handoff" },
     ],
     spawnRules: [
       {
@@ -55,7 +55,7 @@ test("resolveExecutionReviewAgent 会把 spawn 子图里带 approved 出边的�
         ],
         exitWhen: "all_completed",
         reportToTemplateName: "初筛",
-        reportToTriggerOn: "association",
+        reportToTriggerOn: "handoff",
       },
     ],
   };
@@ -105,12 +105,12 @@ test("resolveExecutionReviewAgent 会把 spawn 子图里带 approved 出边的�
   );
 });
 
-test("resolveExecutionReviewAgent 不会把没有 approved 或 needs_revision 出边的普通 agent 误判为 review agent", () => {
+test("resolveExecutionReviewAgent 不会把没有 approved 或 action_required 出边的普通 agent 误判为 review agent", () => {
   const topology: TopologyRecord = {
     projectId: "review-agent-context-plain",
     nodes: ["初筛", "疑点辩论"],
     edges: [
-      { source: "初筛", target: "疑点辩论", triggerOn: "association" },
+      { source: "初筛", target: "疑点辩论", triggerOn: "handoff" },
     ],
   };
 
@@ -125,7 +125,7 @@ test("resolveExecutionReviewAgent 不会把没有 approved 或 needs_revision �
   );
 });
 
-test("router 会保留 CodeReview 嵌套链路可先于外层 association 批次剩余 reviewer 继续推进的旧语义", () => {
+test("router 会保留 CodeReview 嵌套链路可先于外层 handoff 批次剩余 reviewer 继续推进的旧语义", () => {
   const topology = createTopology();
   const state = createGraphTaskState({
     taskId: "task-1",
@@ -222,12 +222,12 @@ test("router 会在并发 reviewer 未收齐前保持等待，不会提前回流
     projectId: "router-project-2",
     nodes: ["Build", "UnitTest", "TaskReview", "CodeReview"],
     edges: [
-      { source: "Build", target: "UnitTest", triggerOn: "association" },
-      { source: "Build", target: "TaskReview", triggerOn: "association" },
-      { source: "Build", target: "CodeReview", triggerOn: "association" },
-      { source: "UnitTest", target: "Build", triggerOn: "needs_revision" },
-      { source: "TaskReview", target: "Build", triggerOn: "needs_revision" },
-      { source: "CodeReview", target: "Build", triggerOn: "needs_revision" },
+      { source: "Build", target: "UnitTest", triggerOn: "handoff" },
+      { source: "Build", target: "TaskReview", triggerOn: "handoff" },
+      { source: "Build", target: "CodeReview", triggerOn: "handoff" },
+      { source: "UnitTest", target: "Build", triggerOn: "action_required" },
+      { source: "TaskReview", target: "Build", triggerOn: "action_required" },
+      { source: "CodeReview", target: "Build", triggerOn: "action_required" },
     ],
   };
   const state = createGraphTaskState({
@@ -257,8 +257,8 @@ test("router 会在并发 reviewer 未收齐前保持等待，不会提前回流
     agentName: "UnitTest",
     status: "completed",
     reviewAgent: true,
-    reviewDecision: "needs_revision",
-    agentStatus: "needs_revision",
+    reviewDecision: "action_required",
+    agentStatus: "action_required",
     agentContextContent: "UnitTest 未通过",
     opinion: "请修复单测问题",
     allowDirectFallbackWhenNoBatch: false,
@@ -275,13 +275,13 @@ test("并发 reviewer 中单条回流链路超限时，不应提前打断其他 
     projectId: "router-project-parallel-loop-isolation",
     nodes: ["Build", "UnitTest", "TaskReview", "CodeReview", "Judge"],
     edges: [
-      { source: "Build", target: "UnitTest", triggerOn: "association" },
-      { source: "Build", target: "TaskReview", triggerOn: "association" },
-      { source: "Build", target: "CodeReview", triggerOn: "association" },
-      { source: "UnitTest", target: "Build", triggerOn: "needs_revision", maxRevisionRounds: 1 },
+      { source: "Build", target: "UnitTest", triggerOn: "handoff" },
+      { source: "Build", target: "TaskReview", triggerOn: "handoff" },
+      { source: "Build", target: "CodeReview", triggerOn: "handoff" },
+      { source: "UnitTest", target: "Build", triggerOn: "action_required", maxRevisionRounds: 1 },
       { source: "UnitTest", target: "Judge", triggerOn: "approved" },
-      { source: "TaskReview", target: "Build", triggerOn: "needs_revision" },
-      { source: "CodeReview", target: "Build", triggerOn: "needs_revision" },
+      { source: "TaskReview", target: "Build", triggerOn: "action_required" },
+      { source: "CodeReview", target: "Build", triggerOn: "action_required" },
     ],
   };
   let state = createGraphTaskState({
@@ -320,33 +320,33 @@ test("并发 reviewer 中单条回流链路超限时，不应提前打断其他 
   });
   assert.equal(afterTaskReviewApproved.decision.type, "waiting");
 
-  const afterCodeReviewNeedsRevision = applyAgentResultToGraphState(afterTaskReviewApproved.state, {
+  const afterCodeReviewActionRequired = applyAgentResultToGraphState(afterTaskReviewApproved.state, {
     agentName: "CodeReview",
     status: "completed",
     reviewAgent: true,
-    reviewDecision: "needs_revision",
-    agentStatus: "needs_revision",
+    reviewDecision: "action_required",
+    agentStatus: "action_required",
     agentContextContent: "CodeReview 第 1 轮未通过",
     opinion: "请修复 CodeReview 第 1 轮问题",
     allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
-  assert.equal(afterCodeReviewNeedsRevision.decision.type, "waiting");
+  assert.equal(afterCodeReviewActionRequired.decision.type, "waiting");
 
-  const afterUnitTestNeedsRevisionRound1 = applyAgentResultToGraphState(afterCodeReviewNeedsRevision.state, {
+  const afterUnitTestActionRequiredRound1 = applyAgentResultToGraphState(afterCodeReviewActionRequired.state, {
     agentName: "UnitTest",
     status: "completed",
     reviewAgent: true,
-    reviewDecision: "needs_revision",
-    agentStatus: "needs_revision",
+    reviewDecision: "action_required",
+    agentStatus: "action_required",
     agentContextContent: "UnitTest 第 1 轮未通过",
     opinion: "请修复 UnitTest 第 1 轮问题",
     allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
-  assert.equal(afterUnitTestNeedsRevisionRound1.decision.type, "execute_batch");
-  assert.deepEqual(afterUnitTestNeedsRevisionRound1.decision.batch.jobs.map((job) => job.agentName), ["Build"]);
-  state = afterUnitTestNeedsRevisionRound1.state;
+  assert.equal(afterUnitTestActionRequiredRound1.decision.type, "execute_batch");
+  assert.deepEqual(afterUnitTestActionRequiredRound1.decision.batch.jobs.map((job) => job.agentName), ["Build"]);
+  state = afterUnitTestActionRequiredRound1.state;
 
   const afterBuildRound2 = applyAgentResultToGraphState(state, {
     agentName: "Build",
@@ -362,33 +362,33 @@ test("并发 reviewer 中单条回流链路超限时，不应提前打断其他 
   assert.equal(afterBuildRound2.decision.type, "execute_batch");
   assert.deepEqual(afterBuildRound2.decision.batch.jobs.map((job) => job.agentName), ["UnitTest"]);
 
-  const afterUnitTestNeedsRevisionRound2 = applyAgentResultToGraphState(afterBuildRound2.state, {
+  const afterUnitTestActionRequiredRound2 = applyAgentResultToGraphState(afterBuildRound2.state, {
     agentName: "UnitTest",
     status: "completed",
     reviewAgent: true,
-    reviewDecision: "needs_revision",
-    agentStatus: "needs_revision",
+    reviewDecision: "action_required",
+    agentStatus: "action_required",
     agentContextContent: "UnitTest 第 2 轮未通过",
     opinion: "请修复 UnitTest 第 2 轮问题",
     allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
-  assert.equal(afterUnitTestNeedsRevisionRound2.decision.type, "execute_batch");
-  assert.deepEqual(afterUnitTestNeedsRevisionRound2.decision.batch.jobs, [
+  assert.equal(afterUnitTestActionRequiredRound2.decision.type, "execute_batch");
+  assert.deepEqual(afterUnitTestActionRequiredRound2.decision.batch.jobs, [
     {
       agentName: "Build",
       sourceAgentId: "CodeReview",
-      kind: "revision_request",
+      kind: "action_required_request",
     },
   ]);
-  assert.equal(afterUnitTestNeedsRevisionRound2.decision.batch.sourceAgentId, "CodeReview");
+  assert.equal(afterUnitTestActionRequiredRound2.decision.batch.sourceAgentId, "CodeReview");
   assert.match(
-    afterUnitTestNeedsRevisionRound2.decision.batch.sourceContent ?? "",
+    afterUnitTestActionRequiredRound2.decision.batch.sourceContent ?? "",
     /请修复 CodeReview 第 1 轮问题/u,
   );
   assert.equal(
-    afterUnitTestNeedsRevisionRound2.decision.batch.jobs.some((job) => job.agentName === "Judge"),
+    afterUnitTestActionRequiredRound2.decision.batch.jobs.some((job) => job.agentName === "Judge"),
     false,
   );
 });
@@ -418,10 +418,10 @@ test("用户消息命中 spawn 节点时会自动生成实例组并启动入口�
           { role: "summary", templateName: "Summary模板" },
         ],
         edges: [
-          { sourceRole: "pro", targetRole: "con", triggerOn: "review_fail" },
-          { sourceRole: "con", targetRole: "pro", triggerOn: "review_fail" },
-          { sourceRole: "pro", targetRole: "summary", triggerOn: "review_pass" },
-          { sourceRole: "con", targetRole: "summary", triggerOn: "review_pass" },
+          { sourceRole: "pro", targetRole: "con", triggerOn: "action_required" },
+          { sourceRole: "con", targetRole: "pro", triggerOn: "action_required" },
+          { sourceRole: "pro", targetRole: "summary", triggerOn: "approved" },
+          { sourceRole: "con", targetRole: "summary", triggerOn: "approved" },
         ],
         exitWhen: "one_side_agrees",
         reportToTemplateName: "初筛",
@@ -451,7 +451,7 @@ test("用户消息命中 spawn 节点时会自动生成实例组并启动入口�
   );
 });
 
-test("自动 association 命中 spawn 节点时，会实例化动态团队并派发入口角色，而不是停在 spawn 模板节点", () => {
+test("自动 handoff 命中 spawn 节点时，会实例化动态团队并派发入口角色，而不是停在 spawn 模板节点", () => {
   const topology: TopologyRecord = {
     projectId: "router-auto-spawn-project",
     nodes: ["Build", "UnitTest", "TaskReview", "CodeReview"],
@@ -462,9 +462,9 @@ test("自动 association 命中 spawn 节点时，会实例化动态团队并派
       { id: "CodeReview", kind: "spawn", templateName: "CodeReview", spawnRuleId: "spawn-rule:CodeReview", spawnEnabled: true },
     ],
     edges: [
-      { source: "Build", target: "UnitTest", triggerOn: "association" },
-      { source: "Build", target: "TaskReview", triggerOn: "association" },
-      { source: "Build", target: "CodeReview", triggerOn: "association" },
+      { source: "Build", target: "UnitTest", triggerOn: "handoff" },
+      { source: "Build", target: "TaskReview", triggerOn: "handoff" },
+      { source: "Build", target: "CodeReview", triggerOn: "handoff" },
     ],
     spawnRules: [
       {
@@ -532,7 +532,7 @@ test("自动 association 命中 spawn 节点时，会实例化动态团队并派
   assert.equal(afterBuild.state.spawnBundles.length, 3);
 });
 
-test("spawn 展开后，association 批次会把待响应目标同步成运行时实例 id，而不是残留静态 spawn 节点", () => {
+test("spawn 展开后，handoff 批次会把待响应目标同步成运行时实例 id，而不是残留静态 spawn 节点", () => {
   const topology: TopologyRecord = {
     projectId: "router-spawn-batch-runtime-targets",
     nodes: ["初筛", "辩论", "正方", "裁决总结"],
@@ -543,8 +543,8 @@ test("spawn 展开后，association 批次会把待响应目标同步成运行�
       { id: "裁决总结", kind: "agent", templateName: "裁决总结" },
     ],
     edges: [
-      { source: "初筛", target: "辩论", triggerOn: "association" },
-      { source: "辩论", target: "初筛", triggerOn: "association" },
+      { source: "初筛", target: "辩论", triggerOn: "handoff" },
+      { source: "辩论", target: "初筛", triggerOn: "handoff" },
     ],
     spawnRules: [
       {
@@ -562,7 +562,7 @@ test("spawn 展开后，association 批次会把待响应目标同步成运行�
         ],
         exitWhen: "all_completed",
         reportToTemplateName: "初筛",
-        reportToTriggerOn: "association",
+        reportToTriggerOn: "handoff",
       },
     ],
   };
@@ -585,15 +585,15 @@ test("spawn 展开后，association 批次会把待响应目标同步成运行�
   });
 
   assert.equal(afterTriage.decision.type, "execute_batch");
-  assert.deepEqual(afterTriage.state.activeAssociationBatchBySource.初筛?.targets, [
+  assert.deepEqual(afterTriage.state.activeHandoffBatchBySource.初筛?.targets, [
     "正方-1",
   ]);
-  assert.deepEqual(afterTriage.state.activeAssociationBatchBySource.初筛?.pendingTargets, [
+  assert.deepEqual(afterTriage.state.activeHandoffBatchBySource.初筛?.pendingTargets, [
     "正方-1",
   ]);
 });
 
-test("spawn 子图全部完成后，会把 spawn 节点视为完成并按普通 association 边继续流转", () => {
+test("spawn 子图全部完成后，会把 spawn 节点视为完成并按普通 handoff 边继续流转", () => {
   const topology: TopologyRecord = {
     projectId: "router-spawn-complete-project",
     nodes: ["初筛", "辩论", "正方", "裁决总结"],
@@ -604,8 +604,8 @@ test("spawn 子图全部完成后，会把 spawn 节点视为完成并按普通 
       { id: "裁决总结", kind: "agent", templateName: "裁决总结" },
     ],
     edges: [
-      { source: "初筛", target: "辩论", triggerOn: "association" },
-      { source: "辩论", target: "初筛", triggerOn: "association" },
+      { source: "初筛", target: "辩论", triggerOn: "handoff" },
+      { source: "辩论", target: "初筛", triggerOn: "handoff" },
     ],
     spawnRules: [
       {
@@ -690,7 +690,7 @@ test("裁决直接回流到外层节点时，也会同步把 spawn 激活标记�
       { id: "裁决总结", kind: "agent", templateName: "裁决总结" },
     ],
     edges: [
-      { source: "初筛", target: "辩论", triggerOn: "association" },
+      { source: "初筛", target: "辩论", triggerOn: "handoff" },
     ],
     spawnRules: [
       {
@@ -708,7 +708,7 @@ test("裁决直接回流到外层节点时，也会同步把 spawn 激活标记�
         ],
         exitWhen: "all_completed",
         reportToTemplateName: "初筛",
-        reportToTriggerOn: "association",
+        reportToTriggerOn: "handoff",
       },
     ],
   };
@@ -765,8 +765,8 @@ test("最后一个叶子节点完成后，router 会直接判定 finished，而�
     projectId: "router-finish-leaf",
     nodes: ["BA", "Build", "QA"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "association" },
-      { source: "Build", target: "QA", triggerOn: "association" },
+      { source: "BA", target: "Build", triggerOn: "handoff" },
+      { source: "Build", target: "QA", triggerOn: "handoff" },
     ],
   };
   const state = createGraphTaskState({
@@ -819,13 +819,13 @@ test("最后一个叶子节点完成后，router 会直接判定 finished，而�
   });
 });
 
-test("单一路径上游完成后，router 会继续派发下一个 association 下游，而不是错误 waiting", () => {
+test("单一路径上游完成后，router 会继续派发下一个 handoff 下游，而不是错误 waiting", () => {
   const topology: TopologyRecord = {
     projectId: "router-simple-chain",
     nodes: ["BA", "Build", "QA"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "association" },
-      { source: "Build", target: "QA", triggerOn: "association" },
+      { source: "BA", target: "Build", triggerOn: "handoff" },
+      { source: "Build", target: "QA", triggerOn: "handoff" },
     ],
   };
   const state = createGraphTaskState({

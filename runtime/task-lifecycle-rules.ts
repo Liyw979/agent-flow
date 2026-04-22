@@ -46,7 +46,7 @@ export function getPersistedCompletionSeedAgentNames(input: {
         seeds.add(targetName);
       }
     }
-    if (message.meta?.kind === "revision-request" && typeof targetAgentId === "string" && targetAgentId.trim()) {
+    if (message.meta?.kind === "action-required-request" && typeof targetAgentId === "string" && targetAgentId.trim()) {
       seeds.add(targetAgentId.trim());
     }
   }
@@ -94,7 +94,7 @@ function referencesMissingActivatedAgent(
     return parseTargetAgentIds(message.meta.targetAgentIds).some((targetName) => !knownAgentNames.has(targetName));
   }
 
-  if (message.meta.kind === "revision-request") {
+  if (message.meta.kind === "action-required-request") {
     const targetAgentId = message.meta.targetAgentId?.trim();
     return Boolean(targetAgentId && !knownAgentNames.has(targetAgentId));
   }
@@ -160,8 +160,8 @@ export function shouldFinishTaskFromPersistedState(input: {
 }
 
 function resolveAgentStatusFromFinalMessage(message: MessageRecord): TaskAgentRecord["status"] {
-  if (message.meta?.reviewDecision === "needs_revision") {
-    return "needs_revision";
+  if (message.meta?.reviewDecision === "action_required") {
+    return "action_required";
   }
   if (message.meta?.status === "failed") {
     return "failed";
@@ -183,7 +183,7 @@ function hasLaterActivationForAgent(
       return true;
     }
 
-    if (message.meta?.kind === "revision-request" && message.meta.targetAgentId === agentName) {
+    if (message.meta?.kind === "action-required-request" && message.meta.targetAgentId === agentName) {
       return true;
     }
 

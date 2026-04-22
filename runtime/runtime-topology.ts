@@ -91,7 +91,7 @@ export function instantiateSpawnBundle(input: {
       target: targetNodeInstance.id,
       triggerOn: edge.triggerOn,
       messageMode: edge.messageMode,
-      ...(edge.triggerOn === "needs_revision" && typeof edge.maxRevisionRounds === "number"
+      ...(edge.triggerOn === "action_required" && typeof edge.maxRevisionRounds === "number"
         ? { maxRevisionRounds: edge.maxRevisionRounds }
         : {}),
     };

@@ -31,7 +31,7 @@ export function formatAgentDispatchContent(_content: string, targetAgentIds: str
   return mentionSuffix.trim();
 }
 
-export function formatRevisionRequestContent(content: string, targetAgentId?: string): string {
+export function formatActionRequiredRequestContent(content: string, targetAgentId?: string): string {
   const body = stripLeadingMentions(content);
   const mentionSuffix = targetAgentId ? `@${targetAgentId}` : "";
   return [body, mentionSuffix].filter(Boolean).join("\n\n").trim();

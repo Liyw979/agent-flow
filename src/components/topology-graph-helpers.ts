@@ -47,7 +47,7 @@ export function getTopologyAgentStatusBadgePresentation(
         className: "border border-[#d66b63]/45 bg-[#fff1ef] text-[#a33f38]",
         effectClassName: "",
       };
-    case "needs_revision":
+    case "action_required":
       return {
         label: "审查不通过",
         icon: "failed",
@@ -94,7 +94,7 @@ export function getTopologyLoopLimitFailedReviewerName(
 
 export function getTopologyEdgeTriggerAppearance(triggerOn: TopologyEdge["triggerOn"]) {
   switch (triggerOn) {
-    case "association":
+    case "handoff":
       return {
         color: "#2C4A3F",
         strokeWidth: 2,
@@ -110,7 +110,7 @@ export function getTopologyEdgeTriggerAppearance(triggerOn: TopologyEdge["trigge
         zIndex: 1,
         animated: false,
       };
-    case "needs_revision":
+    case "action_required":
       return {
         color: "#A95C42",
         strokeWidth: 2,

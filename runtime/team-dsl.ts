@@ -1,7 +1,7 @@
 import {
   type AgentRecord,
   createTopologyLangGraphRecord,
-  normalizeNeedsRevisionMaxRounds,
+  normalizeActionRequiredMaxRounds,
   normalizeTopologyEdgeMessageMode,
   type TopologyEdge,
   type TopologyEdgeMessageMode,
@@ -58,11 +58,11 @@ export interface CompiledTeamDsl {
   topology: TopologyRecord;
 }
 
-const GraphDslLinkSchema = z.tuple([
-  z.string(),
-  z.string(),
-  z.enum(["association", "approved", "needs_revision"]),
-  z.enum(["none", "last", "all"]).optional(),
+const GraphDslTriggerSchema = z.enum(["handoff", "approved", "action_required"]);
+const GraphDslMessageModeSchema = z.enum(["none", "last", "all"]);
+const GraphDslLinkSchema = z.union([
+  z.tuple([z.string(), z.string(), GraphDslTriggerSchema]),
+  z.tuple([z.string(), z.string(), GraphDslTriggerSchema, GraphDslMessageModeSchema]),
 ]);
 
 const GraphDslAgentNodeSchema: z.ZodType<GraphDslAgentNode> = z.object({
@@ -114,9 +114,9 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
         source: edge.source,
         target: edge.target,
         triggerOn: edge.triggerOn,
-        ...(edge.triggerOn === "needs_revision"
+        ...(edge.triggerOn === "action_required"
           ? {
-              maxRevisionRounds: normalizeNeedsRevisionMaxRounds(edge.maxRevisionRounds),
+              maxRevisionRounds: normalizeActionRequiredMaxRounds(edge.maxRevisionRounds),
             }
           : {}),
       }))

@@ -35,8 +35,8 @@ test("compileTeamDsl 支持 v8 递归式图 DSL，并为 spawn 默认生成 item
             },
           ],
           links: [
-            ["正方", "反方", "needs_revision"],
-            ["反方", "正方", "needs_revision"],
+            ["正方", "反方", "action_required"],
+            ["反方", "正方", "action_required"],
             ["正方", "裁决总结", "approved"],
             ["反方", "裁决总结", "approved"],
           ],
@@ -44,14 +44,14 @@ test("compileTeamDsl 支持 v8 递归式图 DSL，并为 spawn 默认生成 item
       },
     ],
     links: [
-      ["初筛", "辩论", "association"],
-      ["辩论", "初筛", "association"],
+      ["初筛", "辩论", "handoff"],
+      ["辩论", "初筛", "handoff"],
     ],
   });
 
   assert.deepEqual(compiled.topology.edges, [
-    { source: "初筛", target: "辩论", triggerOn: "association", messageMode: "last" },
-    { source: "辩论", target: "初筛", triggerOn: "association", messageMode: "last" },
+    { source: "初筛", target: "辩论", triggerOn: "handoff", messageMode: "last" },
+    { source: "辩论", target: "初筛", triggerOn: "handoff", messageMode: "last" },
   ]);
   assert.equal(compiled.topology.spawnRules?.[0]?.name, "辩论");
   assert.equal(compiled.topology.spawnRules?.[0]?.itemsFrom, "items");

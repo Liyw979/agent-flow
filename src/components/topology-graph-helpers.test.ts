@@ -40,7 +40,7 @@ test("getTopologyAgentStatusBadgePresentation 会把审查 agent 映射为审查
       {
         source: "CodeReview",
         target: "Build",
-        triggerOn: "needs_revision" as const,
+        triggerOn: "action_required" as const,
       },
     ],
   };
@@ -56,7 +56,7 @@ test("getTopologyAgentStatusBadgePresentation 会把审查 agent 映射为审查
   );
 
   assert.deepEqual(
-    getTopologyAgentStatusBadgePresentation(topology, "CodeReview", "needs_revision"),
+    getTopologyAgentStatusBadgePresentation(topology, "CodeReview", "action_required"),
     {
       label: "审查不通过",
       icon: "failed",

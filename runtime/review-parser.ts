@@ -1,6 +1,6 @@
 import { extractTrailingReviewSignalBlock } from "@shared/review-response";
 
-export type ReviewDecision = "approved" | "needs_revision" | "invalid";
+export type ReviewDecision = "approved" | "action_required" | "invalid";
 
 export interface ParsedReview {
   cleanContent: string;
@@ -23,7 +23,7 @@ export function parseReview(content: string, reviewAgent: boolean): ParsedReview
   if (signalMatch) {
     return {
       cleanContent: stripStructuredSignals(signalMatch.body),
-      decision: signalMatch.kind === "approved" ? "approved" : "needs_revision",
+      decision: signalMatch.kind === "approved" ? "approved" : "action_required",
       opinion: signalMatch.response,
       rawDecisionBlock: signalMatch.rawBlock,
       validationError: null,
@@ -46,6 +46,6 @@ export function parseReview(content: string, reviewAgent: boolean): ParsedReview
     decision: "invalid",
     opinion: null,
     rawDecisionBlock: null,
-    validationError: "审查 Agent 必须用 <approved> 或 <needs_revision> 标签明确给出结论。",
+    validationError: "审查 Agent 必须用 <approved> 或 <continue> 标签明确给出结论。",
   };
 }

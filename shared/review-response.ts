@@ -1,16 +1,16 @@
-export const REVIEW_NEEDS_REVISION_LABEL = "<needs_revision>";
-export const REVIEW_NEEDS_REVISION_END_LABEL = "</needs_revision>";
+export const REVIEW_CONTINUE_LABEL = "<continue>";
+export const REVIEW_CONTINUE_END_LABEL = "</continue>";
 export const REVIEW_APPROVED_LABEL = "<approved>";
 export const REVIEW_APPROVED_END_LABEL = "</approved>";
 
-type ReviewSignalKind = "needs_revision" | "approved";
+type ReviewSignalKind = "action_required" | "approved";
 
-const REVIEW_SIGNAL_TAG_PATTERN = /<\/?(?:needs_revision|approved)>/gu;
+const REVIEW_SIGNAL_TAG_PATTERN = /<\/?(?:continue|approved)>/gu;
 
 const REVIEW_SIGNAL_TOKENS: Record<ReviewSignalKind, { start: string; end: string }> = {
-  needs_revision: {
-    start: REVIEW_NEEDS_REVISION_LABEL,
-    end: REVIEW_NEEDS_REVISION_END_LABEL,
+  action_required: {
+    start: REVIEW_CONTINUE_LABEL,
+    end: REVIEW_CONTINUE_END_LABEL,
   },
   approved: {
     start: REVIEW_APPROVED_LABEL,
@@ -20,7 +20,7 @@ const REVIEW_SIGNAL_TOKENS: Record<ReviewSignalKind, { start: string; end: strin
 
 function formatReviewResponseBlock(
   content: string,
-  kind: ReviewSignalKind = "needs_revision",
+  kind: ReviewSignalKind = "action_required",
 ): string {
   const normalized = content.trim();
   const token = REVIEW_SIGNAL_TOKENS[kind];
@@ -42,7 +42,7 @@ export function extractTrailingReviewSignalBlock(content: string): {
   kind: ReviewSignalKind;
 } | null {
   const trimmed = content.trim();
-  const pattern = /<(needs_revision|approved)>([\s\S]*?)<\/\1>/gu;
+  const pattern = /<(continue|approved)>([\s\S]*?)<\/\1>/gu;
   let lastMatch: RegExpExecArray | null = null;
   let match: RegExpExecArray | null = pattern.exec(trimmed);
 
@@ -52,7 +52,7 @@ export function extractTrailingReviewSignalBlock(content: string): {
   }
 
   if (lastMatch && typeof lastMatch.index === "number") {
-    const kind = lastMatch[1] === "approved" ? "approved" : "needs_revision";
+    const kind = lastMatch[1] === "approved" ? "approved" : "action_required";
     const rawBlock = lastMatch[0].trim();
     const response = (lastMatch[2] ?? "").trim();
     const markerIndex = lastMatch.index;
@@ -102,7 +102,7 @@ function findLastSignalStart(content: string): { index: number; kind: ReviewSign
   let last: { index: number; kind: ReviewSignalKind } | null = null;
 
   const tokens: Array<{ kind: ReviewSignalKind; start: string }> = [
-    { kind: "needs_revision", start: REVIEW_NEEDS_REVISION_LABEL },
+    { kind: "action_required", start: REVIEW_CONTINUE_LABEL },
     { kind: "approved", start: REVIEW_APPROVED_LABEL },
   ];
 

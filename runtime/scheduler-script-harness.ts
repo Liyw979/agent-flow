@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import {
-  DEFAULT_NEEDS_REVISION_MAX_ROUNDS,
+  DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
   type TopologyEdgeTrigger,
   type TopologyRecord,
 } from "@shared/types";
@@ -120,11 +120,11 @@ interface SpawnRuleState {
 interface AgentRefResolver {
   resolve(name: string): string;
   isKnown(agentName: string): boolean;
-  getAssociationTargets(agentName: string): string[];
-  getTriggeredTargets(agentName: string, triggerOn: "review_fail" | "review_pass"): string[];
+  getHandoffTargets(agentName: string): string[];
+  getTriggeredTargets(agentName: string, triggerOn: "action_required" | "approved"): string[];
   hasAnyOutgoingTargets(agentName: string): boolean;
   hasOutgoingTarget(sourceAgentName: string, targetAgentName: string): boolean;
-  getReviewFailLoopLimit(sourceAgentName: string, targetAgentName: string): number;
+  getActionRequiredLoopLimit(sourceAgentName: string, targetAgentName: string): number;
   findNextPendingRepairReviewer(
     repairTargetAgentId: string,
     excludeReviewerAgentId: string,
@@ -134,7 +134,7 @@ interface AgentRefResolver {
     sourceAgentName: string,
     actualTargets: string[],
     canonicalTargets: string[],
-    triggerOn: "association" | "review_fail" | "review_pass",
+    triggerOn: "handoff" | "action_required" | "approved",
   ): string[] | null;
 }
 
@@ -150,7 +150,7 @@ export async function assertSchedulerScript(
       return existing;
     }
     const created: SourceState = {
-      defaultTargets: parsed.resolver.getAssociationTargets(agentName),
+      defaultTargets: parsed.resolver.getHandoffTargets(agentName),
       currentRevision: 0,
       reviewerPassRevision: new Map(),
       expectedNextAction: null,
@@ -166,7 +166,7 @@ export async function assertSchedulerScript(
   const actualDecisions: SchedulerScriptDecision[] = [];
   const replyIndexByAgent = new Map<string, number>();
   const activeBatches: ActiveBatch[] = [];
-  const reviewFailLoopCountByEdge = new Map<string, number>();
+  const actionRequiredLoopCountByEdge = new Map<string, number>();
 
   const appendLine = (line: string) => {
     actualScript.push(line);
@@ -256,10 +256,10 @@ export async function assertSchedulerScript(
             sourceState.expectedNextAction = null;
             continue;
           }
-          const escalationTargets = parsed.resolver.getTriggeredTargets(firstFailed.agent, "review_pass");
+          const escalationTargets = parsed.resolver.getTriggeredTargets(firstFailed.agent, "approved");
           assert.ok(
             escalationTargets.length > 0,
-            `${firstFailed.agent} -> ${current.source} 连续回流已超过 ${parsed.resolver.getReviewFailLoopLimit(firstFailed.agent, current.source)} 轮上限`,
+            `${firstFailed.agent} -> ${current.source} 连续回流已超过 ${parsed.resolver.getActionRequiredLoopLimit(firstFailed.agent, current.source)} 轮上限`,
           );
           ensureSourceState(firstFailed.agent).expectedNextAction = {
             kind: "redispatch",
@@ -325,18 +325,18 @@ export async function assertSchedulerScript(
         const expectedRepairTarget = expectedAction?.kind === "repair"
           ? expectedAction.reviewerAgentId
           : expectedTargets.length === 1 ? expectedTargets[0] ?? "" : "";
-        const reviewPassTargets = parsed.resolver.getTriggeredTargets(agentName, "review_pass");
+        const approvedTargets = parsed.resolver.getTriggeredTargets(agentName, "approved");
         const expectedEscalation = expectedRepairTarget
-          && reviewPassTargets.length > 0
-          && (reviewFailLoopCountByEdge.get(buildReviewFailLoopEdgeKey(agentName, expectedRepairTarget)) ?? 0)
-            >= parsed.resolver.getReviewFailLoopLimit(agentName, expectedRepairTarget)
+          && approvedTargets.length > 0
+          && (actionRequiredLoopCountByEdge.get(buildActionRequiredLoopEdgeKey(agentName, expectedRepairTarget)) ?? 0)
+            >= parsed.resolver.getActionRequiredLoopLimit(agentName, expectedRepairTarget)
           && Boolean(
             normalizedReplyTargets.length > 0
             && parsed.resolver.matchCanonicalTargets(
               agentName,
               normalizedReplyTargets,
-              reviewPassTargets,
-              "review_pass",
+              approvedTargets,
+              "approved",
             ),
           );
         if (!expectedEscalation) {
@@ -347,23 +347,23 @@ export async function assertSchedulerScript(
           );
         }
       } else if (normalizedReplyTargets.length > 0) {
-        const directReviewFailTargets = parsed.resolver.getTriggeredTargets(agentName, "review_fail");
-        const matchesAssociationTargets = parsed.resolver.matchCanonicalTargets(
+        const directActionRequiredTargets = parsed.resolver.getTriggeredTargets(agentName, "action_required");
+        const matchesHandoffTargets = parsed.resolver.matchCanonicalTargets(
           agentName,
           normalizedReplyTargets,
           sourceState.defaultTargets,
-          "association",
+          "handoff",
         );
-        const matchesDirectReviewFailTargets = parsed.resolver.matchCanonicalTargets(
+        const matchesDirectActionRequiredTargets = parsed.resolver.matchCanonicalTargets(
           agentName,
           normalizedReplyTargets,
-          directReviewFailTargets,
-          "review_fail",
+          directActionRequiredTargets,
+          "action_required",
         );
         assert.equal(
-          Boolean(matchesAssociationTargets || matchesDirectReviewFailTargets),
+          Boolean(matchesHandoffTargets || matchesDirectActionRequiredTargets),
           true,
-          `${agentName} 的初始/全量派发目标必须等于 topology.association 默认顺序，或匹配其 direct review_fail 下游`,
+          `${agentName} 的初始/全量派发目标必须等于 topology.handoff 默认顺序，或匹配其 direct action_required 下游`,
         );
       }
     }
@@ -390,19 +390,19 @@ export async function assertSchedulerScript(
         );
       }
 
-      const directReviewFailTargets = parsed.resolver.getTriggeredTargets(agentName, "review_fail");
+      const directActionRequiredTargets = parsed.resolver.getTriggeredTargets(agentName, "action_required");
       const canonicalTargets = sourceState.expectedNextAction?.targets
         ?? parsed.resolver.matchCanonicalTargets(
           agentName,
           normalizedReplyTargets,
           sourceState.defaultTargets,
-          "association",
+          "handoff",
         )
         ?? parsed.resolver.matchCanonicalTargets(
           agentName,
           normalizedReplyTargets,
-          directReviewFailTargets,
-          "review_fail",
+          directActionRequiredTargets,
+          "action_required",
         )
         ?? normalizedReplyTargets;
 
@@ -427,25 +427,25 @@ export async function assertSchedulerScript(
     }
 
     const currentSource = currentBatch.source;
-    const failTargets = parsed.resolver.getTriggeredTargets(agentName, "review_fail");
-    const reviewPassTargets = parsed.resolver.getTriggeredTargets(agentName, "review_pass");
-    const loopEdgeKey = buildReviewFailLoopEdgeKey(agentName, currentSource);
-    const currentLoopCount = reviewFailLoopCountByEdge.get(loopEdgeKey) ?? 0;
-    const reviewFailLoopLimit = parsed.resolver.getReviewFailLoopLimit(agentName, currentSource);
+    const failTargets = parsed.resolver.getTriggeredTargets(agentName, "action_required");
+    const approvedTargets = parsed.resolver.getTriggeredTargets(agentName, "approved");
+    const loopEdgeKey = buildActionRequiredLoopEdgeKey(agentName, currentSource);
+    const currentLoopCount = actionRequiredLoopCountByEdge.get(loopEdgeKey) ?? 0;
+    const actionRequiredLoopLimit = parsed.resolver.getActionRequiredLoopLimit(agentName, currentSource);
     const isFail = normalizedReplyTargets.length === 1
       && normalizedReplyTargets[0] === currentSource
       && failTargets.includes(currentSource);
     const isLoopLimitEscalation = !isFail
       && normalizedReplyTargets.length > 0
-      && reviewPassTargets.length > 0
+      && approvedTargets.length > 0
       && failTargets.includes(currentSource)
-      && currentLoopCount >= reviewFailLoopLimit
+      && currentLoopCount >= actionRequiredLoopLimit
       && Boolean(
         parsed.resolver.matchCanonicalTargets(
           agentName,
           normalizedReplyTargets,
-          reviewPassTargets,
-          "review_pass",
+          approvedTargets,
+          "approved",
         ),
       );
 
@@ -457,14 +457,14 @@ export async function assertSchedulerScript(
     });
 
     if (!isFail && !isLoopLimitEscalation) {
-      clearReviewFailLoopCountsForReviewer(reviewFailLoopCountByEdge, agentName);
+      clearActionRequiredLoopCountsForReviewer(actionRequiredLoopCountByEdge, agentName);
       const sourceState = ensureSourceState(currentSource);
       const canonicalTarget = currentBatch.canonicalTargetByActual.get(agentName) ?? agentName;
       sourceState.reviewerPassRevision.set(canonicalTarget, currentBatch.sourceRevision);
     } else {
-      const nextLoopCount = (reviewFailLoopCountByEdge.get(loopEdgeKey) ?? 0) + 1;
-      reviewFailLoopCountByEdge.set(loopEdgeKey, nextLoopCount);
-      const loopLimitExceeded = isLoopLimitEscalation || nextLoopCount > reviewFailLoopLimit;
+      const nextLoopCount = (actionRequiredLoopCountByEdge.get(loopEdgeKey) ?? 0) + 1;
+      actionRequiredLoopCountByEdge.set(loopEdgeKey, nextLoopCount);
+      const loopLimitExceeded = isLoopLimitEscalation || nextLoopCount > actionRequiredLoopLimit;
       const latestResponse = currentBatch.responses[currentBatch.responses.length - 1];
       if (latestResponse) {
         latestResponse.loopLimitExceeded = loopLimitExceeded;
@@ -480,8 +480,8 @@ export async function assertSchedulerScript(
         );
         if (!nextPendingReviewer) {
           assert.ok(
-            reviewPassTargets.length > 0,
-            `${agentName} -> ${currentSource} 连续回流已超过 ${reviewFailLoopLimit} 轮上限`,
+            approvedTargets.length > 0,
+            `${agentName} -> ${currentSource} 连续回流已超过 ${actionRequiredLoopLimit} 轮上限`,
           );
         }
       }
@@ -649,34 +649,21 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
       .filter((node) => node.kind === "spawn")
       .map((node) => node.templateName),
   );
-  const staticAssociationTargets = new Map<string, string[]>();
+  const staticHandoffTargets = new Map<string, string[]>();
   const staticTriggeredTargets = new Map<string, string[]>();
   const staticOutgoingTargets = new Map<string, Set<string>>();
-  const reviewFailLoopLimitByEdge = new Map<string, number>();
-  const normalizeStoredTrigger = (triggerOn: unknown): TopologyEdgeTrigger | "association" | null => {
-    if (triggerOn === "association") {
-      return "association";
-    }
-    if (triggerOn === "approved" || triggerOn === "review_pass") {
-      return "approved";
-    }
-    if (triggerOn === "needs_revision" || triggerOn === "review_fail") {
-      return "needs_revision";
-    }
-    return null;
-  };
+  const actionRequiredLoopLimitByEdge = new Map<string, number>();
   for (const edge of topology.edges) {
-    const normalizedEdgeTrigger = normalizeStoredTrigger(edge.triggerOn);
-    if (normalizedEdgeTrigger === "association") {
-      const current = staticAssociationTargets.get(edge.source) ?? [];
+    if (edge.triggerOn === "handoff") {
+      const current = staticHandoffTargets.get(edge.source) ?? [];
       if (!current.includes(edge.target)) {
         current.push(edge.target);
       }
-      staticAssociationTargets.set(edge.source, current);
+      staticHandoffTargets.set(edge.source, current);
     }
 
-    if (normalizedEdgeTrigger === "approved" || normalizedEdgeTrigger === "needs_revision") {
-      const triggerKey = `${edge.source}::${normalizedEdgeTrigger}`;
+    if (edge.triggerOn === "approved" || edge.triggerOn === "action_required") {
+      const triggerKey = `${edge.source}::${edge.triggerOn}`;
       const current = staticTriggeredTargets.get(triggerKey) ?? [];
       if (!current.includes(edge.target)) {
         current.push(edge.target);
@@ -684,12 +671,12 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
       staticTriggeredTargets.set(triggerKey, current);
     }
 
-    if (normalizedEdgeTrigger === "needs_revision") {
-      reviewFailLoopLimitByEdge.set(
-        buildReviewFailLoopEdgeKey(edge.source, edge.target),
+    if (edge.triggerOn === "action_required") {
+      actionRequiredLoopLimitByEdge.set(
+        buildActionRequiredLoopEdgeKey(edge.source, edge.target),
         typeof edge.maxRevisionRounds === "number" && Number.isFinite(edge.maxRevisionRounds)
           ? Math.max(1, Math.floor(edge.maxRevisionRounds))
-          : DEFAULT_NEEDS_REVISION_MAX_ROUNDS,
+          : DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
       );
     }
 
@@ -851,35 +838,22 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
 
   const isKnown = (agentName: string): boolean => staticAgents.has(agentName) || dynamicRefsByKey.has(agentName);
 
-  const normalizeTrigger = (
-    triggerOn: "association" | "review_fail" | "review_pass" | TopologyEdgeTrigger,
-  ): TopologyEdgeTrigger | "association" => {
-    if (triggerOn === "review_fail") {
-      return "needs_revision";
-    }
-    if (triggerOn === "review_pass") {
-      return "approved";
-    }
-    return triggerOn;
-  };
-
   const getDynamicRef = (agentName: string): DynamicSpawnAgentRef | null => dynamicRefsByKey.get(agentName) ?? null;
 
-  const getAssociationTargets = (agentName: string): string[] => {
+  const getHandoffTargets = (agentName: string): string[] => {
     if (staticAgents.has(agentName)) {
-      return [...(staticAssociationTargets.get(agentName) ?? [])];
+      return [...(staticHandoffTargets.get(agentName) ?? [])];
     }
     return [];
   };
 
   const getTriggeredTargets = (
     agentName: string,
-    triggerOn: "review_fail" | "review_pass",
+    triggerOn: "action_required" | "approved",
   ): string[] => {
     const dynamicRef = getDynamicRef(agentName);
-    const normalizedTrigger = normalizeTrigger(triggerOn);
     if (!dynamicRef) {
-      return [...(staticTriggeredTargets.get(`${agentName}::${normalizedTrigger}`) ?? [])];
+      return [...(staticTriggeredTargets.get(`${agentName}::${triggerOn}`) ?? [])];
     }
 
     const ruleState = spawnRuleById.get(dynamicRef.spawnRuleId);
@@ -889,7 +863,7 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
 
     const targets: string[] = [];
     for (const edge of ruleState.edges) {
-      if (edge.sourceRole !== dynamicRef.role || edge.triggerOn !== normalizedTrigger) {
+      if (edge.sourceRole !== dynamicRef.role || edge.triggerOn !== triggerOn) {
         continue;
       }
       const targetTemplateName = ruleState.roleToTemplate.get(edge.targetRole);
@@ -911,7 +885,7 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
     if (
       ruleState.terminalRoles.includes(dynamicRef.role)
       && dynamicRef.reportToTemplateName
-      && dynamicRef.reportToTriggerOn === normalizedTrigger
+      && dynamicRef.reportToTriggerOn === triggerOn
       && !targets.includes(dynamicRef.reportToTemplateName)
     ) {
       targets.push(dynamicRef.reportToTemplateName);
@@ -976,9 +950,9 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
     };
   const hasAnyOutgoingTargets = (agentName: string): boolean => getAllOutgoingTargets(agentName).size > 0;
 
-  const getReviewFailLoopLimit = (sourceAgentName: string, targetAgentName: string): number =>
-    reviewFailLoopLimitByEdge.get(buildReviewFailLoopEdgeKey(sourceAgentName, targetAgentName))
-    ?? DEFAULT_NEEDS_REVISION_MAX_ROUNDS;
+  const getActionRequiredLoopLimit = (sourceAgentName: string, targetAgentName: string): number =>
+    actionRequiredLoopLimitByEdge.get(buildActionRequiredLoopEdgeKey(sourceAgentName, targetAgentName))
+    ?? DEFAULT_ACTION_REQUIRED_MAX_ROUNDS;
 
   const findNextPendingRepairReviewer = (
     repairTargetAgentId: string,
@@ -987,9 +961,8 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
   ): string | null => {
     const pendingSet = new Set(pendingReviewerIds);
     for (const edge of topology.edges) {
-      const normalizedEdgeTrigger = normalizeStoredTrigger(edge.triggerOn);
       if (
-        normalizedEdgeTrigger === "needs_revision"
+        edge.triggerOn === "action_required"
         && edge.target === repairTargetAgentId
         && edge.source !== excludeReviewerAgentId
         && pendingSet.has(edge.source)
@@ -1004,12 +977,12 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
     sourceAgentName: string,
     actualTargetName: string,
     canonicalTargetName: string,
-    triggerOn: "association" | "review_fail" | "review_pass",
+    triggerOn: "handoff" | "action_required" | "approved",
   ): boolean => {
     if (actualTargetName === canonicalTargetName) {
       return true;
     }
-    if (triggerOn !== "association") {
+    if (triggerOn !== "handoff") {
       return false;
     }
     const dynamicRef = getDynamicRef(actualTargetName);
@@ -1028,7 +1001,7 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
     sourceAgentName: string,
     actualTargets: string[],
     canonicalTargets: string[],
-    triggerOn: "association" | "review_fail" | "review_pass",
+    triggerOn: "handoff" | "action_required" | "approved",
   ): string[] | null => {
     if (actualTargets.length !== canonicalTargets.length) {
       return null;
@@ -1042,11 +1015,11 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
   return {
     resolve,
     isKnown,
-    getAssociationTargets,
+    getHandoffTargets,
     getTriggeredTargets,
     hasAnyOutgoingTargets,
     hasOutgoingTarget,
-    getReviewFailLoopLimit,
+    getActionRequiredLoopLimit,
     findNextPendingRepairReviewer,
     matchCanonicalTargets,
   };
@@ -1127,17 +1100,17 @@ function formatScriptLine(sender: string, content: string): string {
   return `${sender}: ${content.trim()}`;
 }
 
-function buildReviewFailLoopEdgeKey(sourceAgentId: string, targetAgentId: string): string {
+function buildActionRequiredLoopEdgeKey(sourceAgentId: string, targetAgentId: string): string {
   return `${sourceAgentId}->${targetAgentId}`;
 }
 
-function clearReviewFailLoopCountsForReviewer(
-  reviewFailLoopCountByEdge: Map<string, number>,
+function clearActionRequiredLoopCountsForReviewer(
+  actionRequiredLoopCountByEdge: Map<string, number>,
   reviewerAgentId: string,
 ): void {
-  for (const edgeKey of reviewFailLoopCountByEdge.keys()) {
+  for (const edgeKey of actionRequiredLoopCountByEdge.keys()) {
     if (edgeKey.startsWith(`${reviewerAgentId}->`)) {
-      reviewFailLoopCountByEdge.delete(edgeKey);
+      actionRequiredLoopCountByEdge.delete(edgeKey);
     }
   }
 }

@@ -3,14 +3,14 @@ import assert from "node:assert/strict";
 
 import {
   createDefaultTopology,
-  getNeedsRevisionEdgeLoopLimit,
+  getActionRequiredEdgeLoopLimit,
   isReviewAgentInTopology,
   type TopologyAgentSeed,
   type TopologyRecord,
   usesOpenCodeBuiltinPrompt,
 } from "./types";
 
-test("默认拓扑只生成首节点到次节点的 association 边", () => {
+test("默认拓扑只生成首节点到次节点的 handoff 边", () => {
   const agents: TopologyAgentSeed[] = [
     { name: "BA" },
     { name: "Build" },
@@ -25,7 +25,7 @@ test("默认拓扑只生成首节点到次节点的 association 边", () => {
   assert.deepEqual(topology.edges[0], {
     source: "Build",
     target: "BA",
-    triggerOn: "association",
+    triggerOn: "handoff",
     messageMode: "last",
   });
   assert.deepEqual(topology.langgraph, {
@@ -36,7 +36,7 @@ test("默认拓扑只生成首节点到次节点的 association 边", () => {
     end: null,
   });
   assert.equal(
-    topology.edges.some((edge) => edge.triggerOn === "approved" || edge.triggerOn === "needs_revision"),
+    topology.edges.some((edge) => edge.triggerOn === "approved" || edge.triggerOn === "action_required"),
     false,
   );
 });
@@ -68,7 +68,7 @@ test("存在 review 出边时 isReviewAgentInTopology 返回 true", () => {
       {
         source: "TaskReview",
         target: "Build",
-        triggerOn: "needs_revision",
+        triggerOn: "action_required",
       },
     ],
   };
@@ -77,26 +77,26 @@ test("存在 review 出边时 isReviewAgentInTopology 返回 true", () => {
   assert.equal(isReviewAgentInTopology(topology, "Build"), false);
 });
 
-test("needs_revision 边默认回流上限为 4，且支持按边单独覆盖", () => {
+test("action_required 边默认回流上限为 4，且支持按边单独覆盖", () => {
   const topology: TopologyRecord = {
     nodes: ["Build", "UnitTest", "TaskReview"],
     edges: [
       {
         source: "UnitTest",
         target: "Build",
-        triggerOn: "needs_revision",
+        triggerOn: "action_required",
       },
       {
         source: "TaskReview",
         target: "Build",
-        triggerOn: "needs_revision",
+        triggerOn: "action_required",
         maxRevisionRounds: 7,
       },
     ],
   };
 
-  assert.equal(getNeedsRevisionEdgeLoopLimit(topology, "UnitTest", "Build"), 4);
-  assert.equal(getNeedsRevisionEdgeLoopLimit(topology, "TaskReview", "Build"), 7);
+  assert.equal(getActionRequiredEdgeLoopLimit(topology, "UnitTest", "Build"), 4);
+  assert.equal(getActionRequiredEdgeLoopLimit(topology, "TaskReview", "Build"), 7);
 });
 
 test("只有 Build 继续视为 OpenCode 内置 prompt", () => {

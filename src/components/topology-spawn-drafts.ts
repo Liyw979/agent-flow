@@ -153,10 +153,10 @@ export function upsertDebateSpawnDraft(
       { role: "summary", templateName: input.summaryTemplateName },
     ],
     edges: [
-      { sourceRole: "pro", targetRole: "con", triggerOn: "review_fail" },
-      { sourceRole: "con", targetRole: "pro", triggerOn: "review_fail" },
-      { sourceRole: "pro", targetRole: "summary", triggerOn: "review_pass" },
-      { sourceRole: "con", targetRole: "summary", triggerOn: "review_pass" },
+      { sourceRole: "pro", targetRole: "con", triggerOn: "action_required" },
+      { sourceRole: "con", targetRole: "pro", triggerOn: "action_required" },
+      { sourceRole: "pro", targetRole: "summary", triggerOn: "approved" },
+      { sourceRole: "con", targetRole: "summary", triggerOn: "approved" },
     ],
     exitWhen: "one_side_agrees",
     reportToTemplateName: input.reportToTemplateName,
@@ -167,7 +167,7 @@ export function upsertDebateSpawnDraft(
   ).concat({
     source: input.sourceTemplateName,
     target: spawnNodeId,
-    triggerOn: "association" as const,
+    triggerOn: "handoff" as const,
   });
 
   const nextSpawnRules = (topology.spawnRules ?? []).filter((rule) => rule.id !== spawnRuleId).concat(spawnRule);

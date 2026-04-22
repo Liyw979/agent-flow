@@ -69,7 +69,7 @@ function getFinalItemPresentation(input: {
     };
   }
 
-  if (input.status === "needs_revision") {
+  if (input.status === "action_required") {
     return {
       label: "审视不通过",
       tone: "failure" as const,
@@ -101,8 +101,8 @@ function buildFinalHistoryItems(input: {
     .filter((message) => message.sender === input.agentId && message.meta?.kind === "agent-final")
     .map((message) => {
       const status =
-        message.meta?.reviewDecision === "needs_revision"
-          ? "needs_revision"
+        message.meta?.reviewDecision === "action_required"
+          ? "action_required"
           : reviewAgent && message.meta?.status === "failed" && finalLoopReviewerName === input.agentId
             ? "final_failed_review"
             : message.meta?.status ?? "completed";

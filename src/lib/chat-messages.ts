@@ -2,7 +2,7 @@ import type { MessageRecord } from "@shared/types";
 import {
   buildMentionSuffix,
   formatAgentDispatchContent,
-  formatRevisionRequestContent,
+  formatActionRequiredRequestContent,
   parseTargetAgentIds,
 } from "@shared/chat-message-format";
 import {
@@ -43,11 +43,11 @@ function stripTrailingMentions(content: string): string {
   return lines.join("\n").trim();
 }
 
-function stripRevisionFeedbackLabel(content: string): string {
+function stripActionRequiredFeedbackLabel(content: string): string {
   return stripLeadingReviewResponseLabel(stripReviewResponseMarkup(content));
 }
 
-function getRevisionRequestDisplayBody(message: MessageRecord): string {
+function getActionRequiredRequestDisplayBody(message: MessageRecord): string {
   const normalized = stripTrailingMentions(message.content);
   const extracted = extractLastReviewResponse(normalized);
   if (extracted) {
@@ -98,31 +98,31 @@ function extractAgentFinalDisplayContent(message: MessageRecord): string {
   return hasMeaningfulText(normalized) ? normalized : rawContent;
 }
 
-function buildMergedRevisionRequestContent(previous: ChatMessageItem, current: MessageRecord): string {
+function buildMergedActionRequiredRequestContent(previous: ChatMessageItem, current: MessageRecord): string {
   const summary = previous.content.trim();
-  const feedback = getRevisionRequestDisplayBody(current);
+  const feedback = getActionRequiredRequestDisplayBody(current);
   if (!feedback) {
-    return formatRevisionRequestContent(summary, current.meta?.targetAgentId);
+    return formatActionRequiredRequestContent(summary, current.meta?.targetAgentId);
   }
 
   const normalizedSummary = summary.replace(/\s+/g, " ").trim();
   const normalizedFeedback = feedback.replace(/\s+/g, " ").trim();
-  const normalizedSummaryFeedback = stripRevisionFeedbackLabel(summary)
+  const normalizedSummaryFeedback = stripActionRequiredFeedbackLabel(summary)
     .replace(/\s+/g, " ")
     .trim();
 
   if (!normalizedSummary) {
-    return formatRevisionRequestContent(feedback, current.meta?.targetAgentId);
+    return formatActionRequiredRequestContent(feedback, current.meta?.targetAgentId);
   }
 
   if (
     normalizedSummary === normalizedFeedback ||
     normalizedSummaryFeedback === normalizedFeedback
   ) {
-    return formatRevisionRequestContent(summary, current.meta?.targetAgentId);
+    return formatActionRequiredRequestContent(summary, current.meta?.targetAgentId);
   }
 
-  return formatRevisionRequestContent(
+  return formatActionRequiredRequestContent(
     `${summary}\n\n${feedback}`,
     current.meta?.targetAgentId,
   );
@@ -153,19 +153,19 @@ function shouldMergeAgentFinalWithDispatch(previous: ChatMessageItem, current: M
   );
 }
 
-function shouldMergeRevisionRequest(previous: ChatMessageItem, current: MessageRecord) {
+function shouldMergeActionRequiredRequest(previous: ChatMessageItem, current: MessageRecord) {
   return (
     previous.kinds.at(-1) === "agent-final" &&
-    previous.metaChain.at(-1)?.reviewDecision === "needs_revision" &&
-    current.meta?.kind === "revision-request"
+    previous.metaChain.at(-1)?.reviewDecision === "action_required" &&
+    current.meta?.kind === "action-required-request"
   );
 }
 
-function findRevisionRequestMergeTargetIndex(
+function findActionRequiredRequestMergeTargetIndex(
   merged: ChatMessageItem[],
   current: MessageRecord,
 ): number {
-  if (current.meta?.kind !== "revision-request" || !isNonSystemAgent(current.sender)) {
+  if (current.meta?.kind !== "action-required-request" || !isNonSystemAgent(current.sender)) {
     return -1;
   }
 
@@ -174,12 +174,12 @@ function findRevisionRequestMergeTargetIndex(
     if (!candidate || candidate.sender !== current.sender) {
       continue;
     }
-    if (candidate.kinds.includes("revision-request")) {
+    if (candidate.kinds.includes("action-required-request")) {
       continue;
     }
     if (
       candidate.kinds.at(-1) === "agent-final" &&
-      candidate.metaChain.at(-1)?.reviewDecision === "needs_revision"
+      candidate.metaChain.at(-1)?.reviewDecision === "action_required"
     ) {
       return index;
     }
@@ -196,7 +196,7 @@ function shouldMergeMessages(previous: ChatMessageItem | undefined, current: Mes
   return (
     shouldMergeAgentDispatch(previous, current) ||
     shouldMergeAgentFinalWithDispatch(previous, current) ||
-    shouldMergeRevisionRequest(previous, current)
+    shouldMergeActionRequiredRequest(previous, current)
   );
 }
 
@@ -210,9 +210,9 @@ function getDisplayContent(message: MessageRecord): string {
       parseTargetAgentIds(message.meta?.targetAgentIds),
     );
   }
-  if (message.meta?.kind === "revision-request") {
-    return formatRevisionRequestContent(
-      getRevisionRequestDisplayBody(message),
+  if (message.meta?.kind === "action-required-request") {
+    return formatActionRequiredRequestContent(
+      getActionRequiredRequestDisplayBody(message),
       message.meta?.targetAgentId,
     );
   }
@@ -229,8 +229,8 @@ export function mergeTaskChatMessages(messages: MessageRecord[]): ChatMessageIte
       last.id = `${last.id}:${message.id}`;
       last.timestamp = message.timestamp;
       last.content =
-        message.meta?.kind === "revision-request"
-          ? buildMergedRevisionRequestContent(last, message)
+        message.meta?.kind === "action-required-request"
+          ? buildMergedActionRequiredRequestContent(last, message)
           : message.meta?.kind === "agent-dispatch" && last.kinds.at(-1) === "agent-final"
             ? buildMergedAgentFinalTriggerContent(last, message)
           : [last.content, getDisplayContent(message)].filter(Boolean).join("\n\n");
@@ -239,13 +239,13 @@ export function mergeTaskChatMessages(messages: MessageRecord[]): ChatMessageIte
       continue;
     }
 
-    const revisionRequestMergeTargetIndex = findRevisionRequestMergeTargetIndex(merged, message);
-    if (revisionRequestMergeTargetIndex >= 0) {
-      const target = merged[revisionRequestMergeTargetIndex];
+    const actionRequiredRequestMergeTargetIndex = findActionRequiredRequestMergeTargetIndex(merged, message);
+    if (actionRequiredRequestMergeTargetIndex >= 0) {
+      const target = merged[actionRequiredRequestMergeTargetIndex];
       if (target) {
         target.id = `${target.id}:${message.id}`;
         target.timestamp = message.timestamp;
-        target.content = buildMergedRevisionRequestContent(target, message);
+        target.content = buildMergedActionRequiredRequestContent(target, message);
         target.kinds.push(message.meta?.kind ?? "");
         target.metaChain.push(message.meta);
         continue;

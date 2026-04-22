@@ -7,27 +7,27 @@ test("createTopology 支持以前端下游模板 DSL 生成普通拓扑", () => 
   const topology = createTopology({
     projectId: "dsl-basic",
     downstream: {
-      BA: { Build: "association" },
+      BA: { Build: "handoff" },
       Build: {
-        CodeReview: "association",
-        UnitTest: "association",
-        TaskReview: "association",
+        CodeReview: "handoff",
+        UnitTest: "handoff",
+        TaskReview: "handoff",
       },
       CodeReview: {
-        Build: "review_fail",
-        TaskReview: "review_pass",
+        Build: "action_required",
+        TaskReview: "approved",
       },
     },
   });
 
   assert.deepEqual(topology.nodes, ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"]);
   assert.deepEqual(topology.edges, [
-    { source: "BA", target: "Build", triggerOn: "association" },
-    { source: "Build", target: "CodeReview", triggerOn: "association" },
-    { source: "Build", target: "UnitTest", triggerOn: "association" },
-    { source: "Build", target: "TaskReview", triggerOn: "association" },
-    { source: "CodeReview", target: "Build", triggerOn: "review_fail" },
-    { source: "CodeReview", target: "TaskReview", triggerOn: "review_pass" },
+    { source: "BA", target: "Build", triggerOn: "handoff" },
+    { source: "Build", target: "CodeReview", triggerOn: "handoff" },
+    { source: "Build", target: "UnitTest", triggerOn: "handoff" },
+    { source: "Build", target: "TaskReview", triggerOn: "handoff" },
+    { source: "CodeReview", target: "Build", triggerOn: "action_required" },
+    { source: "CodeReview", target: "TaskReview", triggerOn: "approved" },
   ]);
 });
 
@@ -36,7 +36,7 @@ test("createTopology 支持把 spawn 作为下游模式写进 DSL", () => {
     projectId: "dsl-spawn",
     downstream: {
       Build: { TaskReview: "spawn" },
-      TaskReview: { Build: "review_fail" },
+      TaskReview: { Build: "action_required" },
     },
     spawn: {
       TaskReview: {},
@@ -44,8 +44,8 @@ test("createTopology 支持把 spawn 作为下游模式写进 DSL", () => {
   });
 
   assert.deepEqual(topology.edges, [
-    { source: "Build", target: "TaskReview", triggerOn: "association" },
-    { source: "TaskReview", target: "Build", triggerOn: "review_fail" },
+    { source: "Build", target: "TaskReview", triggerOn: "handoff" },
+    { source: "TaskReview", target: "Build", triggerOn: "action_required" },
   ]);
   assert.deepEqual(topology.nodeRecords, [
     { id: "Build", kind: "agent", templateName: "Build" },

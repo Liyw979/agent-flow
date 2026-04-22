@@ -94,7 +94,7 @@
       }
     ],
     "links": [
-      ["正方", "反方", "needs_revision"]
+      ["正方", "反方", "action_required"]
     ]
   }
 }
@@ -125,18 +125,18 @@
 
 ```json
 [
-  ["上游节点", "下游节点", "association"],
-  ["上游节点", "下游节点", "association", "all"]
+  ["上游节点", "下游节点", "handoff"],
+  ["上游节点", "下游节点", "handoff", "all"]
 ]
 ```
 
 当前支持的触发值只有三种：
 
-- `association`
+- `handoff`
   表示普通协作流转。当前节点执行完成后，会沿这条边把结果继续派发给下游节点。
 - `approved`
   表示审查通过后才流转。通常用于 reviewer / 裁决类节点在确认“通过”后，再把流程推进到下一个节点。
-- `needs_revision`
+- `action_required`
   表示审查不通过后的回流。当前节点明确要求继续修改或继续回应时，流程会沿这条边把意见退回给对应下游节点。
 
 第 4 个可选字段用于控制这条边派发下游时要不要带上历史消息：
@@ -152,19 +152,19 @@
 
 ```json
 [
-  ["BA", "Build", "association"],
-  ["Build", "CodeReview", "association", "last"],
-  ["CodeReview", "Build", "needs_revision"]
+  ["BA", "Build", "handoff"],
+  ["Build", "CodeReview", "handoff", "last"],
+  ["CodeReview", "Build", "action_required"]
 ]
 ```
 
 含义：
 
-- `association`
+- `handoff`
   普通协作流转；当前节点完成后直接把结果交给下游继续执行
 - `approved`
   审查通过后流转；只有当前节点判定“通过”时才会触发这条边
-- `needs_revision`
+- `action_required`
   审查不通过后回流；当前节点要求继续修改、补充或回应时，会沿这条边退回
 
 ## 4. 研发团队示例
@@ -182,13 +182,13 @@
     { "type": "agent", "name": "TaskReview", "prompt": "..." }
   ],
   "links": [
-    ["BA", "Build", "association"],
-    ["Build", "CodeReview", "association"],
-    ["Build", "UnitTest", "association"],
-    ["Build", "TaskReview", "association"],
-    ["CodeReview", "Build", "needs_revision"],
-    ["UnitTest", "Build", "needs_revision"],
-    ["TaskReview", "Build", "needs_revision"]
+    ["BA", "Build", "handoff"],
+    ["Build", "CodeReview", "handoff"],
+    ["Build", "UnitTest", "handoff"],
+    ["Build", "TaskReview", "handoff"],
+    ["CodeReview", "Build", "action_required"],
+    ["UnitTest", "Build", "action_required"],
+    ["TaskReview", "Build", "action_required"]
   ]
 }
 ```
@@ -202,7 +202,7 @@
 - `疑点辩论` 是 `spawn` 节点
 - `spawn.graph` 里定义正方、反方、裁决总结的子图
 - 在这份漏洞团队拓扑里，`裁决总结` 的要求是：若裁定为真实漏洞，就输出正式漏洞报告；若裁定为误报，就什么都不做
-- 根图写的是 `["疑点辩论", "初筛", "association"]`，因此 `裁决总结` 完成本轮裁决后，会按 `association` 触发 `初筛` 继续寻找下一个 finding
+- 根图写的是 `["疑点辩论", "初筛", "handoff"]`，因此 `裁决总结` 完成本轮裁决后，会按 `handoff` 触发 `初筛` 继续寻找下一个 finding
 
 ## 6. 当前硬约束
 

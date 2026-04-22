@@ -14,7 +14,7 @@ test("review agent 未返回合法标签时应判定为 invalid", () => {
     decision: "invalid",
     opinion: null,
     rawDecisionBlock: null,
-    validationError: "审查 Agent 必须用 <approved> 或 <needs_revision> 标签明确给出结论。",
+    validationError: "审查 Agent 必须用 <approved> 或 <continue> 标签明确给出结论。",
   });
 });
 

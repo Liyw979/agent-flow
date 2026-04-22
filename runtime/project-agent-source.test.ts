@@ -40,7 +40,7 @@ test("validateProjectAgents 允许多个可写 Agent", () => {
 test("extractDslAgentsFromTopology 会把未显式配置 writable 的 Build 视为默认可写", () => {
   const resolved = extractDslAgentsFromTopology({
     nodes: ["Build", "BA"],
-    edges: [{ source: "BA", target: "Build", triggerOn: "association" }],
+    edges: [{ source: "BA", target: "Build", triggerOn: "handoff" }],
     nodeRecords: [
       { id: "Build", kind: "agent", templateName: "Build" },
       { id: "BA", kind: "agent", templateName: "BA", prompt: "你是 BA。" },

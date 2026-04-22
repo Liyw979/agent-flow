@@ -1,12 +1,12 @@
 import {
-  DEFAULT_NEEDS_REVISION_MAX_ROUNDS,
-  getNeedsRevisionEdgeLoopLimit,
+  DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
+  getActionRequiredEdgeLoopLimit,
   getSpawnRules,
   resolveSpawnItemsField,
   type AgentStatus,
 } from "@shared/types";
 
-import { resolveRevisionRequestContinuationAction } from "./gating-rules";
+import { resolveActionRequiredRequestContinuationAction } from "./gating-rules";
 import {
   GatingScheduler,
   type GatingAgentState,
@@ -18,7 +18,7 @@ import {
   cloneGraphTaskState,
   createEmptyGraphTaskState,
   graphStateToSchedulerRuntime,
-  type GraphRevisionRequest,
+  type GraphActionRequiredRequest,
   type GraphTaskState,
 } from "./gating-state";
 import { buildEffectiveTopology, ensureRuntimeAgentStatuses } from "./runtime-topology-graph";
@@ -37,7 +37,7 @@ import { extractSpawnItemsFromContent } from "./spawn-items";
 export interface GraphDispatchJob {
   agentName: string;
   sourceAgentId: string | null;
-  kind: "raw" | "association" | "approved" | "revision_request";
+  kind: "raw" | "handoff" | "approved" | "action_required_request";
 }
 
 export interface GraphDispatchBatch {
@@ -68,7 +68,7 @@ export interface GraphAgentResult {
   agentName: string;
   status: "completed" | "failed";
   reviewAgent: boolean;
-  reviewDecision: "approved" | "needs_revision" | "invalid";
+  reviewDecision: "approved" | "action_required" | "invalid";
   agentStatus: AgentStatus;
   agentContextContent: string;
   opinion: string | null;
@@ -77,7 +77,7 @@ export interface GraphAgentResult {
   errorMessage?: string;
 }
 
-interface NeedsRevisionLoopLimitDecision {
+interface ActionRequiredLoopLimitDecision {
   errorMessage: string;
   maxRevisionRounds: number;
 }
@@ -115,7 +115,7 @@ export function createUserDispatchDecision(
           jobs: entryTargets.map((agentName) => ({
             agentName,
             sourceAgentId: input.targetAgentName,
-            kind: "association" as const,
+            kind: "handoff" as const,
           })),
         },
       };
@@ -171,21 +171,21 @@ export function applyAgentResultToGraphState(
 
   const runtime = graphStateToSchedulerRuntime(nextState);
   const scheduler = new GatingScheduler(buildEffectiveTopology(nextState), runtime);
-  const batchContinuation = scheduler.recordAssociationBatchResponse(
+  const batchContinuation = scheduler.recordHandoffBatchResponse(
     result.agentName,
-    result.reviewDecision === "needs_revision" ? "fail" : "approved",
+    result.reviewDecision === "action_required" ? "fail" : "approved",
     buildGatingAgentStates(nextState),
   );
   applySchedulerRuntimeToGraphState(nextState, runtime);
 
-  if (result.reviewDecision === "needs_revision") {
+  if (result.reviewDecision === "action_required") {
     return {
       state: nextState,
-      decision: handleNeedsRevision(nextState, result, batchContinuation),
+      decision: handleActionRequired(nextState, result, batchContinuation),
     };
   }
 
-  clearNeedsRevisionLoopCountsForReviewer(nextState, result.agentName);
+  clearActionRequiredLoopCountsForReviewer(nextState, result.agentName);
 
   if (result.reviewDecision === "invalid") {
     nextState.taskStatus = "failed";
@@ -200,13 +200,13 @@ export function applyAgentResultToGraphState(
 
   const primaryDecision = result.reviewAgent
     ? triggerApprovedDownstream(nextState, result.agentName, result.agentContextContent)
-    : triggerAssociationDownstream(nextState, result.agentName, result.agentContextContent);
+    : triggerHandoffDownstream(nextState, result.agentName, result.agentContextContent);
   if (primaryDecision.type === "execute_batch") {
     markCompletedSpawnActivationAsDispatchedIfReady(nextState, result.agentName);
     return { state: nextState, decision: primaryDecision };
   }
 
-  const continuationDecision = continueAfterAssociationBatchResponse(
+  const continuationDecision = continueAfterHandoffBatchResponse(
     nextState,
     batchContinuation,
   );
@@ -246,25 +246,25 @@ export function applyAgentResultToGraphState(
   };
 }
 
-function handleNeedsRevision(
+function handleActionRequired(
   state: GraphTaskState,
   result: GraphAgentResult,
   continuation: GatingBatchContinuation | null,
 ): GraphRoutingDecision {
   const topologyIndex = compileTopology(buildEffectiveTopology(state));
-  const needsRevisionTargets = topologyIndex.needsRevisionTargetsBySource[result.agentName] ?? [];
-  const continuationAction = resolveRevisionRequestContinuationAction({
+  const actionRequiredTargets = topologyIndex.actionRequiredTargetsBySource[result.agentName] ?? [];
+  const continuationAction = resolveActionRequiredRequestContinuationAction({
     continuation,
     fallbackActionWhenNoBatch:
-      needsRevisionTargets.length > 0 && result.allowDirectFallbackWhenNoBatch
+      actionRequiredTargets.length > 0 && result.allowDirectFallbackWhenNoBatch
         ? "trigger_fallback_review"
         : "ignore",
   });
-  if (needsRevisionTargets.length > 0 && continuationAction !== "ignore") {
-    state.pendingRevisionRequestsByAgent[result.agentName] = {
+  if (actionRequiredTargets.length > 0 && continuationAction !== "ignore") {
+    state.pendingActionRequiredRequestsByAgent[result.agentName] = {
       opinion: result.opinion,
       agentContextContent: result.agentContextContent,
-    } satisfies GraphRevisionRequest;
+    } satisfies GraphActionRequiredRequest;
   }
 
   if (continuationAction === "wait_pending_reviewers") {
@@ -281,7 +281,7 @@ function handleNeedsRevision(
       result.agentName,
       continuation.sourceAgentId,
     );
-    const loopLimitDecision = enforceNeedsRevisionLoopLimit(
+    const loopLimitDecision = enforceActionRequiredLoopLimit(
       state,
       result.agentName,
       repairTargetAgentId,
@@ -294,39 +294,39 @@ function handleNeedsRevision(
         loopLimitDecision,
       );
     }
-    const storedReview = state.pendingRevisionRequestsByAgent[continuation.repairReviewerAgentId];
+    const storedReview = state.pendingActionRequiredRequestsByAgent[continuation.repairReviewerAgentId];
     if (!storedReview) {
       return {
         type: "waiting",
-        waitingReason: "missing_revision_request",
+        waitingReason: "missing_action_required_request",
       };
     }
-    state.pendingAssociationRepairTargetsBySource[repairTargetAgentId] = [
+    state.pendingHandoffRepairTargetsBySource[repairTargetAgentId] = [
       continuation.repairReviewerAgentId,
     ];
-    const revisionContent =
+    const actionRequiredContent =
       storedReview.opinion?.trim()
       || storedReview.agentContextContent
       || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
-    delete state.pendingRevisionRequestsByAgent[continuation.repairReviewerAgentId];
-    return triggerRevisionRequestDownstream(
+    delete state.pendingActionRequiredRequestsByAgent[continuation.repairReviewerAgentId];
+    return triggerActionRequiredRequestDownstream(
       state,
       continuation.repairReviewerAgentId,
-      revisionContent,
+      actionRequiredContent,
     );
   }
 
   if (continuationAction === "trigger_fallback_review") {
-    const needsRevisionTargets = topologyIndex.needsRevisionTargetsBySource[result.agentName] ?? [];
-    const fallbackTarget = needsRevisionTargets[0];
+    const actionRequiredTargets = topologyIndex.actionRequiredTargetsBySource[result.agentName] ?? [];
+    const fallbackTarget = actionRequiredTargets[0];
     if (!fallbackTarget) {
       state.taskStatus = "failed";
       return {
         type: "failed",
-        errorMessage: `${result.agentName} 给出了 needs_revision，但没有可继续推进的 needs_revision 链路`,
+        errorMessage: `${result.agentName} 给出了 action_required，但没有可继续推进的 action_required 链路`,
       };
     }
-    const loopLimitDecision = enforceNeedsRevisionLoopLimit(
+    const loopLimitDecision = enforceActionRequiredLoopLimit(
       state,
       result.agentName,
       fallbackTarget,
@@ -339,8 +339,8 @@ function handleNeedsRevision(
         loopLimitDecision,
       );
     }
-    const storedReview = state.pendingRevisionRequestsByAgent[result.agentName];
-    return triggerRevisionRequestDownstream(
+    const storedReview = state.pendingActionRequiredRequestsByAgent[result.agentName];
+    return triggerActionRequiredRequestDownstream(
       state,
       result.agentName,
       storedReview?.opinion?.trim()
@@ -355,7 +355,7 @@ function handleNeedsRevision(
     state.taskStatus = "failed";
     return {
       type: "failed",
-      errorMessage: `${result.agentName} 给出了 needs_revision，但没有可继续推进的 needs_revision 链路`,
+      errorMessage: `${result.agentName} 给出了 action_required，但没有可继续推进的 action_required 链路`,
     };
   }
 
@@ -365,17 +365,17 @@ function handleNeedsRevision(
   };
 }
 
-function continueAfterAssociationBatchResponse(
+function continueAfterHandoffBatchResponse(
   state: GraphTaskState,
   continuation: GatingBatchContinuation | null,
 ): GraphRoutingDecision {
-  const action = resolveRevisionRequestContinuationAction({
+  const action = resolveActionRequiredRequestContinuationAction({
     continuation,
     fallbackActionWhenNoBatch: "ignore",
   });
 
   if (action === "trigger_repair_review" && continuation?.repairReviewerAgentId) {
-    const loopLimitDecision = enforceNeedsRevisionLoopLimit(
+    const loopLimitDecision = enforceActionRequiredLoopLimit(
       state,
       continuation.repairReviewerAgentId,
       continuation.sourceAgentId,
@@ -388,30 +388,30 @@ function continueAfterAssociationBatchResponse(
         loopLimitDecision,
       );
     }
-    const storedReview = state.pendingRevisionRequestsByAgent[continuation.repairReviewerAgentId];
+    const storedReview = state.pendingActionRequiredRequestsByAgent[continuation.repairReviewerAgentId];
     if (!storedReview) {
       return {
         type: "waiting",
-        waitingReason: "missing_revision_request",
+        waitingReason: "missing_action_required_request",
       };
     }
-    state.pendingAssociationRepairTargetsBySource[continuation.sourceAgentId] = [
+    state.pendingHandoffRepairTargetsBySource[continuation.sourceAgentId] = [
       continuation.repairReviewerAgentId,
     ];
-    const revisionContent =
+    const actionRequiredContent =
       storedReview.opinion?.trim()
       || storedReview.agentContextContent
       || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
-    delete state.pendingRevisionRequestsByAgent[continuation.repairReviewerAgentId];
-    return triggerRevisionRequestDownstream(
+    delete state.pendingActionRequiredRequestsByAgent[continuation.repairReviewerAgentId];
+    return triggerActionRequiredRequestDownstream(
       state,
       continuation.repairReviewerAgentId,
-      revisionContent,
+      actionRequiredContent,
     );
   }
 
   if (action === "redispatch_reviewers" && continuation && continuation.redispatchTargets.length > 0) {
-    return triggerAssociationDownstream(
+    return triggerHandoffDownstream(
       state,
       continuation.sourceAgentId,
       continuation.sourceContent,
@@ -433,19 +433,19 @@ function continueAfterAssociationBatchResponse(
   };
 }
 
-function triggerRevisionRequestDownstream(
+function triggerActionRequiredRequestDownstream(
   state: GraphTaskState,
   sourceAgentId: string,
-  revisionContent?: string,
+  actionRequiredContent?: string,
 ): GraphRoutingDecision {
   const topologyIndex = compileTopology(buildEffectiveTopology(state));
-  const targets = (topologyIndex.needsRevisionTargetsBySource[sourceAgentId] ?? []).filter(
+  const targets = (topologyIndex.actionRequiredTargetsBySource[sourceAgentId] ?? []).filter(
     (targetName) => targetName !== sourceAgentId,
   );
   if (targets.length === 0) {
     return {
       type: "failed",
-      errorMessage: `${sourceAgentId} 没有可用的 needs_revision 下游`,
+      errorMessage: `${sourceAgentId} 没有可用的 action_required 下游`,
     };
   }
 
@@ -454,15 +454,15 @@ function triggerRevisionRequestDownstream(
     batch: {
       sourceAgentId,
       sourceContent:
-        revisionContent
-        || state.pendingRevisionRequestsByAgent[sourceAgentId]?.opinion?.trim()
-        || state.pendingRevisionRequestsByAgent[sourceAgentId]?.agentContextContent
+        actionRequiredContent
+        || state.pendingActionRequiredRequestsByAgent[sourceAgentId]?.opinion?.trim()
+        || state.pendingActionRequiredRequestsByAgent[sourceAgentId]?.agentContextContent
         || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。",
       triggerTargets: [...targets],
       jobs: targets.map((targetName) => ({
         agentName: targetName,
         sourceAgentId,
-        kind: "revision_request",
+        kind: "action_required_request",
       })),
     },
   };
@@ -474,14 +474,14 @@ function resolveRepairTargetAgentId(
   fallbackRepairTargetAgentId: string,
 ): string {
   const topologyIndex = compileTopology(buildEffectiveTopology(state));
-  const needsRevisionTargets = topologyIndex.needsRevisionTargetsBySource[reviewerAgentId] ?? [];
-  if (needsRevisionTargets.includes(fallbackRepairTargetAgentId)) {
+  const actionRequiredTargets = topologyIndex.actionRequiredTargetsBySource[reviewerAgentId] ?? [];
+  if (actionRequiredTargets.includes(fallbackRepairTargetAgentId)) {
     return fallbackRepairTargetAgentId;
   }
-  return needsRevisionTargets[0] ?? fallbackRepairTargetAgentId;
+  return actionRequiredTargets[0] ?? fallbackRepairTargetAgentId;
 }
 
-function triggerAssociationDownstream(
+function triggerHandoffDownstream(
   state: GraphTaskState,
   sourceAgentId: string,
   sourceContent: string,
@@ -490,11 +490,11 @@ function triggerAssociationDownstream(
 ): GraphRoutingDecision {
   const runtime = graphStateToSchedulerRuntime(state);
   const scheduler = new GatingScheduler(buildEffectiveTopology(state), runtime);
-  const pendingRepairTargets = state.pendingAssociationRepairTargetsBySource[sourceAgentId];
+  const pendingRepairTargets = state.pendingHandoffRepairTargetsBySource[sourceAgentId];
   const effectiveRestrictTargets = pendingRepairTargets
     ? new Set(pendingRepairTargets)
     : restrictTargets;
-  const plan = scheduler.planAssociationDispatch(
+  const plan = scheduler.planHandoffDispatch(
     sourceAgentId,
     sourceContent,
     buildGatingAgentStates(state),
@@ -505,7 +505,7 @@ function triggerAssociationDownstream(
   );
   applySchedulerRuntimeToGraphState(state, runtime);
   if (pendingRepairTargets) {
-    delete state.pendingAssociationRepairTargetsBySource[sourceAgentId];
+    delete state.pendingHandoffRepairTargetsBySource[sourceAgentId];
   }
   let nextPlan: GatingDispatchPlan | null;
   try {
@@ -517,9 +517,9 @@ function triggerAssociationDownstream(
     };
   }
   if (nextPlan) {
-    return planToDecision(nextPlan, "association");
+    return planToDecision(nextPlan, "handoff");
   }
-  return planToDecision(plan, "association");
+  return planToDecision(plan, "handoff");
 }
 
 function triggerApprovedDownstream(
@@ -617,7 +617,7 @@ function materializeSpawnTargetsInPlan(
 
     changed = true;
     const entryTargets = materializeSpawnNodeTargets(state, targetName, sourceContent, false);
-    replaceAssociationBatchTarget(state, plan.sourceAgentId, targetName, entryTargets);
+    replaceHandoffBatchTarget(state, plan.sourceAgentId, targetName, entryTargets);
     for (const entryTarget of entryTargets) {
       if (plan.readyTargets.includes(targetName)) {
         nextReadyTargets.push(entryTarget);
@@ -639,13 +639,13 @@ function materializeSpawnTargetsInPlan(
   };
 }
 
-function replaceAssociationBatchTarget(
+function replaceHandoffBatchTarget(
   state: GraphTaskState,
   sourceAgentId: string,
   targetName: string,
   replacementTargets: string[],
 ): void {
-  const batch = state.activeAssociationBatchBySource[sourceAgentId];
+  const batch = state.activeHandoffBatchBySource[sourceAgentId];
   if (!batch || replacementTargets.length === 0) {
     return;
   }
@@ -798,7 +798,7 @@ function continueCompletedSpawnActivations(
   const aggregatedContent = buildSpawnActivationContent(state, activation.id, activation.sourceContent);
   state.agentStatusesByName[activation.spawnNodeName] = "completed";
   state.agentContextByName[activation.spawnNodeName] = aggregatedContent;
-  return triggerAssociationDownstream(state, activation.spawnNodeName, aggregatedContent);
+  return triggerHandoffDownstream(state, activation.spawnNodeName, aggregatedContent);
 }
 
 function buildSpawnActivationContent(
@@ -871,38 +871,38 @@ function buildGatingAgentStates(state: GraphTaskState): GatingAgentState[] {
   }));
 }
 
-function enforceNeedsRevisionLoopLimit(
+function enforceActionRequiredLoopLimit(
   state: GraphTaskState,
   sourceAgentId: string,
   targetAgentId: string,
-): NeedsRevisionLoopLimitDecision | null {
-  const maxRevisionRounds = getNeedsRevisionEdgeLoopLimit(
+): ActionRequiredLoopLimitDecision | null {
+  const maxRevisionRounds = getActionRequiredEdgeLoopLimit(
     buildEffectiveTopology(state),
     sourceAgentId,
     targetAgentId,
   );
-  const edgeKey = buildNeedsRevisionLoopEdgeKey(sourceAgentId, targetAgentId);
-  const nextCount = (state.reviewFailLoopCountByEdge[edgeKey] ?? 0) + 1;
-  state.reviewFailLoopCountByEdge[edgeKey] = nextCount;
+  const edgeKey = buildActionRequiredLoopEdgeKey(sourceAgentId, targetAgentId);
+  const nextCount = (state.actionRequiredLoopCountByEdge[edgeKey] ?? 0) + 1;
+  state.actionRequiredLoopCountByEdge[edgeKey] = nextCount;
   if (nextCount <= maxRevisionRounds) {
     return null;
   }
 
-  const normalizedMaxRevisionRounds = maxRevisionRounds || DEFAULT_NEEDS_REVISION_MAX_ROUNDS;
+  const normalizedMaxRevisionRounds = maxRevisionRounds || DEFAULT_ACTION_REQUIRED_MAX_ROUNDS;
   return {
     errorMessage: `${sourceAgentId} -> ${targetAgentId} 已连续交流 ${normalizedMaxRevisionRounds} 次，任务已结束`,
     maxRevisionRounds: normalizedMaxRevisionRounds,
   };
 }
 
-function buildNeedsRevisionLoopEdgeKey(sourceAgentId: string, targetAgentId: string): string {
+function buildActionRequiredLoopEdgeKey(sourceAgentId: string, targetAgentId: string): string {
   return `${sourceAgentId}->${targetAgentId}`;
 }
 
-function clearNeedsRevisionLoopCountsForReviewer(state: GraphTaskState, reviewerAgentId: string): void {
-  for (const edgeKey of Object.keys(state.reviewFailLoopCountByEdge)) {
+function clearActionRequiredLoopCountsForReviewer(state: GraphTaskState, reviewerAgentId: string): void {
+  for (const edgeKey of Object.keys(state.actionRequiredLoopCountByEdge)) {
     if (edgeKey.startsWith(`${reviewerAgentId}->`)) {
-      delete state.reviewFailLoopCountByEdge[edgeKey];
+      delete state.actionRequiredLoopCountByEdge[edgeKey];
     }
   }
 }
@@ -911,11 +911,11 @@ function continueAfterReviewerLoopLimit(
   state: GraphTaskState,
   reviewerAgentId: string,
   repairTargetAgentId: string,
-  loopLimitDecision: NeedsRevisionLoopLimitDecision,
+  loopLimitDecision: ActionRequiredLoopLimitDecision,
 ): GraphRoutingDecision {
-  const limitedReviewerRequest = state.pendingRevisionRequestsByAgent[reviewerAgentId];
+  const limitedReviewerRequest = state.pendingActionRequiredRequestsByAgent[reviewerAgentId];
   state.agentStatusesByName[reviewerAgentId] = "failed";
-  delete state.pendingRevisionRequestsByAgent[reviewerAgentId];
+  delete state.pendingActionRequiredRequestsByAgent[reviewerAgentId];
 
   const nextReviewerAgentId = findNextPendingRepairReviewer(
     state,
@@ -923,7 +923,7 @@ function continueAfterReviewerLoopLimit(
     reviewerAgentId,
   );
   if (nextReviewerAgentId) {
-    const storedReview = state.pendingRevisionRequestsByAgent[nextReviewerAgentId];
+    const storedReview = state.pendingActionRequiredRequestsByAgent[nextReviewerAgentId];
     if (!storedReview) {
       state.taskStatus = "failed";
       return {
@@ -932,9 +932,9 @@ function continueAfterReviewerLoopLimit(
       };
     }
 
-    state.pendingAssociationRepairTargetsBySource[repairTargetAgentId] = [nextReviewerAgentId];
-    delete state.pendingRevisionRequestsByAgent[nextReviewerAgentId];
-    return triggerRevisionRequestDownstream(
+    state.pendingHandoffRepairTargetsBySource[repairTargetAgentId] = [nextReviewerAgentId];
+    delete state.pendingActionRequiredRequestsByAgent[nextReviewerAgentId];
+    return triggerActionRequiredRequestDownstream(
       state,
       nextReviewerAgentId,
       storedReview.opinion?.trim()
@@ -946,7 +946,7 @@ function continueAfterReviewerLoopLimit(
   const loopLimitEscalationDecision = triggerApprovedDownstream(
     state,
     reviewerAgentId,
-    buildNeedsRevisionLoopLimitEscalationContent({
+    buildActionRequiredLoopLimitEscalationContent({
       reviewerAgentId,
       repairTargetAgentId,
       reviewRequest: limitedReviewerRequest,
@@ -964,10 +964,10 @@ function continueAfterReviewerLoopLimit(
   };
 }
 
-function buildNeedsRevisionLoopLimitEscalationContent(input: {
+function buildActionRequiredLoopLimitEscalationContent(input: {
   reviewerAgentId: string;
   repairTargetAgentId: string;
-  reviewRequest: GraphRevisionRequest | undefined;
+  reviewRequest: GraphActionRequiredRequest | undefined;
   maxRevisionRounds: number;
 }): string {
   const reviewerContent =
@@ -988,10 +988,10 @@ function findNextPendingRepairReviewer(
   const effectiveTopology = buildEffectiveTopology(state);
   for (const edge of effectiveTopology.edges) {
     if (
-      edge.triggerOn === "needs_revision"
+      edge.triggerOn === "action_required"
       && edge.target === repairTargetAgentId
       && edge.source !== excludeReviewerAgentId
-      && state.pendingRevisionRequestsByAgent[edge.source]
+      && state.pendingActionRequiredRequestsByAgent[edge.source]
     ) {
       return edge.source;
     }
@@ -1001,10 +1001,10 @@ function findNextPendingRepairReviewer(
 }
 
 function shouldFinishGraphTask(state: GraphTaskState): boolean {
-  if (Object.keys(state.pendingRevisionRequestsByAgent).length > 0) {
+  if (Object.keys(state.pendingActionRequiredRequestsByAgent).length > 0) {
     return false;
   }
-  if (Object.keys(state.activeAssociationBatchBySource).length > 0) {
+  if (Object.keys(state.activeHandoffBatchBySource).length > 0) {
     return false;
   }
   if (state.spawnActivations.some((activation) => !activation.dispatched)) {

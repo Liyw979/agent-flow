@@ -94,7 +94,7 @@ function buildEdges(input: CreateTopologyDslInput): TopologyEdge[] {
       edges.push({
         source,
         target,
-        triggerOn: mode === "spawn" ? "association" : mode,
+        triggerOn: mode === "spawn" ? "handoff" : mode,
       });
     }
   }

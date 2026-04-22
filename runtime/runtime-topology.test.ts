@@ -17,7 +17,7 @@ function createVulnTopology(): TopologyRecord {
       { id: "疑点辩论工厂", kind: "spawn", templateName: "正方模板", spawnRuleId: "finding-debate" },
     ],
     edges: [
-      { source: "初筛", target: "疑点辩论工厂", triggerOn: "association" },
+      { source: "初筛", target: "疑点辩论工厂", triggerOn: "handoff" },
     ],
     spawnRules: [
       {
@@ -32,14 +32,14 @@ function createVulnTopology(): TopologyRecord {
           { role: "summary", templateName: "Summary模板" },
         ],
         edges: [
-          { sourceRole: "pro", targetRole: "con", triggerOn: "review_fail" },
-          { sourceRole: "con", targetRole: "pro", triggerOn: "review_fail" },
-          { sourceRole: "pro", targetRole: "summary", triggerOn: "review_pass" },
-          { sourceRole: "con", targetRole: "summary", triggerOn: "review_pass" },
+          { sourceRole: "pro", targetRole: "con", triggerOn: "action_required" },
+          { sourceRole: "con", targetRole: "pro", triggerOn: "action_required" },
+          { sourceRole: "pro", targetRole: "summary", triggerOn: "approved" },
+          { sourceRole: "con", targetRole: "summary", triggerOn: "approved" },
         ],
         exitWhen: "one_side_agrees",
         reportToTemplateName: "初筛",
-        reportToTriggerOn: "association",
+        reportToTriggerOn: "handoff",
       },
     ],
   };
@@ -83,31 +83,31 @@ test("instantiateSpawnBundle 会为一个 finding 生成正反 summary 三个运
       messageMode: undefined,
       source: "正方模板-1",
       target: "反方模板-1",
-      triggerOn: "review_fail",
+      triggerOn: "action_required",
     },
     {
       messageMode: undefined,
       source: "反方模板-1",
       target: "正方模板-1",
-      triggerOn: "review_fail",
+      triggerOn: "action_required",
     },
     {
       messageMode: undefined,
       source: "正方模板-1",
       target: "Summary模板-1",
-      triggerOn: "review_pass",
+      triggerOn: "approved",
     },
     {
       messageMode: undefined,
       source: "反方模板-1",
       target: "Summary模板-1",
-      triggerOn: "review_pass",
+      triggerOn: "approved",
     },
     {
       messageMode: "last",
       source: "Summary模板-1",
       target: "初筛",
-      triggerOn: "association",
+      triggerOn: "handoff",
     },
   ]);
 });
