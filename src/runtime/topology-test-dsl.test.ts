@@ -5,7 +5,6 @@ import { createTopology } from "./topology-test-dsl";
 
 test("createTopology 支持以前端下游模板 DSL 生成普通拓扑", () => {
   const topology = createTopology({
-    projectId: "dsl-basic",
     downstream: {
       BA: { Build: "association" },
       Build: {
@@ -33,7 +32,6 @@ test("createTopology 支持以前端下游模板 DSL 生成普通拓扑", () => 
 
 test("createTopology 支持把 spawn 作为下游模式写进 DSL", () => {
   const topology = createTopology({
-    projectId: "dsl-spawn",
     downstream: {
       Build: { TaskReview: "spawn" },
       TaskReview: { Build: "needs_revision" },

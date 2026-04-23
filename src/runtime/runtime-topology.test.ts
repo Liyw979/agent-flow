@@ -7,7 +7,6 @@ import { instantiateSpawnBundle, instantiateSpawnBundles, validateSpawnRule } fr
 
 function createVulnTopology(): TopologyRecord {
   return {
-    projectId: "spawn-project",
     nodes: ["初筛", "正方模板", "反方模板", "Summary模板"],
     nodeRecords: [
       { id: "初筛", kind: "agent", templateName: "初筛" },

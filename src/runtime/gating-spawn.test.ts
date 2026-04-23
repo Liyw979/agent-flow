@@ -8,7 +8,6 @@ import { spawnRuntimeAgentsForItems } from "./gating-spawn";
 
 function createSpawnTopology(): TopologyRecord {
   return {
-    projectId: "spawn-state-project",
     nodes: ["初筛", "漏洞疑点辩论", "正方模板", "反方模板", "Summary模板"],
     nodeRecords: [
       { id: "初筛", kind: "agent", templateName: "初筛" },
