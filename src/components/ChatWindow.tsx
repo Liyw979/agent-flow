@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { withOptionalString } from "@shared/object-utils";
 import { resolvePrimaryTopologyStartTarget, type TaskSnapshot, type WorkspaceSnapshot } from "@shared/types";
 import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import { cn } from "@/lib/utils";
@@ -80,7 +81,7 @@ function getCaretCoordinates(textarea: HTMLTextAreaElement, position: number) {
   div.style.wordWrap = "break-word";
 
   for (const property of properties) {
-    div.style[property] = style[property];
+    div.style.setProperty(property, style.getPropertyValue(property));
   }
 
   div.textContent = textarea.value.slice(0, position);
@@ -371,7 +372,7 @@ export function ChatWindow({
     const resolution = resolveTaskSubmissionTarget({
       content,
       availableAgents,
-      defaultTargetAgent: defaultAgentName,
+      ...withOptionalString({}, "defaultTargetAgent", defaultAgentName),
     });
     if (!resolution.ok) {
       setSubmitError(resolution.message);
@@ -387,10 +388,9 @@ export function ChatWindow({
     setMentionContext(null);
 
     try {
-      await onSubmit({
+      await onSubmit(withOptionalString({
         content,
-        mentionAgent,
-      });
+      }, "mentionAgent", mentionAgent));
     } catch (error) {
       setDraft(submitted);
       setSubmitError(error instanceof Error ? error.message : "发送失败，请稍后重试。");

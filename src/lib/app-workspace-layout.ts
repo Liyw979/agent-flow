@@ -1,4 +1,4 @@
-export interface AppWorkspaceLayoutMetrics {
+interface AppWorkspaceLayoutMetrics {
   panelGapPx: number;
   teamPanelMinWidthPx: number;
   teamPanelMaxWidthPx: number;

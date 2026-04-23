@@ -1,6 +1,6 @@
 export type AppPanelMode = "default" | "chat-only" | "topology-only";
 
-export interface AppPanelVisibility {
+interface AppPanelVisibility {
   showTopologyPanel: boolean;
   showChatPanel: boolean;
   showTeamPanel: boolean;

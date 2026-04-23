@@ -181,5 +181,9 @@ function hashAgentName(name: string) {
 export function getAgentColorToken(agentName: string): AgentColorToken {
   const normalized = agentName.trim().toLowerCase();
   const index = hashAgentName(normalized) % AGENT_COLOR_TOKENS.length;
-  return AGENT_COLOR_TOKENS[index] ?? AGENT_COLOR_TOKENS[0];
+  const token = AGENT_COLOR_TOKENS[index] ?? AGENT_COLOR_TOKENS[0];
+  if (!token) {
+    throw new Error("Agent color tokens must contain at least one entry.");
+  }
+  return token;
 }

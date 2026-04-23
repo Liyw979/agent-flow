@@ -1,4 +1,10 @@
-import type { SpawnRule, TopologyEdge, TopologyNodeRecord, TopologyRecord } from "@shared/types";
+import {
+  normalizeTopologyEdgeTrigger,
+  type SpawnRule,
+  type TopologyEdge,
+  type TopologyNodeRecord,
+  type TopologyRecord,
+} from "@shared/types";
 
 type DownstreamMode = "spawn" | "handoff" | "approved" | "action_required";
 
@@ -50,8 +56,8 @@ function buildSpawnRuleFromReachable(topology: TopologyRecord, sourceNodeId: str
   return {
     id: `spawn-rule:${targetNodeId}`,
     name: targetNodeId,
+    spawnNodeName: targetNodeId,
     sourceTemplateName: sourceNodeId,
-    itemKey: "spawn_items",
     entryRole: "entry",
     spawnedAgents: targetTemplates.map((item, index) => ({
       role: index === 0 ? "entry" : item.nodeId,
@@ -90,12 +96,14 @@ function setSpawnNodeState(
   const spawnRuleId = `spawn-rule:${targetNodeId}`;
   const nextNodeRecords = nodeRecords.map((node) =>
     node.id === targetNodeId
-      ? {
-          ...node,
-          kind: enabled ? "spawn" : "agent",
-          spawnRuleId: enabled ? spawnRuleId : undefined,
-          spawnEnabled: enabled,
-        }
+      ? (() => {
+          const { spawnRuleId: _spawnRuleId, spawnEnabled: _spawnEnabled, ...rest } = node;
+          return {
+            ...rest,
+            kind: enabled ? ("spawn" as const) : ("agent" as const),
+            ...(enabled ? { spawnEnabled: true, spawnRuleId } : { spawnEnabled: false }),
+          };
+        })()
       : node,
   );
   const nextSpawnRules = (topology.spawnRules ?? []).filter((rule) => rule.id !== spawnRuleId);
@@ -122,7 +130,7 @@ export function getDownstreamMode(input: {
       edge.target === input.targetNodeId,
   )?.triggerOn;
 
-  return trigger ?? null;
+  return trigger ? normalizeTopologyEdgeTrigger(trigger) : null;
 }
 
 export function setSpawnEnabledForDownstream(input: {
@@ -131,7 +139,6 @@ export function setSpawnEnabledForDownstream(input: {
   targetNodeId: string;
   enabled: boolean;
 }): TopologyRecord {
-  const spawnRuleId = `spawn-rule:${input.targetNodeId}`;
   const nextEdges = input.enabled
     ? clearEdgesForPair(input.topology.edges, input.sourceNodeId, input.targetNodeId)
         .concat({
@@ -150,7 +157,7 @@ export function setSpawnEnabledForDownstream(input: {
 
   return {
     ...input.topology,
-    nodeRecords: spawnState.nodeRecords,
+    ...(spawnState.nodeRecords ? { nodeRecords: spawnState.nodeRecords } : {}),
     spawnRules: nextSpawnRules,
     edges: nextEdges,
   };
@@ -183,12 +190,12 @@ export function setDownstreamMode(input: {
       : clearedEdges.concat({
           source: input.sourceNodeId,
           target: input.targetNodeId,
-          triggerOn: input.mode,
+          triggerOn: normalizeTopologyEdgeTrigger(input.mode),
         });
 
   return {
     ...input.topology,
-    nodeRecords: spawnState.nodeRecords,
+    ...(spawnState.nodeRecords ? { nodeRecords: spawnState.nodeRecords } : {}),
     spawnRules: spawnState.spawnRules ?? [],
     edges: nextEdges,
   };

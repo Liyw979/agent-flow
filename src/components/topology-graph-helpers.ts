@@ -1,5 +1,10 @@
-import { isReviewAgentInTopology, type TopologyEdge, type TopologyRecord } from "@shared/types";
-import type { MessageRecord } from "@shared/types";
+import {
+  isReviewAgentInTopology,
+  isTaskCompletedMessageRecord,
+  type MessageRecord,
+  type TopologyEdge,
+  type TopologyRecord,
+} from "@shared/types";
 
 export interface TopologyAgentStatusBadgePresentation {
   label: string;
@@ -81,11 +86,11 @@ export function getTopologyAgentStatusLabel(
 }
 
 export function getTopologyLoopLimitFailedReviewerName(
-  messages: Pick<MessageRecord, "content" | "meta">[],
+  messages: MessageRecord[],
 ): string | null {
   const failedCompletionMessage = [...messages]
     .reverse()
-    .find((message) => message.meta?.kind === "task-completed" && message.meta?.status === "failed");
+    .find((message) => isTaskCompletedMessageRecord(message) && message.status === "failed");
   const content = failedCompletionMessage?.content?.trim() ?? "";
   const match = /^(.*?)\s*->\s*.*已连续交流\s+\d+\s+次，任务已结束$/u.exec(content);
   const reviewerName = match?.[1]?.trim() ?? "";

@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { withOptionalValue } from "@shared/object-utils";
 import { getAgentColorToken } from "@/lib/agent-colors";
 import { buildAgentHistoryItems, type AgentHistoryItem } from "@/lib/agent-history";
 import { AgentHistoryMarkdown } from "@/lib/agent-history-markdown";
@@ -185,7 +186,7 @@ function renderAttachButtonIcon() {
 export function TopologyGraph({
   workspace,
   task,
-  selectedAgentId,
+  selectedAgentId: _selectedAgentId,
   onSelectAgent,
   isMaximized = false,
   onToggleMaximize,
@@ -264,8 +265,8 @@ export function TopologyGraph({
     return buildTopologyCanvasLayout({
       nodes: visibleNodeIds,
       edges: topology.edges,
-      availableWidth: canvasViewport?.width,
-      availableHeight: canvasViewport?.height,
+      ...withOptionalValue({}, "availableWidth", canvasViewport?.width),
+      ...withOptionalValue({}, "availableHeight", canvasViewport?.height),
       columnWidth: NODE_WIDTH,
       minNodeWidth: NODE_WIDTH,
       minNodeHeight: NODE_HEIGHT,
@@ -288,12 +289,11 @@ export function TopologyGraph({
     return new Map(
       visibleNodeIds.map((agentName) => [
         agentName,
-        buildAgentHistoryItems({
+        buildAgentHistoryItems(withOptionalValue({
           agentId: agentName,
           messages: task.messages,
           topology,
-          runtimeSnapshot: runtimeSnapshots[agentName],
-        }).slice(-HISTORY_VISIBLE_ITEMS),
+        }, "runtimeSnapshot", runtimeSnapshots[agentName])).slice(-HISTORY_VISIBLE_ITEMS),
       ]),
     );
   }, [runtimeSnapshots, task, topology, visibleNodeIds]);
@@ -452,8 +452,12 @@ export function TopologyGraph({
                 topology,
                 node.id,
                 resolveTopologyNodeDisplayStatus({
-                  taskAgentStatus: taskAgent?.status,
-                  runtimeSnapshotStatus: runtimeSnapshot?.runtimeStatus ?? runtimeSnapshot?.status,
+                  ...withOptionalValue({}, "taskAgentStatus", taskAgent?.status),
+                  ...withOptionalValue(
+                    {},
+                    "runtimeSnapshotStatus",
+                    runtimeSnapshot?.runtimeStatus ?? runtimeSnapshot?.status,
+                  ),
                 }),
                 {
                   finalLoopReviewerName,

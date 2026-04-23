@@ -6,6 +6,23 @@ import {
   getTopologyLoopLimitFailedReviewerName,
   getTopologyNodeHeaderActionOrder,
 } from "./topology-graph-helpers";
+import type { MessageRecord } from "@shared/types";
+
+function createTaskCompletedMessage(input: {
+  id: string;
+  content: string;
+  status: "finished" | "failed";
+}): MessageRecord {
+  return {
+    id: input.id,
+    taskId: "task-1",
+    sender: "system",
+    timestamp: "2026-04-23T10:00:00.000Z",
+    content: input.content,
+    kind: "task-completed",
+    status: input.status,
+  };
+}
 
 test("getTopologyAgentStatusBadgePresentation 会把普通 agent 状态映射为 Electron 同款图标与文案", () => {
   const topology = {
@@ -81,34 +98,22 @@ test("getTopologyAgentStatusBadgePresentation 会把审查 agent 映射为审查
 test("getTopologyLoopLimitFailedReviewerName 会从任务失败原因里识别超限 reviewer", () => {
   assert.equal(
     getTopologyLoopLimitFailedReviewerName([
-      {
+      createTaskCompletedMessage({
         id: "completion-1",
-        taskId: "task-1",
-        sender: "system",
         content: "UnitTest -> Build 已连续交流 4 次，任务已结束",
-        timestamp: "2026-04-22T08:35:33.589Z",
-        meta: {
-          kind: "task-completed",
-          status: "failed",
-        },
-      },
+        status: "failed",
+      }),
     ]),
     "UnitTest",
   );
 
   assert.equal(
     getTopologyLoopLimitFailedReviewerName([
-      {
+      createTaskCompletedMessage({
         id: "completion-2",
-        taskId: "task-1",
-        sender: "system",
         content: "所有Agent任务已完成",
-        timestamp: "2026-04-22T08:35:33.589Z",
-        meta: {
-          kind: "task-completed",
-          status: "finished",
-        },
-      },
+        status: "finished",
+      }),
     ]),
     null,
   );

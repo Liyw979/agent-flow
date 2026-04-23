@@ -2,13 +2,40 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { decideUiSnapshotRefreshAcceptance } from "./ui-snapshot-refresh-gate";
+import type { MessageRecord, UiSnapshotPayload } from "@shared/types";
+
+function createSystemMessage(id: string, sender: "system" | "BA", content: string, timestamp: string): MessageRecord {
+  if (sender === "system") {
+    return {
+      id,
+      taskId: "task-1",
+      sender: "system",
+      content,
+      timestamp,
+      kind: "system-message",
+    };
+  }
+
+  return {
+    id,
+    taskId: "task-1",
+    sender: "BA",
+    content,
+    timestamp,
+    kind: "agent-final",
+    status: "completed",
+    reviewDecision: "approved",
+    reviewOpinion: "",
+    rawResponse: content,
+  };
+}
 
 function createUiSnapshotPayload(input: {
   baStatus: "idle" | "running" | "completed";
   unitTestStatus: "idle" | "running" | "completed";
   buildStatus?: "idle" | "running" | "completed";
   messageCount?: number;
-}) {
+}): UiSnapshotPayload {
   const buildStatus = input.buildStatus ?? "idle";
   const messageCount = input.messageCount ?? 0;
   return {
@@ -58,13 +85,13 @@ function createUiSnapshotPayload(input: {
           runCount: buildStatus === "idle" ? 0 : 1,
         },
       ],
-      messages: Array.from({ length: messageCount }, (_, index) => ({
-        id: `message-${index + 1}`,
-        taskId: "task-1",
-        sender: index === 0 ? "system" : "BA",
-        content: `message-${index + 1}`,
-        timestamp: `2026-04-21T03:22:${String(index).padStart(2, "0")}.000Z`,
-      })),
+      messages: Array.from({ length: messageCount }, (_, index) =>
+        createSystemMessage(
+          `message-${index + 1}`,
+          index === 0 ? "system" : "BA",
+          `message-${index + 1}`,
+          `2026-04-21T03:22:${String(index).padStart(2, "0")}.000Z`,
+        )),
       topology: {
         nodes: ["BA", "Build", "UnitTest"],
         edges: [],

@@ -29,8 +29,8 @@
 - Agent 的 prompt 与可写权限从当前拓扑的 `nodeRecords` 中提取，并在读取工作区 Agent 列表时即时恢复。project-agent-source[extractDslAgentsFromTopology]、orchestrator[listWorkspaceAgents]
 - 拓扑里单个 Agent 的 prompt 只能描述它自己的职责、输入与输出约束，不能提及其他 Agent、上下游、回流、裁决、交给谁处理、回应某个特定角色等协作关系；运行时每个 Agent 都应被视为不知道其他 Agent 的存在。team-dsl[compileTeamDsl]、project-agent-source[extractDslAgentsFromTopology]
 - 漏洞挖掘团队里会给出倾向性判断、通过/不通过结论或最终裁决的 Agent，prompt 必须显式要求“先阅读当前项目代码，再用文件、函数、调用链或约束作为支撑后才能下结论”；不能只根据上游口头材料直接裁定漏洞成立、误报或通过。config/team-topologies/vulnerability-team.topology.json、team-dsl[compileTeamDsl]
-- `Build` 使用 OpenCode 内置 prompt，拓扑归一化时会被识别为默认可写 Agent。types[usesOpenCodeBuiltinPrompt]、project-agent-source[extractDslAgentsFromTopology]
-- 团队拓扑 JSON 的 `agents` 数组统一使用对象格式；不再支持直接写成 `"Build"` 这类字符串简写。`Build` 即使未显式配置 `writable`，运行时也会默认视为可写。team-dsl[compileTeamDsl]、project-agent-source[extractDslAgentsFromTopology]
+- `Build` 使用 OpenCode 内置 prompt，但不再具备默认可写权限；拓扑 JSON 必须显式写出 `prompt: ""` 与 `writable: true/false`。types[usesOpenCodeBuiltinPrompt]、team-dsl[compileTeamDsl]、project-agent-source[extractDslAgentsFromTopology]
+- 团队拓扑 JSON 的 `agents` 数组统一使用对象格式；不再支持直接写成 `"Build"` 这类字符串简写。每个 Agent 的 `writable` 都必须显式声明，不存在默认可写 Agent。team-dsl[compileTeamDsl]、project-agent-source[extractDslAgentsFromTopology]
 - 团队拓扑 JSON 中每个 Agent 都可以通过 `writable` 字段显式声明是否具备写能力；系统允许多个可写 Agent 同时存在。project-agent-source[extractDslAgentsFromTopology, validateProjectAgents, buildInjectedConfigFromAgents]、orchestrator[submitTask, initializeTask]
 - 新的团队拓扑 JSON 可以覆盖当前工作区拓扑，后续读取工作区或 Task 快照时会使用最新持久化结果。cli[ensureJsonTopologyApplied]、store[upsertTopology]、orchestrator[hydrateWorkspace, hydrateTask]
 
@@ -39,7 +39,7 @@
 - 当前工作区的拓扑、Task、消息与运行态由当前 CLI 进程内存维护；不会再物化旧的 `<cwd>/.agent-team/state.json`。store[getState, hasWorkspaceState]、orchestrator[hydrateWorkspace, hydrateTask]
 - 新建 Task 需要显式传入团队拓扑 JSON 文件，CLI 会先校验参数再加载并应用定义。cli[validateTaskHeadlessCommand, validateTaskUiCommand, loadTeamDslDefinition, ensureJsonTopologyApplied]
 - 团队拓扑 JSON 只支持递归式 `entry + nodes + links` DSL。team-dsl[compileTeamDsl]
-- 递归式 DSL 中，节点 `type` 只允许 `agent` 或 `spawn`；`spawn` 自身不带 `prompt`，默认从上游结果里的 `items` 数组展开子图，也可用 `itemsFrom` 显式覆盖字段名。team-dsl[compileTeamDsl]、types[resolveSpawnItemsField]
+- 递归式 DSL 中，节点 `type` 只允许 `agent` 或 `spawn`；`spawn` 自身不带 `prompt`，并固定从上游结果里的 `items` 数组展开子图，不支持通过拓扑配置改字段名。team-dsl[compileTeamDsl]、spawn-items[extractSpawnItemsFromContent]
 - Task 快照读取当前工作区拓扑与 Agent 定义，`TaskRecord` 本身只保存任务状态与定位信息。store[getTopology]、orchestrator[hydrateTask]、project-agent-source[extractDslAgentsFromTopology]
 - Task 定位索引同样只保存在当前进程内存；删除 Task 时会同步移除对应 locator。store[getTaskLocatorCwd, removeTaskLocator, deleteTask]、orchestrator[resolveTaskCwd]
 - LangGraph 运行时同样只在当前进程内存里维护每个 Task 的 checkpoint；删除 Task 时会同步清掉对应 thread。orchestrator[getLangGraphRuntime]、langgraph-runtime[deleteTask]
@@ -175,28 +175,27 @@ CLI 能力分组：
 
 ```txt
 agent-team/
-├── cli/
-│   ├── index.ts
-│   ├── launcher.cjs
-│   └── web-host.ts
-├── runtime/
-│   ├── gating-state.ts
-│   ├── gating-router.ts
-│   ├── langgraph-host.ts
-│   ├── langgraph-runtime.ts
-│   ├── orchestrator.ts
-│   ├── topology-compiler.ts
-│   ├── store.ts
-│   ├── opencode-client.ts
-│   └── user-data-path.ts
-├── shared/
-│   ├── ipc.ts
-│   ├── terminal-commands.ts
-│   └── types.ts
 ├── src/
+│   ├── cli/
+│   │   ├── index.ts
+│   │   ├── launcher.cjs
+│   │   └── web-host.ts
 │   ├── components/
 │   ├── lib/
-│   ├── store/
+│   ├── runtime/
+│   │   ├── gating-state.ts
+│   │   ├── gating-router.ts
+│   │   ├── langgraph-host.ts
+│   │   ├── langgraph-runtime.ts
+│   │   ├── orchestrator.ts
+│   │   ├── topology-compiler.ts
+│   │   ├── store.ts
+│   │   ├── opencode-client.ts
+│   │   └── user-data-path.ts
+│   ├── shared/
+│   │   ├── ipc.ts
+│   │   ├── terminal-commands.ts
+│   │   └── types.ts
 │   ├── App.tsx
 │   ├── main.tsx
 │   └── styles.css
@@ -228,8 +227,9 @@ bun run dist:mac-x64
 
 交付前检查：
 
-- 每次交付前必须在仓库根目录运行 `bun test`，并以测试通过作为交付前置条件。
-- 涉及调度状态变化、回流顺序、裁决转发、spawn 对话推进等用户可见协作语义时，新增覆盖优先写进 `runtime/scheduler-script-harness.test.ts` 这类 script 测试，用对话脚本验证真实流转；只有当该行为依赖内部暂存状态或 synthetic dispatch、无法自然表达为一段用户可见对话脚本时，才保留在 `runtime/gating-router.test.ts` / `runtime/orchestrator.test.ts` 做纯状态测试。
+- 每次交付前必须在仓库根目录运行 `bun tsc --noEmit`，并以类型检查通过作为交付前置条件。
+- 每次交付前必须在仓库根目录运行 `bun test --only-failures; bun run knip --fix`，并确认没有遗留失败用例与可自动修复的未使用项。
+- 涉及调度状态变化、回流顺序、裁决转发、spawn 对话推进等用户可见协作语义时，新增覆盖优先写进 `src/runtime/scheduler-script-harness.test.ts` 这类 script 测试，用对话脚本验证真实流转；只有当该行为依赖内部暂存状态或 synthetic dispatch、无法自然表达为一段用户可见对话脚本时，才保留在 `src/runtime/gating-router.test.ts` / `src/runtime/orchestrator.test.ts` 做纯状态测试。
 
 打包注意事项：
 

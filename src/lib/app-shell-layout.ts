@@ -1,4 +1,4 @@
-export interface AppShellPadding {
+interface AppShellPadding {
   x: number;
   y: number;
 }

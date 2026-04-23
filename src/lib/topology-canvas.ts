@@ -44,7 +44,6 @@ export function buildTopologyCanvasLayout(input: {
     input.compactMinNodeWidth ?? Math.min(fallbackNodeWidth, 180),
     fallbackNodeWidth,
   );
-  const minNodeHeight = input.minNodeHeight ?? fallbackNodeHeight;
   const compactMinNodeHeight = Math.min(
     input.compactMinNodeHeight ?? Math.min(fallbackNodeHeight, 160),
     fallbackNodeHeight,
