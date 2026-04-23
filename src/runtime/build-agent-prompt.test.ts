@@ -9,17 +9,13 @@ import {
 } from "../shared/review-response";
 
 test("Build agent does not inject a system prompt", () => {
-  const prompt = buildAgentSystemPrompt({
-    name: "Build",
-  }, false);
+  const prompt = buildAgentSystemPrompt(false);
 
   assert.equal(prompt, "");
 });
 
 test("Review agents keep the response contract in the system prompt", () => {
-  const prompt = buildAgentSystemPrompt({
-    name: "TaskReview",
-  }, true, "[From BA Agent]");
+  const prompt = buildAgentSystemPrompt(true, "[From BA Agent]");
 
   assert.match(prompt, /`\[From BA Agent\]`/);
   assert.doesNotMatch(prompt, /\[@/);
@@ -34,9 +30,7 @@ test("Review agents keep the response contract in the system prompt", () => {
 });
 
 test("Non-review agents do not inject a system prompt", () => {
-  const prompt = buildAgentSystemPrompt({
-    name: "BA",
-  }, false);
+  const prompt = buildAgentSystemPrompt(false);
 
   assert.equal(prompt, "");
 });
@@ -45,9 +39,7 @@ test("Build agent request body omits system", () => {
   const body = buildSubmitMessageBody({
     agent: "Build",
     content: "Implement feature",
-    system: buildAgentSystemPrompt({
-      name: "Build",
-    }, false),
+    system: buildAgentSystemPrompt(false),
   });
 
   assert.equal("system" in body, false);
@@ -58,9 +50,7 @@ test("Review agent request body keeps system", () => {
   const body = buildSubmitMessageBody({
     agent: "TaskReview",
     content: "Review the delivery",
-    system: buildAgentSystemPrompt({
-      name: "TaskReview",
-    }, true, "[From Build Agent]"),
+    system: buildAgentSystemPrompt(true, "[From Build Agent]"),
   });
 
   assert.equal(typeof body["system"], "string");

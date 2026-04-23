@@ -20,21 +20,25 @@ interface RuntimeEnvelope {
   lastError: string | null;
 }
 
+function takeLatestValue<T>(...values: [previous: T, next: T]): T {
+  return values[1];
+}
+
 const RuntimeAnnotation = Annotation.Root({
   graphState: Annotation<GraphTaskState | null>({
-    reducer: (_left, right) => right,
+    reducer: takeLatestValue,
     default: () => null,
   }),
   pendingInput: Annotation<LangGraphInputEvent | null>({
-    reducer: (_left, right) => right,
+    reducer: takeLatestValue,
     default: () => null,
   }),
   lastDecision: Annotation<GraphRoutingDecision | null>({
-    reducer: (_left, right) => right,
+    reducer: takeLatestValue,
     default: () => null,
   }),
   lastError: Annotation<string | null>({
-    reducer: (_left, right) => right,
+    reducer: takeLatestValue,
     default: () => null,
   }),
 });

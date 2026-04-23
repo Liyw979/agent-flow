@@ -1,11 +1,9 @@
-import type { AgentRecord } from "../shared/types";
 import {
   REVIEW_COMPLETE_LABEL,
   REVIEW_CONTINUE_LABEL,
 } from "../shared/review-response";
 
 export function buildAgentSystemPrompt(
-  _agent: Pick<AgentRecord, "name">,
   reviewAgent: boolean,
   sourceSectionLabel?: string,
 ): string {

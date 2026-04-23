@@ -163,8 +163,8 @@ export class Orchestrator {
   private isDisposing = false;
 
   constructor(options: OrchestratorOptions) {
-    this.store = new StoreService(options.userDataPath);
-    this.opencodeClient = new OpenCodeClient(options.userDataPath);
+    this.store = new StoreService();
+    this.opencodeClient = new OpenCodeClient();
     this.opencodeRunner = new OpenCodeRunner(this.opencodeClient);
     this.enableEventStream = options.enableEventStream ?? true;
     this.runtimeRefreshDebounceMs = options.runtimeRefreshDebounceMs ?? 120;
@@ -327,7 +327,7 @@ export class Orchestrator {
   async submitTask(payload: SubmitTaskPayload): Promise<TaskSnapshot> {
     const normalizedCwd = path.resolve(payload.cwd ?? process.cwd());
     const agents = this.listWorkspaceAgents(normalizedCwd);
-    validateProjectAgents(agents);
+    validateProjectAgents();
     this.syncTopology(normalizedCwd, agents);
     const topology = this.store.getTopology(normalizedCwd);
     const resolution = resolveTaskSubmissionTarget({
@@ -363,7 +363,7 @@ export class Orchestrator {
   async initializeTask(payload: InitializeTaskPayload): Promise<TaskSnapshot> {
     const normalizedCwd = path.resolve(payload.cwd);
     const agents = this.listWorkspaceAgents(normalizedCwd);
-    validateProjectAgents(agents);
+    validateProjectAgents();
     this.syncTopology(normalizedCwd, agents);
 
     return this.createTask(normalizedCwd, agents, {
@@ -377,7 +377,6 @@ export class Orchestrator {
     const normalizedCwd = path.resolve(payload.cwd);
     const task = this.store.getTask(normalizedCwd, payload.taskId);
     const snapshot = await this.ensureTaskInitialized(
-      normalizedCwd,
       task,
       this.listWorkspaceAgents(normalizedCwd),
     );
@@ -489,7 +488,7 @@ export class Orchestrator {
       });
     }
 
-    await this.ensureTaskInitialized(normalizedCwd, task, agents);
+    await this.ensureTaskInitialized(task, agents);
 
     const taskCreatedMessage: MessageRecord = {
       id: randomUUID(),
@@ -534,7 +533,7 @@ export class Orchestrator {
       throw new Error(`未找到被 @ 的 Agent：${mentionAgent}`);
     }
 
-    await this.ensureTaskInitialized(normalizedCwd, task, agents);
+    await this.ensureTaskInitialized(task, agents);
 
     const message = this.createUserMessage(task.id, task.title, content, targetAgent.name);
     this.store.insertMessage(normalizedCwd, message);
@@ -1058,7 +1057,6 @@ export class Orchestrator {
   }
 
   protected async ensureAgentSession(
-    _cwd: string,
     task: TaskRecord,
     agent: TaskAgentRecord,
   ): Promise<string> {
@@ -1081,10 +1079,10 @@ export class Orchestrator {
   }
 
   protected async ensureTaskPanels(task: TaskRecord) {
-    await this.ensureTaskInitialized(task.cwd, task, this.listWorkspaceAgents(task.cwd));
+    await this.ensureTaskInitialized(task, this.listWorkspaceAgents(task.cwd));
   }
 
-  private async ensureTaskAgentSessions(cwd: string, task: TaskRecord): Promise<Map<string, string>> {
+  private async ensureTaskAgentSessions(task: TaskRecord): Promise<Map<string, string>> {
     const topology = this.store.getTopology(task.cwd);
     const prewarmAgentNames = new Set(
       resolveTaskAgentNamesToPrewarm(topology, this.store.listTaskAgents(task.cwd, task.id)),
@@ -1094,20 +1092,19 @@ export class Orchestrator {
         .filter((agent) => prewarmAgentNames.has(agent.name))
         .map(async (agent) => [
         agent.name,
-        await this.ensureAgentSession(cwd, task, agent),
+        await this.ensureAgentSession(task, agent),
       ] as const),
     );
     return new Map(sessions);
   }
 
   private async ensureTaskInitialized(
-    cwd: string,
     task: TaskRecord,
     agents: AgentRecord[],
   ): Promise<TaskSnapshot> {
     this.syncTaskAgents(task, agents);
     const currentTask = this.store.getTask(task.cwd, task.id);
-    await this.ensureTaskAgentSessions(cwd, currentTask);
+    await this.ensureTaskAgentSessions(currentTask);
     await this.ensureTaskRuntimeEventStream(currentTask);
 
     const refreshedTask = this.store.getTask(task.cwd, task.id);
@@ -1156,7 +1153,6 @@ export class Orchestrator {
   }
 
   protected createSystemPrompt(
-    agent: AgentRecord,
     prompt: AgentExecutionPrompt,
     reviewAgent: boolean,
   ): string {
@@ -1168,7 +1164,7 @@ export class Orchestrator {
       ? this.buildSourceAgentMessageSection(prompt.from)
       : undefined;
 
-    return buildAgentSystemPrompt(agent, reviewAgent, sourceSectionLabel);
+    return buildAgentSystemPrompt(reviewAgent, sourceSectionLabel);
   }
 
   private createTaskTitle(content: string): string {
@@ -1628,7 +1624,7 @@ export class Orchestrator {
     try {
       const currentTask = this.store.getTask(task.cwd, task.id);
       await this.ensureTaskPanels(currentTask);
-      const agentSessionId = await this.ensureAgentSession(cwd, currentTask, currentAgent);
+      const agentSessionId = await this.ensureAgentSession(currentTask, currentAgent);
       const latestAgent = this.findAgent(this.listWorkspaceAgents(cwd), executableAgentName);
       if (!latestAgent) {
         throw new Error(`当前工作区缺少 Agent ${executableAgentName}`);
@@ -1663,7 +1659,7 @@ export class Orchestrator {
         sessionId: agentSessionId,
         content: dispatchedContent,
         agent: executableAgentName,
-        system: this.createSystemPrompt(latestAgent, prompt, reviewAgent),
+        system: this.createSystemPrompt(prompt, reviewAgent),
       });
 
       if (response.status === "error") {
