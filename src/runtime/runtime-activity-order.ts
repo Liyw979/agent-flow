@@ -8,5 +8,9 @@ export function pickRecentPartIndexes(partsLength: number, maxActivities: number
   }
 
   const startIndex = Math.max(0, partsLength - maxActivities);
-  return Array.from({ length: partsLength - startIndex }, (_, offset) => startIndex + offset);
+  const indexes: number[] = [];
+  for (let offset = 0; offset < partsLength - startIndex; offset += 1) {
+    indexes.push(startIndex + offset);
+  }
+  return indexes;
 }

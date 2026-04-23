@@ -172,7 +172,6 @@ export class GatingScheduler {
   recordHandoffBatchResponse(
     responderAgentId: string,
     outcome: "complete" | "fail",
-    _agentStates: GatingAgentState[],
   ): GatingBatchContinuation | null {
     for (const [sourceAgentId, batch] of this.runtime.activeHandoffBatchBySource.entries()) {
       if (!batch.pendingTargets.includes(responderAgentId)) {

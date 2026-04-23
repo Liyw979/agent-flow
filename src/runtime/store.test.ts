@@ -13,9 +13,8 @@ function createTempDir() {
 }
 
 test("StoreService 在空工作区读取时不会物化旧工作区快照文件", () => {
-  const userDataPath = createTempDir();
   const cwd = createTempDir();
-  const store = new StoreService(userDataPath);
+  const store = new StoreService();
 
   const state = store.getState(cwd);
 
@@ -24,9 +23,8 @@ test("StoreService 在空工作区读取时不会物化旧工作区快照文件"
 });
 
 test("StoreService 会在内存里保存 topology / tasks / taskAgents / messages", () => {
-  const userDataPath = createTempDir();
   const cwd = createTempDir();
-  const store = new StoreService(userDataPath);
+  const store = new StoreService();
 
   store.upsertTopology(cwd, {
     nodes: ["Build"],
@@ -76,9 +74,8 @@ test("StoreService 会在内存里保存 topology / tasks / taskAgents / message
 });
 
 test("StoreService 会在内存里维护 task locator，并在删除任务时清掉索引", () => {
-  const userDataPath = createTempDir();
   const cwd = createTempDir();
-  const store = new StoreService(userDataPath);
+  const store = new StoreService();
 
   store.insertTask({
     id: "task-1",

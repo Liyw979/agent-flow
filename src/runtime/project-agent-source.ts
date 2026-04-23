@@ -14,7 +14,7 @@ export function resolveProjectAgents(input: {
   return [];
 }
 
-export function validateProjectAgents(_agents: AgentRecord[]): void {
+export function validateProjectAgents(): void {
   // 拓扑中的 writable 现在完全由 JSON 显式声明，允许多个 Agent 同时可写。
 }
 

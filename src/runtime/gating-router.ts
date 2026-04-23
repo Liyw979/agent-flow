@@ -172,7 +172,6 @@ export function applyAgentResultToGraphState(
   const batchContinuation = scheduler.recordHandoffBatchResponse(
     result.agentName,
     result.reviewDecision === "continue" ? "fail" : "complete",
-    buildGatingAgentStates(nextState),
   );
   applySchedulerRuntimeToGraphState(nextState, runtime);
 

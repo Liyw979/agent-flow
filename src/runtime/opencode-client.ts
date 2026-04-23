@@ -100,7 +100,7 @@ export class OpenCodeClient {
   readonly sessionErrors = new Map<string, string>();
   readonly sessionWaiters = new Map<string, SessionWaiter[]>();
 
-  constructor(_runtimeRoot?: string) {}
+  constructor() {}
 
   protected normalizeTarget(target: OpenCodeRuntimeTargetInput): OpenCodeRuntimeTarget {
     if (typeof target === "string") {

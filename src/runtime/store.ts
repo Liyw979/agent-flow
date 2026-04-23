@@ -54,7 +54,7 @@ export class StoreService {
 
   private readonly taskLocatorById = new Map<string, string>();
 
-  constructor(_userDataPath: string) {}
+  constructor() {}
 
   listTasks(cwd: string): TaskRecord[] {
     return sortByCreatedAtDesc(this.readWorkspaceState(cwd).tasks);

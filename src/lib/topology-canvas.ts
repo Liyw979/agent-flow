@@ -64,7 +64,11 @@ export function buildTopologyCanvasLayout(input: {
   const getRowItemCounts = (rows: number) => {
     const base = Math.floor(nodeCount / rows);
     const extra = nodeCount % rows;
-    return Array.from({ length: rows }, (_, index) => base + (index < extra ? 1 : 0));
+    const counts: number[] = [];
+    for (let index = 0; index < rows; index += 1) {
+      counts.push(base + (index < extra ? 1 : 0));
+    }
+    return counts;
   };
 
   let rowCount = 1;

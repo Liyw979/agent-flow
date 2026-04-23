@@ -55,7 +55,7 @@ function stubOpenCodeSessions(orchestrator: Orchestrator) {
       reloadConfig: () => Promise<void>;
     };
   };
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
   typed.opencodeClient.reloadConfig = async () => undefined;
   return typed;
@@ -426,7 +426,7 @@ test("单节点任务进入 waiting 时不会因为缺少 workspace cwd 而在�
     backgroundRun = promise;
   };
   typed.createLangGraphBatchRunners = async () => [];
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.opencodeRunner.run = async ({ agent }) =>
     buildOpenCodeExecutionResult({
@@ -490,7 +490,7 @@ test("漏洞团队里反方返回 approved 后会继续派发到裁决总结，�
     return next;
   };
 
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.opencodeRunner.run = async ({ agent }) => {
     const count = nextCount(agent);
@@ -642,7 +642,7 @@ test("漏洞团队 spawn runtime agent 尚未落库时，getTaskSnapshot 不会�
     releaseGitSummary = resolve;
   });
 
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.buildProjectGitDiffSummary = async () => {
     gitSummaryCallCount += 1;
@@ -867,10 +867,11 @@ test("OpenCode 事件会触发 runtime-updated 前端事件", async () => {
       getAttachBaseUrl: (projectPath: string) => Promise<string>;
     };
   };
-  typed.opencodeClient.connectEvents = async (_projectPath, onEvent) => {
+  typed.opencodeClient.connectEvents = async (target, onEvent) => {
+    void target;
     eventHandler = onEvent as (event: unknown) => void;
   };
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
 
   let project = await orchestrator.getWorkspaceSnapshot(projectPath);
@@ -1287,10 +1288,10 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
   };
 
   const injectedConfigs: string[] = [];
-  typed.opencodeClient.setInjectedConfigContent = (_projectPath, content) => {
-    injectedConfigs.push(content ?? "null");
+  typed.opencodeClient.setInjectedConfigContent = (...args: [string, string | null]) => {
+    injectedConfigs.push(args[1] ?? "null");
   };
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
 
   const projectA = await orchestrator.getWorkspaceSnapshot(projectAPath);
@@ -1667,7 +1668,7 @@ test("只有第一次 Agent 间传递会携带 [Initial Task]", async () => {
       timestamp: "2026-04-15T00:00:00.000Z",
     });
 
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.opencodeRunner.run = async ({ agent, content }) => {
     recordPrompt(agent, content);
@@ -1814,7 +1815,7 @@ test("单 reviewer 审查失败后会把 action_required 回流给 Build", async
       timestamp: `2026-04-15T00:00:0${count}.000Z`,
     });
 
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.opencodeRunner.run = async ({ agent, content }) => {
     const count = recordPrompt(agent, content);
@@ -1923,7 +1924,7 @@ test("审查 Agent 的结构化 prompt 不会混入 Project Git Diff Summary", a
     return current.length;
   };
 
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.buildProjectGitDiffSummary = async () => "当前项目 Git Diff 精简摘要：\n工作区状态：\nM .opencode/temp-add.js";
   typed.opencodeRunner.run = async ({ agent, content }) => {
@@ -2043,7 +2044,7 @@ test("修复首个失败 reviewer 后，Build 下一轮不会立刻全量重派�
     releaseCodeReviewSecondRun = resolve;
   });
 
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
@@ -2200,7 +2201,7 @@ test("审查 Agent 返回 action_required 后会在其余 reviewer 收齐后回�
     releaseCodeReview = resolve;
   });
 
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.opencodeRunner.run = async ({ agent, content }) => {
     if (agent === "Build") {
@@ -2326,7 +2327,6 @@ test("审视类 system prompt 会使用真实来源 Agent 名称", () => {
 
   const typed = orchestrator as unknown as Orchestrator & {
     createSystemPrompt: (
-      agent: { name: string },
       prompt: {
         mode: "structured";
         from: string;
@@ -2339,7 +2339,6 @@ test("审视类 system prompt 会使用真实来源 Agent 名称", () => {
   };
 
   const systemPrompt = typed.createSystemPrompt(
-    { name: "TaskReview" },
     {
       mode: "structured",
       from: "BA",
@@ -2418,7 +2417,7 @@ test("单 Agent 且没有下游时，任务结束后仍保留该 Agent 的最终
   });
   const typed = stubOpenCodeSessions(orchestrator) as unknown as Orchestrator & {
     ensureTaskPanels: (task: { id: string; cwd: string }) => Promise<void>;
-    ensureAgentSession: (cwd: string, task: { id: string; cwd: string }, agent: { name: string }) => Promise<string>;
+    ensureAgentSession: (task: { id: string; cwd: string }, agent: { name: string }) => Promise<string>;
     opencodeRunner: {
       run: (input: { agent: string }) => Promise<OpenCodeExecutionResult>;
     };
@@ -2435,7 +2434,8 @@ test("单 Agent 且没有下游时，任务结束后仍保留该 Agent 的最终
   });
 
   typed.ensureTaskPanels = async () => undefined;
-  typed.ensureAgentSession = async (_cwd, task, agent) => `session:${task.id}:${agent.name}`;
+  typed.ensureAgentSession = async (...args: [{ id: string; cwd: string }, { name: string }]) =>
+    `session:${args[0].id}:${args[1].name}`;
   typed.opencodeRunner.run = async () =>
     buildCompletedExecutionResult({
       agent: "BA",
@@ -2724,7 +2724,7 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
   };
   stubOpenCodeAttachBaseUrl(orchestrator);
 
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.opencodeRunner.run = async ({ agent }) =>
     buildCompletedExecutionResult({
@@ -2813,7 +2813,7 @@ test("最大连续回流达到上限后，聊天页面会直接展示明确失�
   });
   const typed = stubOpenCodeSessions(orchestrator) as unknown as Orchestrator & {
     ensureTaskPanels: (cwd: string, taskId: string) => Promise<void>;
-    ensureAgentSession: (projectPath: string, taskId: string, agentName: string) => Promise<string>;
+    ensureAgentSession: (task: { id: string; cwd: string }, agent: { name: string }) => Promise<string>;
     opencodeClient: {
       reloadConfig: () => Promise<void>;
     };
@@ -2842,7 +2842,8 @@ test("最大连续回流达到上限后，聊天页面会直接展示明确失�
   });
 
   typed.ensureTaskPanels = async () => undefined;
-  typed.ensureAgentSession = async (_projectPath, _taskId, agentName) => `session:${agentName}`;
+  typed.ensureAgentSession = async (...args: [{ id: string; cwd: string }, { name: string }]) =>
+    `session:${args[1].name}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
@@ -2929,7 +2930,7 @@ test("聊天页面会按每条 action_required 边的单独上限展示失败原
   });
   const typed = stubOpenCodeSessions(orchestrator) as unknown as Orchestrator & {
     ensureTaskPanels: (cwd: string, taskId: string) => Promise<void>;
-    ensureAgentSession: (projectPath: string, taskId: string, agentName: string) => Promise<string>;
+    ensureAgentSession: (task: { id: string; cwd: string }, agent: { name: string }) => Promise<string>;
     opencodeClient: {
       reloadConfig: () => Promise<void>;
     };
@@ -2958,7 +2959,8 @@ test("聊天页面会按每条 action_required 边的单独上限展示失败原
   });
 
   typed.ensureTaskPanels = async () => undefined;
-  typed.ensureAgentSession = async (_projectPath, _taskId, agentName) => `session:${agentName}`;
+  typed.ensureAgentSession = async (...args: [{ id: string; cwd: string }, { name: string }]) =>
+    `session:${args[1].name}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
@@ -3046,7 +3048,7 @@ test("并发审查失败时不会提前追加任务结束系统消息", async ()
   };
   stubOpenCodeAttachBaseUrl(orchestrator);
 
-  typed.opencodeClient.createSession = async (_projectPath, title) => `session:${title}`;
+  typed.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   typed.opencodeClient.reloadConfig = async () => undefined;
   typed.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {

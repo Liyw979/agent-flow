@@ -85,13 +85,15 @@ function createUiSnapshotPayload(input: {
           runCount: buildStatus === "idle" ? 0 : 1,
         },
       ],
-      messages: Array.from({ length: messageCount }, (_, index) =>
-        createSystemMessage(
+      messages: Array.from({ length: messageCount }).map((value, index) => {
+        void value;
+        return createSystemMessage(
           `message-${index + 1}`,
           index === 0 ? "system" : "BA",
           `message-${index + 1}`,
           `2026-04-21T03:22:${String(index).padStart(2, "0")}.000Z`,
-        )),
+        );
+      }),
       topology: {
         nodes: ["BA", "Build", "UnitTest"],
         edges: [],
