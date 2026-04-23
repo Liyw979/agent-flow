@@ -14,8 +14,8 @@ test("createTopology 支持以前端下游模板 DSL 生成普通拓扑", () => 
         TaskReview: "association",
       },
       CodeReview: {
-        Build: "review_fail",
-        TaskReview: "review_pass",
+        Build: "needs_revision",
+        TaskReview: "approved",
       },
     },
   });
@@ -26,8 +26,8 @@ test("createTopology 支持以前端下游模板 DSL 生成普通拓扑", () => 
     { source: "Build", target: "CodeReview", triggerOn: "association" },
     { source: "Build", target: "UnitTest", triggerOn: "association" },
     { source: "Build", target: "TaskReview", triggerOn: "association" },
-    { source: "CodeReview", target: "Build", triggerOn: "review_fail" },
-    { source: "CodeReview", target: "TaskReview", triggerOn: "review_pass" },
+    { source: "CodeReview", target: "Build", triggerOn: "needs_revision" },
+    { source: "CodeReview", target: "TaskReview", triggerOn: "approved" },
   ]);
 });
 
@@ -36,7 +36,7 @@ test("createTopology 支持把 spawn 作为下游模式写进 DSL", () => {
     projectId: "dsl-spawn",
     downstream: {
       Build: { TaskReview: "spawn" },
-      TaskReview: { Build: "review_fail" },
+      TaskReview: { Build: "needs_revision" },
     },
     spawn: {
       TaskReview: {},
@@ -45,7 +45,7 @@ test("createTopology 支持把 spawn 作为下游模式写进 DSL", () => {
 
   assert.deepEqual(topology.edges, [
     { source: "Build", target: "TaskReview", triggerOn: "association" },
-    { source: "TaskReview", target: "Build", triggerOn: "review_fail" },
+    { source: "TaskReview", target: "Build", triggerOn: "needs_revision" },
   ]);
   assert.deepEqual(topology.nodeRecords, [
     { id: "Build", kind: "agent", templateName: "Build" },
@@ -61,6 +61,7 @@ test("createTopology 支持把 spawn 作为下游模式写进 DSL", () => {
     {
       id: "spawn-rule:TaskReview",
       name: "TaskReview",
+      spawnNodeName: "TaskReview",
       sourceTemplateName: "Build",
       entryRole: "entry",
       spawnedAgents: [{ role: "entry", templateName: "TaskReview" }],

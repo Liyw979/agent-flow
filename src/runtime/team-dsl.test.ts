@@ -173,7 +173,7 @@ test("compileTeamDsl 会拒绝非法的 node.type", () => {
         ],
         links: [],
       } as never),
-    /type 是节点判别字段，只允许 agent 或 spawn/u,
+    /nodes\[0\].*Invalid input/u,
   );
 });
 
@@ -191,7 +191,7 @@ test("compileTeamDsl 会拒绝省略 agent.writable 的拓扑节点", () => {
         ],
         links: [],
       }),
-    /writable/u,
+    /nodes\[0\].*Invalid input/u,
   );
 });
 

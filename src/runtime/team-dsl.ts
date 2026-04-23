@@ -76,22 +76,23 @@ const GraphDslAgentNodeSchema: z.ZodType<GraphDslAgentNode> = z.object({
   writable: z.boolean(),
 }).strict();
 
+const GraphDslNodeSchema: z.ZodType<GraphDslNode> = z.lazy(() =>
+  z.union([
+    GraphDslAgentNodeSchema,
+    z.object({
+      type: z.literal("spawn"),
+      name: z.string(),
+      graph: GraphDslGraphSchema,
+    }).strict(),
+  ]),
+);
+
 const GraphDslGraphSchema: z.ZodType<GraphDslGraph> = z.lazy(() =>
   z.object({
     entry: z.string(),
     nodes: z.array(GraphDslNodeSchema),
     links: z.array(GraphDslLinkSchema),
-  }),
-);
-
-const GraphDslSpawnNodeSchema: z.ZodType<GraphDslSpawnNode> = z.object({
-  type: z.literal("spawn"),
-  name: z.string(),
-  graph: GraphDslGraphSchema,
-}).strict();
-
-const GraphDslNodeSchema: z.ZodType<GraphDslNode> = z.lazy(() =>
-  z.discriminatedUnion("type", [GraphDslAgentNodeSchema, GraphDslSpawnNodeSchema]),
+  }).strict(),
 );
 
 function normalizeComparableAgents(agents: Array<{
@@ -116,6 +117,7 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
         source: edge.source,
         target: edge.target,
         triggerOn: edge.triggerOn,
+        messageMode: edge.messageMode,
         ...(edge.triggerOn === "needs_revision"
           ? {
               maxRevisionRounds: normalizeNeedsRevisionMaxRounds(edge.maxRevisionRounds),

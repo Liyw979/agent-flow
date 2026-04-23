@@ -83,7 +83,6 @@ interface NeedsRevisionLoopLimitDecision {
 
 export function createGraphTaskState(input: {
   taskId: string;
-  projectId: string;
   topology: GraphTaskState["topology"];
 }): GraphTaskState {
   return createEmptyGraphTaskState(input);

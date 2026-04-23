@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 
-import {
-  DEFAULT_NEEDS_REVISION_MAX_ROUNDS,
-  type TopologyEdgeTrigger,
-  type TopologyRecord,
-} from "@shared/types";
+import {DEFAULT_NEEDS_REVISION_MAX_ROUNDS, type TopologyEdgeTrigger, type TopologyRecord,} from "@shared/types";
 
 interface ParsedScriptLine {
   sender: string;
@@ -121,7 +117,7 @@ interface AgentRefResolver {
   resolve(name: string): string;
   isKnown(agentName: string): boolean;
   getAssociationTargets(agentName: string): string[];
-  getTriggeredTargets(agentName: string, triggerOn: "review_fail" | "review_pass"): string[];
+  getTriggeredTargets(agentName: string, triggerOn: "needs_revision" | "approved"): string[];
   hasAnyOutgoingTargets(agentName: string): boolean;
   hasOutgoingTarget(sourceAgentName: string, targetAgentName: string): boolean;
   getReviewFailLoopLimit(sourceAgentName: string, targetAgentName: string): number;
@@ -134,7 +130,7 @@ interface AgentRefResolver {
     sourceAgentName: string,
     actualTargets: string[],
     canonicalTargets: string[],
-    triggerOn: "association" | "review_fail" | "review_pass",
+    triggerOn: "association" | "needs_revision" | "approved",
   ): string[] | null;
 }
 
@@ -256,7 +252,7 @@ export async function assertSchedulerScript(
             sourceState.expectedNextAction = null;
             continue;
           }
-          const escalationTargets = parsed.resolver.getTriggeredTargets(firstFailed.agent, "review_pass");
+          const escalationTargets = parsed.resolver.getTriggeredTargets(firstFailed.agent, "approved");
           assert.ok(
             escalationTargets.length > 0,
             `${firstFailed.agent} -> ${current.source} 连续回流已超过 ${parsed.resolver.getReviewFailLoopLimit(firstFailed.agent, current.source)} 轮上限`,
@@ -325,7 +321,7 @@ export async function assertSchedulerScript(
         const expectedRepairTarget = expectedAction?.kind === "repair"
           ? expectedAction.reviewerAgentId
           : expectedTargets.length === 1 ? expectedTargets[0] ?? "" : "";
-        const reviewPassTargets = parsed.resolver.getTriggeredTargets(agentName, "review_pass");
+        const reviewPassTargets = parsed.resolver.getTriggeredTargets(agentName, "approved");
         const expectedEscalation = expectedRepairTarget
           && reviewPassTargets.length > 0
           && (reviewFailLoopCountByEdge.get(buildReviewFailLoopEdgeKey(agentName, expectedRepairTarget)) ?? 0)
@@ -336,7 +332,7 @@ export async function assertSchedulerScript(
               agentName,
               normalizedReplyTargets,
               reviewPassTargets,
-              "review_pass",
+              "approved",
             ),
           );
         if (!expectedEscalation) {
@@ -347,7 +343,7 @@ export async function assertSchedulerScript(
           );
         }
       } else if (normalizedReplyTargets.length > 0) {
-        const directReviewFailTargets = parsed.resolver.getTriggeredTargets(agentName, "review_fail");
+        const directReviewFailTargets = parsed.resolver.getTriggeredTargets(agentName, "needs_revision");
         const matchesAssociationTargets = parsed.resolver.matchCanonicalTargets(
           agentName,
           normalizedReplyTargets,
@@ -358,12 +354,12 @@ export async function assertSchedulerScript(
           agentName,
           normalizedReplyTargets,
           directReviewFailTargets,
-          "review_fail",
+          "needs_revision",
         );
         assert.equal(
           Boolean(matchesAssociationTargets || matchesDirectReviewFailTargets),
           true,
-          `${agentName} 的初始/全量派发目标必须等于 topology.association 默认顺序，或匹配其 direct review_fail 下游`,
+          `${agentName} 的初始/全量派发目标必须等于 topology.association 默认顺序，或匹配其 direct needs_revision 下游`,
         );
       }
     }
@@ -372,6 +368,7 @@ export async function assertSchedulerScript(
 
     if (!currentBatch) {
       const sourceState = ensureSourceState(agentName);
+      const expectedNextAction = sourceState.expectedNextAction;
       sourceState.expectedNextAction = null;
 
       if (normalizedReplyTargets.length === 0) {
@@ -390,9 +387,10 @@ export async function assertSchedulerScript(
         );
       }
 
-      const directReviewFailTargets = parsed.resolver.getTriggeredTargets(agentName, "review_fail");
-      const canonicalTargets = sourceState.expectedNextAction?.targets
-        ?? parsed.resolver.matchCanonicalTargets(
+      const directReviewFailTargets = parsed.resolver.getTriggeredTargets(agentName, "needs_revision");
+      const canonicalTargets = expectedNextAction
+        ? expectedNextAction.targets
+        : parsed.resolver.matchCanonicalTargets(
           agentName,
           normalizedReplyTargets,
           sourceState.defaultTargets,
@@ -402,7 +400,7 @@ export async function assertSchedulerScript(
           agentName,
           normalizedReplyTargets,
           directReviewFailTargets,
-          "review_fail",
+          "needs_revision",
         )
         ?? normalizedReplyTargets;
 
@@ -427,8 +425,8 @@ export async function assertSchedulerScript(
     }
 
     const currentSource = currentBatch.source;
-    const failTargets = parsed.resolver.getTriggeredTargets(agentName, "review_fail");
-    const reviewPassTargets = parsed.resolver.getTriggeredTargets(agentName, "review_pass");
+    const failTargets = parsed.resolver.getTriggeredTargets(agentName, "needs_revision");
+    const reviewPassTargets = parsed.resolver.getTriggeredTargets(agentName, "approved");
     const loopEdgeKey = buildReviewFailLoopEdgeKey(agentName, currentSource);
     const currentLoopCount = reviewFailLoopCountByEdge.get(loopEdgeKey) ?? 0;
     const reviewFailLoopLimit = parsed.resolver.getReviewFailLoopLimit(agentName, currentSource);
@@ -445,7 +443,7 @@ export async function assertSchedulerScript(
           agentName,
           normalizedReplyTargets,
           reviewPassTargets,
-          "review_pass",
+          "approved",
         ),
       );
 
@@ -537,7 +535,7 @@ export async function assertSchedulerScript(
       const nextLine = parsed.lines[actualScript.length];
       const nextAgent = nextLine ? parsed.resolver.resolve(nextLine.sender) : undefined;
       assert.notEqual(nextAgent, undefined, `批次 ${currentBatch.source} 缺少下一个回应者`);
-      processReplyLine(nextAgent);
+      processReplyLine(nextAgent!);
       continue;
     }
 
@@ -657,10 +655,10 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
     if (triggerOn === "association") {
       return "association";
     }
-    if (triggerOn === "approved" || triggerOn === "review_pass") {
+    if (triggerOn === "approved") {
       return "approved";
     }
-    if (triggerOn === "needs_revision" || triggerOn === "review_fail") {
+    if (triggerOn === "needs_revision") {
       return "needs_revision";
     }
     return null;
@@ -753,8 +751,9 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
   }): DynamicSpawnAgentRef => {
     const ruleState = spawnRuleById.get(input.ruleId);
     assert.notEqual(ruleState, undefined, `未知 spawn rule：${input.ruleId}`);
+    const ensuredRuleState = ruleState!;
     const key = createDynamicSpawnAgentKey({
-      spawnNodeName: ruleState.spawnNodeName,
+      spawnNodeName: ensuredRuleState.spawnNodeName,
       templateName: input.templateName,
       index: input.index,
     });
@@ -764,15 +763,15 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
     }
     const created: DynamicSpawnAgentRef = {
       key,
-      spawnNodeName: ruleState.spawnNodeName,
-      spawnRuleId: ruleState.ruleId,
+      spawnNodeName: ensuredRuleState.spawnNodeName,
+      spawnRuleId: ensuredRuleState.ruleId,
       templateName: input.templateName,
       role: input.role,
       index: input.index,
-      sourceTemplateName: ruleState.sourceTemplateName,
-      reportToTemplateName: ruleState.reportToTemplateName,
-      reportToTriggerOn: ruleState.reportToTriggerOn,
-      isEntry: input.role === ruleState.entryRole,
+      sourceTemplateName: ensuredRuleState.sourceTemplateName,
+      reportToTemplateName: ensuredRuleState.reportToTemplateName,
+      reportToTriggerOn: ensuredRuleState.reportToTriggerOn,
+      isEntry: input.role === ensuredRuleState.entryRole,
     };
     dynamicRefsByKey.set(key, created);
     return created;
@@ -852,16 +851,8 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
   const isKnown = (agentName: string): boolean => staticAgents.has(agentName) || dynamicRefsByKey.has(agentName);
 
   const normalizeTrigger = (
-    triggerOn: "association" | "review_fail" | "review_pass" | TopologyEdgeTrigger,
-  ): TopologyEdgeTrigger | "association" => {
-    if (triggerOn === "review_fail") {
-      return "needs_revision";
-    }
-    if (triggerOn === "review_pass") {
-      return "approved";
-    }
-    return triggerOn;
-  };
+    triggerOn: "association" | "needs_revision" | "approved" | TopologyEdgeTrigger,
+  ): TopologyEdgeTrigger | "association" => triggerOn;
 
   const getDynamicRef = (agentName: string): DynamicSpawnAgentRef | null => dynamicRefsByKey.get(agentName) ?? null;
 
@@ -874,7 +865,7 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
 
   const getTriggeredTargets = (
     agentName: string,
-    triggerOn: "review_fail" | "review_pass",
+    triggerOn: "needs_revision" | "approved",
   ): string[] => {
     const dynamicRef = getDynamicRef(agentName);
     const normalizedTrigger = normalizeTrigger(triggerOn);
@@ -1004,7 +995,7 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
     sourceAgentName: string,
     actualTargetName: string,
     canonicalTargetName: string,
-    triggerOn: "association" | "review_fail" | "review_pass",
+    triggerOn: "association" | "needs_revision" | "approved",
   ): boolean => {
     if (actualTargetName === canonicalTargetName) {
       return true;
@@ -1028,7 +1019,7 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
     sourceAgentName: string,
     actualTargets: string[],
     canonicalTargets: string[],
-    triggerOn: "association" | "review_fail" | "review_pass",
+    triggerOn: "association" | "needs_revision" | "approved",
   ): string[] | null => {
     if (actualTargets.length !== canonicalTargets.length) {
       return null;
@@ -1054,8 +1045,7 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
 
 function parseScriptLine(line: string): ParsedScriptLine {
   const separatorIndex = line.indexOf(": ");
-  const fallbackSeparatorIndex = separatorIndex >= 0 ? separatorIndex : line.indexOf(":");
-  const resolvedSeparatorIndex = fallbackSeparatorIndex;
+  const resolvedSeparatorIndex = separatorIndex >= 0 ? separatorIndex : line.indexOf(":");
   assert.notEqual(resolvedSeparatorIndex, -1, `脚本缺少 sender 前缀：${line}`);
   const separatorLength = separatorIndex >= 0 ? 2 : 1;
   const sender = line.slice(0, resolvedSeparatorIndex).trim();
@@ -1079,12 +1069,12 @@ function parseReply(line: ParsedScriptLine): ParsedReply {
 }
 
 function extractLeadingMention(content: string): string | undefined {
-  const match = content.trim().match(/^@([^\s]+)/u);
+  const match = content.trim().match(/^@(\S+)/u);
   return match?.[1];
 }
 
 function extractMentions(content: string): string[] {
-  return [...content.matchAll(/@([^\s]+)/gu)]
+  return [...content.matchAll(/@(\S+)/gu)]
     .map((match) => match[1] ?? "")
     .filter(Boolean);
 }
@@ -1096,7 +1086,7 @@ function isMentionOnlyContent(content: string): boolean {
   }
   return trimmed
     .split(/\s+/)
-    .every((token) => /^@[^\s]+$/u.test(token));
+    .every((token) => /^@\S+$/u.test(token));
 }
 
 function extractInlineDispatch(content: string): { body: string; targets: string[] } | null {
@@ -1105,7 +1095,7 @@ function extractInlineDispatch(content: string): { body: string; targets: string
     return null;
   }
 
-  const match = trimmed.match(/(?:[\s，,]+)(@[^\s]+(?:\s+@[^\s]+)*)\s*$/u);
+  const match = trimmed.match(/[\s，,]+(@\S+(?:\s+@\S+)*)\s*$/u);
   if (!match || typeof match.index !== "number") {
     return null;
   }

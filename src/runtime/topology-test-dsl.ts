@@ -1,10 +1,12 @@
-import type {
-  SpawnRule,
-  SpawnedAgentTemplate,
-  TopologyEdge,
-  TopologyEdgeTrigger,
-  TopologyNodeRecord,
-  TopologyRecord,
+import {
+  normalizeTopologyEdgeTrigger,
+  type SpawnRule,
+  type SpawnedAgentTemplate,
+  type TopologyEdge,
+  type TopologyEdgeTrigger,
+  type TopologyNodeRecord,
+  type TopologyRecord,
+  type TopologyEdgeMessageMode,
 } from "@shared/types";
 
 type DownstreamMode = TopologyEdgeTrigger | "spawn";
@@ -24,6 +26,7 @@ type SpawnLinkInput =
       sourceRole: string;
       targetRole: string;
       triggerOn: TopologyEdgeTrigger;
+      messageMode?: TopologyEdgeMessageMode;
     };
 
 interface SpawnTemplateInput {
@@ -93,7 +96,7 @@ function buildEdges(input: CreateTopologyDslInput): TopologyEdge[] {
       edges.push({
         source,
         target,
-        triggerOn: mode === "spawn" ? "association" : mode,
+        triggerOn: mode === "spawn" ? "association" : normalizeTopologyEdgeTrigger(mode),
       });
     }
   }
@@ -182,14 +185,22 @@ function normalizeSpawnLinks(config: SpawnTemplateInput | undefined): SpawnRule[
       return {
         sourceRole,
         targetRole,
-        triggerOn,
+        triggerOn: normalizeTopologyEdgeTrigger(triggerOn),
       };
     }
 
+    const objectLink = link as Extract<SpawnLinkInput, {
+      sourceRole: string;
+      targetRole: string;
+      triggerOn: TopologyEdgeTrigger;
+      messageMode?: TopologyEdgeMessageMode;
+    }>;
+
     return {
-      sourceRole: link.sourceRole,
-      targetRole: link.targetRole,
-      triggerOn: link.triggerOn,
+      sourceRole: objectLink.sourceRole,
+      targetRole: objectLink.targetRole,
+      triggerOn: normalizeTopologyEdgeTrigger(objectLink.triggerOn),
+      messageMode: objectLink.messageMode,
     };
   });
 }
@@ -212,6 +223,7 @@ function buildSpawnRules(input: CreateTopologyDslInput): SpawnRule[] {
     return {
       id: `spawn-rule:${target}`,
       name: config?.name ?? target,
+      spawnNodeName: target,
       sourceTemplateName,
       entryRole: config?.entryRole ?? "entry",
       spawnedAgents: normalizeSpawnedAgents(target, config),
@@ -231,12 +243,19 @@ export function createTopology(
     return {
       projectId: input.projectId,
       nodes: [...input.nodes],
-      edges: input.edges.map((edge) => ({ ...edge })),
+      edges: input.edges.map((edge) => ({
+        ...edge,
+        triggerOn: normalizeTopologyEdgeTrigger(edge.triggerOn),
+      })),
       nodeRecords: input.nodeRecords?.map((node) => ({ ...node })),
       spawnRules: input.spawnRules?.map((rule) => ({
         ...rule,
+        spawnNodeName: rule.spawnNodeName ?? rule.name,
         spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
-        edges: rule.edges.map((edge) => ({ ...edge })),
+        edges: rule.edges.map((edge) => ({
+          ...edge,
+          triggerOn: normalizeTopologyEdgeTrigger(edge.triggerOn),
+        })),
       })),
     };
   }

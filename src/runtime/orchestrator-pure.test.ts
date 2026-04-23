@@ -67,7 +67,6 @@ function createAgent(input: Partial<TaskAgentRecord> & Pick<TaskAgentRecord, "na
   return {
     id: input.id ?? `agent:${input.name}`,
     taskId: input.taskId ?? "task-1",
-    projectId: input.projectId ?? "project-1",
     name: input.name,
     opencodeSessionId: input.opencodeSessionId ?? null,
     opencodeAttachBaseUrl: input.opencodeAttachBaseUrl ?? null,

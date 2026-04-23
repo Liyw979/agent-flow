@@ -13,6 +13,7 @@ import {
   createDefaultTopology,
   DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE,
   normalizeNeedsRevisionMaxRounds,
+  normalizeTopologyEdgeTrigger,
   normalizeTopologyEdgeMessageMode,
   type DeleteTaskPayload,
   type GetTaskRuntimePayload,
@@ -28,6 +29,7 @@ import {
   type TaskRecord,
   type TaskSnapshot,
   type TopologyEdge,
+  type TopologyNodeRecord,
   type TopologyRecord,
   type UpdateTopologyPayload,
   type WorkspaceSnapshot,
@@ -144,14 +146,14 @@ interface AgentRunBehaviorOptions {
   completeTaskOnFinish?: boolean;
 }
 
-function isTerminalTaskStatus(status: TaskRecord["status"]) {
+export function isTerminalTaskStatus(status: TaskRecord["status"]) {
   return status === "finished" || status === "failed";
 }
 
 export class Orchestrator {
-  private readonly store: StoreService;
-  private readonly opencodeClient: OpenCodeClient;
-  private readonly opencodeRunner: OpenCodeRunner;
+  readonly store: StoreService;
+  readonly opencodeClient: OpenCodeClient;
+  readonly opencodeRunner: OpenCodeRunner;
   private readonly events = new EventEmitter();
   private readonly langGraphRuntimes = new Map<string, LangGraphRuntime>();
   private readonly autoOpenTaskSession: boolean;
@@ -159,8 +161,8 @@ export class Orchestrator {
   private readonly taskRuntimeOverlays = new Map<string, TaskRuntimeOverlay>();
   private readonly connectedRuntimeTaskIds = new Set<string>();
   private readonly pendingRuntimeRefreshWorkspaces = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly pendingEventReconnects = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly pendingTaskRuns = new Set<Promise<void>>();
+  readonly pendingEventReconnects = new Map<string, ReturnType<typeof setTimeout>>();
+  readonly pendingTaskRuns = new Set<Promise<void>>();
   private readonly knownWorkspaces = new Set<string>();
   private readonly runtimeRefreshDebounceMs: number;
   private readonly terminalLauncher: (input: { cwd: string; command: string }) => Promise<void>;
@@ -556,22 +558,21 @@ export class Orchestrator {
     const runtime = this.getLangGraphRuntime(normalizedCwd);
     this.trackBackgroundTask(runtime.resumeTask({
       taskId: task.id,
-      workspaceCwd: normalizedCwd,
       topology,
       event: {
         type: "user_message",
         targetAgentName: targetAgent.name,
         content: forwardedContent,
       },
-    }), {
+    }).then(() => undefined), {
       taskId: task.id,
       agentName: targetAgent.name,
     });
     return this.hydrateTask(normalizedCwd, task.id);
   }
 
-  private trackBackgroundTask(
-    promise: Promise<unknown>,
+  protected trackBackgroundTask(
+    promise: Promise<void>,
     context: {
       taskId: string;
       agentName: string;
@@ -653,7 +654,7 @@ export class Orchestrator {
     this.store.updateTaskAgentCount(task.cwd, task.id, this.store.listTaskAgents(task.cwd, task.id).length);
   }
 
-  private async runAgent(
+  protected async runAgent(
     cwd: string,
     task: TaskRecord,
     agentName: string,
@@ -797,7 +798,7 @@ export class Orchestrator {
     };
   }
 
-  private parseReview(content: string, reviewAgent: boolean): ParsedReview {
+  protected parseReview(content: string, reviewAgent: boolean): ParsedReview {
     return parseReviewPure(content, reviewAgent);
   }
 
@@ -805,7 +806,7 @@ export class Orchestrator {
     return stripStructuredSignalsPure(content);
   }
 
-  private async buildProjectGitDiffSummary(cwd: string): Promise<string> {
+  protected async buildProjectGitDiffSummary(cwd: string): Promise<string> {
     try {
       const [statusResult, stagedStatResult, unstagedStatResult] = await Promise.all([
         this.runGitSummaryCommand(cwd, ["status", "--short", "--untracked-files=all"]),
@@ -913,7 +914,7 @@ export class Orchestrator {
     return [...lines.slice(0, maxLines), `... 共 ${lines.length} 行，仅展示前 ${maxLines} 行`];
   }
 
-  private buildAgentExecutionPrompt(prompt: AgentExecutionPrompt): string {
+  protected buildAgentExecutionPrompt(prompt: AgentExecutionPrompt): string {
     if (prompt.mode === "raw") {
       const content = prompt.content.trim();
       const from = this.getAgentDisplayName(prompt.from?.trim() || "System");
@@ -990,7 +991,7 @@ export class Orchestrator {
     return trailingSection || content;
   }
 
-  private createDisplayContent(parsedReview: ParsedReview, fallbackMessage?: string | null): string {
+  protected createDisplayContent(parsedReview: ParsedReview, fallbackMessage?: string | null): string {
     const cleanContent = this.extractAgentDisplayContent(parsedReview.cleanContent);
     if (parsedReview.decision === "invalid" && parsedReview.validationError) {
       return [cleanContent, parsedReview.validationError].filter(Boolean).join("\n\n");
@@ -1058,7 +1059,7 @@ export class Orchestrator {
     }));
   }
 
-  private async ensureAgentSession(
+  protected async ensureAgentSession(
     cwd: string,
     task: TaskRecord,
     agent: TaskAgentRecord,
@@ -1081,7 +1082,7 @@ export class Orchestrator {
     return sessionId;
   }
 
-  private async ensureTaskPanels(task: TaskRecord) {
+  protected async ensureTaskPanels(task: TaskRecord) {
     await this.ensureTaskInitialized(task.cwd, task, this.listWorkspaceAgents(task.cwd));
   }
 
@@ -1170,7 +1171,7 @@ export class Orchestrator {
     });
   }
 
-  private createSystemPrompt(
+  protected createSystemPrompt(
     agent: AgentRecord,
     prompt: AgentExecutionPrompt,
     reviewAgent: boolean,
@@ -1302,7 +1303,7 @@ export class Orchestrator {
   ): TopologyRecord {
     const validNames = new Set(agents.map((item) => item.name));
     const agentByName = new Map(agents.map((agent) => [agent.name, agent]));
-    const rawNodeRecords = topology.nodeRecords
+    const rawNodeRecords: TopologyNodeRecord[] = topology.nodeRecords
       ? topology.nodeRecords
       : topology.nodes.map((name) => ({
           id: name,
@@ -1320,9 +1321,9 @@ export class Orchestrator {
     const edges = topology.edges
       .filter(
         (edge) =>
-          edge.triggerOn === "association" ||
-          edge.triggerOn === "approved" ||
-          edge.triggerOn === "needs_revision",
+          normalizeTopologyEdgeTrigger(edge.triggerOn) === "association" ||
+          normalizeTopologyEdgeTrigger(edge.triggerOn) === "approved" ||
+          normalizeTopologyEdgeTrigger(edge.triggerOn) === "needs_revision",
       )
       .filter((edge) => validTopologyNames.has(edge.source) && validTopologyNames.has(edge.target))
       .filter((edge) => {
@@ -1344,9 +1345,9 @@ export class Orchestrator {
       .map((edge) => ({
         source: edge.source,
         target: edge.target,
-        triggerOn: edge.triggerOn,
+        triggerOn: normalizeTopologyEdgeTrigger(edge.triggerOn),
         messageMode: normalizeTopologyEdgeMessageMode(edge.messageMode),
-        ...(edge.triggerOn === "needs_revision"
+        ...(normalizeTopologyEdgeTrigger(edge.triggerOn) === "needs_revision"
           ? {
               maxRevisionRounds: normalizeNeedsRevisionMaxRounds(edge.maxRevisionRounds),
             }
@@ -1455,7 +1456,7 @@ export class Orchestrator {
     return true;
   }
 
-  private async createLangGraphBatchRunners(
+  protected async createLangGraphBatchRunners(
     cwd: string,
     taskId: string,
     state: GraphTaskState,
@@ -1516,7 +1517,7 @@ export class Orchestrator {
               topology,
               batch.sourceAgentId,
               job.agentName,
-              job.kind,
+              job.kind === "raw" ? "association" : job.kind,
             ),
           },
         )
@@ -1698,7 +1699,7 @@ export class Orchestrator {
 
       const reviewFailureTargets =
         parsedReview.decision === "needs_revision"
-          ? this.getOutgoingEdges(topology, runtimeAgentName, "review_fail")
+          ? this.getOutgoingEdges(topology, runtimeAgentName, "needs_revision")
           : [];
       const agentStatus = resolveAgentStatusFromReview({
         reviewDecision: parsedReview.decision,
@@ -1888,7 +1889,7 @@ export class Orchestrator {
     );
   }
 
-  private getEdgeMessageMode(
+  protected getEdgeMessageMode(
     topology: TopologyRecord,
     sourceAgentId: string,
     targetAgentId: string,

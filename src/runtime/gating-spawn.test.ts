@@ -29,10 +29,10 @@ function createSpawnTopology(): TopologyRecord {
           { role: "summary", templateName: "Summary模板" },
         ],
         edges: [
-          { sourceRole: "pro", targetRole: "con", triggerOn: "review_fail" },
-          { sourceRole: "con", targetRole: "pro", triggerOn: "review_fail" },
-          { sourceRole: "pro", targetRole: "summary", triggerOn: "review_pass" },
-          { sourceRole: "con", targetRole: "summary", triggerOn: "review_pass" },
+          { sourceRole: "pro", targetRole: "con", triggerOn: "needs_revision" },
+          { sourceRole: "con", targetRole: "pro", triggerOn: "needs_revision" },
+          { sourceRole: "pro", targetRole: "summary", triggerOn: "approved" },
+          { sourceRole: "con", targetRole: "summary", triggerOn: "approved" },
         ],
         exitWhen: "one_side_agrees",
         reportToTemplateName: "初筛",
@@ -45,7 +45,6 @@ test("spawnRuntimeAgentsForItems 会把 finding 批量实例化进 GraphTaskStat
   const topology = createSpawnTopology();
   const state = createGraphTaskState({
     taskId: "task-spawn-1",
-    projectId: topology.projectId,
     topology,
   });
 

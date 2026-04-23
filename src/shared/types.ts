@@ -88,7 +88,7 @@ export interface SpawnedAgentTemplate {
 export interface SpawnRule {
   id: string;
   name: string;
-  spawnNodeName: string;
+  spawnNodeName?: string;
   sourceTemplateName?: string;
   entryRole: SpawnedAgentRole;
   spawnedAgents: SpawnedAgentTemplate[];
@@ -96,6 +96,7 @@ export interface SpawnRule {
     sourceRole: SpawnedAgentRole;
     targetRole: SpawnedAgentRole;
     triggerOn: TopologyEdgeTrigger;
+    messageMode?: TopologyEdgeMessageMode;
     maxRevisionRounds?: number;
   }>;
   exitWhen: "one_side_agrees" | "all_completed";
@@ -123,7 +124,7 @@ export interface TaskAgentRecord {
   runCount: number;
 }
 
-export type TopologyEdgeTrigger = "association" | "approved" | "needs_revision";
+export type TopologyEdgeTrigger = | "association" | "approved" | "needs_revision";
 export type TopologyEdgeMessageMode = "none" | "last" | "all";
 
 export const DEFAULT_NEEDS_REVISION_MAX_ROUNDS = 4;
@@ -155,6 +156,7 @@ export interface TopologyLangGraphRecord {
 }
 
 export interface TopologyRecord {
+  projectId?: string;
   nodes: string[];
   edges: TopologyEdge[];
   langgraph?: TopologyLangGraphRecord;
@@ -224,13 +226,14 @@ export function getNeedsRevisionEdgeLoopLimit(
     (item) =>
       item.source === sourceAgentId
       && item.target === targetAgentId
-      && item.triggerOn === "needs_revision",
+      && normalizeTopologyEdgeTrigger(item.triggerOn) === "needs_revision",
   );
   return normalizeNeedsRevisionMaxRounds(edge?.maxRevisionRounds);
 }
 
 export interface MessageRecord {
   id: string;
+  projectId?: string;
   taskId: string | null;
   content: string;
   sender: string;
@@ -357,8 +360,15 @@ export const DEFAULT_TOOL_PERMISSIONS: ToolPermission[] = [
   { name: "skill", mode: "allow" },
 ];
 
+export function normalizeTopologyEdgeTrigger(value: unknown): "association" | "approved" | "needs_revision" {
+  if (value === "approved" || value === "needs_revision") {
+    return value;
+  }
+  return "association";
+}
+
 export function getTopologyEdgeId(edge: Pick<TopologyEdge, "source" | "target" | "triggerOn">): string {
-  return `${edge.source}__${edge.target}__${edge.triggerOn}`;
+  return `${edge.source}__${edge.target}__${normalizeTopologyEdgeTrigger(edge.triggerOn)}`;
 }
 
 export function normalizeTopologyEdgeMessageMode(value: unknown): TopologyEdgeMessageMode {
@@ -375,7 +385,10 @@ export function isReviewAgentInTopology(
   return topology.edges.some(
     (edge) =>
       edge.source === agentName &&
-      (edge.triggerOn === "approved" || edge.triggerOn === "needs_revision"),
+      (() => {
+        const triggerOn = normalizeTopologyEdgeTrigger(edge.triggerOn);
+        return triggerOn === "approved" || triggerOn === "needs_revision";
+      })(),
   );
 }
 
@@ -515,10 +528,23 @@ export function getTopologyNodeRecords(topology: TopologyRecord): TopologyNodeRe
 }
 
 export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
+  const spawnNodeNameByRuleId = new Map(
+    getTopologyNodeRecords(topology)
+      .filter((node) => node.kind === "spawn")
+      .map((node) => [node.spawnRuleId!, node.id]),
+  );
   return (topology.spawnRules ?? []).map((rule) => ({
     ...rule,
+    spawnNodeName: rule.spawnNodeName ?? spawnNodeNameByRuleId.get(rule.id) ?? rule.name,
     spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
-    edges: rule.edges.map((edge) => ({ ...edge })),
+    edges: rule.edges.map((edge) => ({
+      ...edge,
+      triggerOn: normalizeTopologyEdgeTrigger(edge.triggerOn),
+      messageMode: normalizeTopologyEdgeMessageMode(edge.messageMode),
+    })),
+    reportToTriggerOn: rule.reportToTriggerOn
+      ? normalizeTopologyEdgeTrigger(rule.reportToTriggerOn)
+      : undefined,
   }));
 }
 

@@ -144,6 +144,7 @@ export function upsertDebateSpawnDraft(
   const spawnRule: SpawnRule = {
     id: spawnRuleId,
     name: teamName,
+    spawnNodeName: spawnNodeId,
     sourceTemplateName: input.sourceTemplateName,
     entryRole: "pro",
     spawnedAgents: [
@@ -152,10 +153,10 @@ export function upsertDebateSpawnDraft(
       { role: "summary", templateName: input.summaryTemplateName },
     ],
     edges: [
-      { sourceRole: "pro", targetRole: "con", triggerOn: "review_fail" },
-      { sourceRole: "con", targetRole: "pro", triggerOn: "review_fail" },
-      { sourceRole: "pro", targetRole: "summary", triggerOn: "review_pass" },
-      { sourceRole: "con", targetRole: "summary", triggerOn: "review_pass" },
+      { sourceRole: "pro", targetRole: "con", triggerOn: "needs_revision", messageMode: "last" },
+      { sourceRole: "con", targetRole: "pro", triggerOn: "needs_revision", messageMode: "last" },
+      { sourceRole: "pro", targetRole: "summary", triggerOn: "approved", messageMode: "last" },
+      { sourceRole: "con", targetRole: "summary", triggerOn: "approved", messageMode: "last" },
     ],
     exitWhen: "one_side_agrees",
     reportToTemplateName: input.reportToTemplateName,

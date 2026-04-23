@@ -94,15 +94,15 @@ export interface OpenCodeShutdownReport {
 }
 
 export class OpenCodeClient {
-  private readonly servers = new Map<string, ProjectServerState>();
-  private readonly host = "127.0.0.1";
-  private readonly sessionIdleAt = new Map<string, number>();
-  private readonly sessionErrors = new Map<string, string>();
-  private readonly sessionWaiters = new Map<string, SessionWaiter[]>();
+  readonly servers = new Map<string, ProjectServerState>();
+  readonly host = "127.0.0.1";
+  readonly sessionIdleAt = new Map<string, number>();
+  readonly sessionErrors = new Map<string, string>();
+  readonly sessionWaiters = new Map<string, SessionWaiter[]>();
 
   constructor(_runtimeRoot?: string) {}
 
-  private normalizeTarget(target: OpenCodeRuntimeTargetInput): OpenCodeRuntimeTarget {
+  protected normalizeTarget(target: OpenCodeRuntimeTargetInput): OpenCodeRuntimeTarget {
     if (typeof target === "string") {
       const projectPath = path.resolve(target);
       return {
@@ -117,7 +117,7 @@ export class OpenCodeClient {
     };
   }
 
-  private getProjectServerState(target: OpenCodeRuntimeTargetInput): ProjectServerState {
+  protected getProjectServerState(target: OpenCodeRuntimeTargetInput): ProjectServerState {
     const normalized = this.normalizeTarget(target);
     const key = normalized.runtimeKey;
     const existing = this.servers.get(key);
@@ -163,11 +163,11 @@ export class OpenCodeClient {
     return state.serverHandle;
   }
 
-  private canReuseCachedServerHandle(cached: ServeHandle): boolean {
+  protected canReuseCachedServerHandle(cached: ServeHandle): boolean {
     return Number.isInteger(cached.port) && cached.port > 0;
   }
 
-  private async resolveServerHandle(state: ProjectServerState): Promise<ServeHandle> {
+  protected async resolveServerHandle(state: ProjectServerState): Promise<ServeHandle> {
     if (state.runtimeKey === state.projectPath) {
       return this.startServer(state.projectPath);
     }
@@ -585,7 +585,7 @@ export class OpenCodeClient {
     }
   }
 
-  private async startServer(target: OpenCodeRuntimeTargetInput): Promise<ServeHandle> {
+  protected async startServer(target: OpenCodeRuntimeTargetInput): Promise<ServeHandle> {
     const state = this.getProjectServerState(target);
 
     const serverEnv = { ...process.env };
@@ -630,11 +630,11 @@ export class OpenCodeClient {
       },
     );
 
-    let spawnError: Error | null = null;
+    let spawnErrorMessage: string | null = null;
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];
     childProcess.on("error", (error) => {
-      spawnError = error;
+      spawnErrorMessage = error instanceof Error ? error.message : String(error);
     });
 
     childProcess.stderr.on("data", (chunk) => {
@@ -660,10 +660,10 @@ export class OpenCodeClient {
     });
     const port = this.parsePortFromBaseUrl(baseUrl);
     const healthy = await this.waitForHealthy(baseUrl);
-    if (spawnError || !healthy) {
-      const message = spawnError
-        ? `OpenCode serve 启动失败: ${spawnError.message}`
-        : `OpenCode serve 健康检查失败: ${baseUrl}/global/health 未在预期时间内返回成功`;
+    if (spawnErrorMessage !== null || !healthy) {
+      const message = spawnErrorMessage !== null
+        ? `OpenCode serve 启动失败: ${spawnErrorMessage}`
+          : `OpenCode serve 健康检查失败: ${baseUrl}/global/health 未在预期时间内返回成功`;
       await this.killChildProcessTree(childProcess).catch(() => undefined);
       appendAppLog("error", "opencode.serve_start_failed", {
         projectPath: state.projectPath,
@@ -879,7 +879,7 @@ export class OpenCodeClient {
     }
   }
 
-  private async request(
+  protected async request(
     pathname: string,
     options: {
       method: "GET" | "POST";
@@ -951,7 +951,7 @@ export class OpenCodeClient {
     }
   }
 
-  private async waitForSessionSettled(sessionId: string, after: number, timeoutMs: number): Promise<void> {
+  async waitForSessionSettled(sessionId: string, after: number, timeoutMs: number): Promise<void> {
     const idleAt = this.sessionIdleAt.get(sessionId);
     if (typeof idleAt === "number" && idleAt >= after) {
       return;
@@ -988,7 +988,7 @@ export class OpenCodeClient {
     });
   }
 
-  private async waitForMessageCompletion(
+  async waitForMessageCompletion(
     target: OpenCodeRuntimeTargetInput,
     sessionId: string,
     messageId: string,
@@ -1023,7 +1023,7 @@ export class OpenCodeClient {
     );
   }
 
-  private async getLatestAssistantMessage(
+  async getLatestAssistantMessage(
     target: OpenCodeRuntimeTargetInput,
     sessionId: string,
   ): Promise<OpenCodeNormalizedMessage | null> {
@@ -1094,7 +1094,7 @@ export class OpenCodeClient {
     };
   }
 
-  private async getSessionMessage(
+  async getSessionMessage(
     target: OpenCodeRuntimeTargetInput,
     sessionId: string,
     messageId: string,
@@ -1113,7 +1113,7 @@ export class OpenCodeClient {
     return this.normalizeMessageEnvelope(raw as Record<string, unknown>, "assistant");
   }
 
-  private async listSessionMessages(
+  async listSessionMessages(
     target: OpenCodeRuntimeTargetInput,
     sessionId: string,
     limit?: number,
@@ -1233,7 +1233,7 @@ export class OpenCodeClient {
     return /\b(terminated|aborted)\b/i.test(errorMessage);
   }
 
-  private buildRuntimeSnapshot(sessionId: string, messages: unknown[]): OpenCodeSessionRuntime {
+  buildRuntimeSnapshot(sessionId: string, messages: unknown[]): OpenCodeSessionRuntime {
     const activities: OpenCodeRuntimeActivity[] = [];
     const toolNames: string[] = [];
     const seen = new Set<string>();

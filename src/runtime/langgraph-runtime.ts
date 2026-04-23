@@ -86,13 +86,11 @@ export class LangGraphRuntime {
 
   async startTask(input: {
     taskId: string;
-    projectId: string;
     topology: GraphTaskState["topology"];
     initialInput: LangGraphInputEvent;
   }): Promise<GraphTaskState> {
     const graphState = createGraphTaskState({
       taskId: input.taskId,
-      projectId: input.projectId,
       topology: input.topology,
     });
     const result = await this.graph.invoke(
@@ -109,14 +107,12 @@ export class LangGraphRuntime {
 
   async resumeTask(input: {
     taskId: string;
-    projectId: string;
     topology: GraphTaskState["topology"];
     event: LangGraphInputEvent;
   }): Promise<GraphTaskState> {
     const existing = await this.getCheckpoint(input.taskId);
     const graphState = existing?.graphState ?? createGraphTaskState({
       taskId: input.taskId,
-      projectId: input.projectId,
       topology: input.topology,
     });
     const result = await this.graph.invoke(

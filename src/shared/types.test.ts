@@ -5,6 +5,7 @@ import {
   createDefaultTopology,
   getNeedsRevisionEdgeLoopLimit,
   isReviewAgentInTopology,
+  normalizeTopologyEdgeTrigger,
   type TopologyAgentSeed,
   type TopologyRecord,
   usesOpenCodeBuiltinPrompt,
@@ -104,4 +105,9 @@ test("只有 Build 继续视为 OpenCode 内置 prompt", () => {
   assert.equal(usesOpenCodeBuiltinPrompt("build"), true);
   assert.equal(usesOpenCodeBuiltinPrompt("BA"), false);
   assert.equal(usesOpenCodeBuiltinPrompt("UnitTest"), false);
+});
+
+test("旧的 review_pass / review_fail 别名不再被识别为合法 trigger", () => {
+  assert.equal(normalizeTopologyEdgeTrigger("review_pass"), "association");
+  assert.equal(normalizeTopologyEdgeTrigger("review_fail"), "association");
 });

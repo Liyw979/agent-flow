@@ -31,10 +31,10 @@ function createVulnTopology(): TopologyRecord {
           { role: "summary", templateName: "Summary模板" },
         ],
         edges: [
-          { sourceRole: "pro", targetRole: "con", triggerOn: "review_fail" },
-          { sourceRole: "con", targetRole: "pro", triggerOn: "review_fail" },
-          { sourceRole: "pro", targetRole: "summary", triggerOn: "review_pass" },
-          { sourceRole: "con", targetRole: "summary", triggerOn: "review_pass" },
+          { sourceRole: "pro", targetRole: "con", triggerOn: "needs_revision", messageMode: "last" },
+          { sourceRole: "con", targetRole: "pro", triggerOn: "needs_revision", messageMode: "last" },
+          { sourceRole: "pro", targetRole: "summary", triggerOn: "approved", messageMode: "last" },
+          { sourceRole: "con", targetRole: "summary", triggerOn: "approved", messageMode: "last" },
         ],
         exitWhen: "one_side_agrees",
         reportToTemplateName: "初筛",
@@ -57,6 +57,7 @@ test("instantiateSpawnBundle 会为一个 finding 生成正反 summary 三个运
   const bundle = instantiateSpawnBundle({
     topology,
     spawnRuleId: "finding-debate",
+    activationId: "activation-1",
     item: {
       id: "finding-001",
       title: "上传文件名拼接路径",
@@ -79,28 +80,28 @@ test("instantiateSpawnBundle 会为一个 finding 生成正反 summary 三个运
   );
   assert.deepEqual(bundle.edges, [
     {
-      messageMode: undefined,
+      messageMode: "last",
       source: "正方模板-1",
       target: "反方模板-1",
-      triggerOn: "review_fail",
+      triggerOn: "needs_revision",
     },
     {
-      messageMode: undefined,
+      messageMode: "last",
       source: "反方模板-1",
       target: "正方模板-1",
-      triggerOn: "review_fail",
+      triggerOn: "needs_revision",
     },
     {
-      messageMode: undefined,
+      messageMode: "last",
       source: "正方模板-1",
       target: "Summary模板-1",
-      triggerOn: "review_pass",
+      triggerOn: "approved",
     },
     {
-      messageMode: undefined,
+      messageMode: "last",
       source: "反方模板-1",
       target: "Summary模板-1",
-      triggerOn: "review_pass",
+      triggerOn: "approved",
     },
     {
       messageMode: "last",
@@ -117,6 +118,7 @@ test("同一 spawn rule 的多个实例会按顺序生成简短显示名，而�
   const bundles = instantiateSpawnBundles({
     topology,
     spawnRuleId: "finding-debate",
+    activationId: "activation-1",
     items: [
       { id: "finding-001", title: "路径穿越" },
       { id: "finding-002", title: "鉴权缺失" },
@@ -135,6 +137,7 @@ test("instantiateSpawnBundles 会为多个 finding 批量生成互不冲突的�
   const bundles = instantiateSpawnBundles({
     topology,
     spawnRuleId: "finding-debate",
+    activationId: "activation-1",
     items: [
       { id: "finding-001", title: "路径穿越" },
       { id: "finding-002", title: "鉴权缺失" },

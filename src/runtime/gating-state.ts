@@ -55,7 +55,6 @@ export interface GraphAssociationBatchState {
 
 export interface GraphTaskState {
   taskId: string;
-  projectId: string;
   topology: TopologyRecord;
   runtimeNodes: RuntimeTopologyNode[];
   runtimeEdges: RuntimeTopologyEdge[];
@@ -81,12 +80,10 @@ export interface GraphTaskState {
 
 export function createEmptyGraphTaskState(input: {
   taskId: string;
-  projectId: string;
   topology: TopologyRecord;
 }): GraphTaskState {
   return {
     taskId: input.taskId,
-    projectId: input.projectId,
     topology: input.topology,
     runtimeNodes: [],
     runtimeEdges: [],

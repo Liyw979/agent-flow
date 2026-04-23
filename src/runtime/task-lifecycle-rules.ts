@@ -207,7 +207,7 @@ export function reconcileTaskSnapshotFromMessages(input: {
     .reverse()
     .find((message) => message.meta?.kind === "task-completed");
 
-  const task =
+  const task: TaskRecord =
     latestCompletionMessage &&
     (latestCompletionMessage.meta?.status === "finished" || latestCompletionMessage.meta?.status === "failed")
       ? {
