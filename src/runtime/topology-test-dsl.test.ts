@@ -22,12 +22,12 @@ test("createTopology 支持以前端下游模板 DSL 生成普通拓扑", () => 
 
   assert.deepEqual(topology.nodes, ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"]);
   assert.deepEqual(topology.edges, [
-    { source: "BA", target: "Build", triggerOn: "handoff" },
-    { source: "Build", target: "CodeReview", triggerOn: "handoff" },
-    { source: "Build", target: "UnitTest", triggerOn: "handoff" },
-    { source: "Build", target: "TaskReview", triggerOn: "handoff" },
-    { source: "CodeReview", target: "Build", triggerOn: "action_required" },
-    { source: "CodeReview", target: "TaskReview", triggerOn: "approved" },
+    { source: "BA", target: "Build", triggerOn: "handoff", messageMode: "last" },
+    { source: "Build", target: "CodeReview", triggerOn: "handoff", messageMode: "last" },
+    { source: "Build", target: "UnitTest", triggerOn: "handoff", messageMode: "last" },
+    { source: "Build", target: "TaskReview", triggerOn: "handoff", messageMode: "last" },
+    { source: "CodeReview", target: "Build", triggerOn: "action_required", messageMode: "last" },
+    { source: "CodeReview", target: "TaskReview", triggerOn: "approved", messageMode: "last" },
   ]);
 });
 
@@ -44,8 +44,8 @@ test("createTopology 支持把 spawn 作为下游模式写进 DSL", () => {
   });
 
   assert.deepEqual(topology.edges, [
-    { source: "Build", target: "TaskReview", triggerOn: "handoff" },
-    { source: "TaskReview", target: "Build", triggerOn: "action_required" },
+    { source: "Build", target: "TaskReview", triggerOn: "handoff", messageMode: "last" },
+    { source: "TaskReview", target: "Build", triggerOn: "action_required", messageMode: "last" },
   ]);
   assert.deepEqual(topology.nodeRecords, [
     { id: "Build", kind: "agent", templateName: "Build" },

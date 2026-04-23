@@ -46,8 +46,8 @@ function createTaskCompletedMessage(input: {
 const topology: TopologyRecord = {
   nodes: ["Build", "TaskReview"],
   edges: [
-    { source: "Build", target: "TaskReview", triggerOn: "handoff" },
-    { source: "TaskReview", target: "Build", triggerOn: "action_required" },
+    { source: "Build", target: "TaskReview", triggerOn: "handoff", messageMode: "last" },
+    { source: "TaskReview", target: "Build", triggerOn: "action_required", messageMode: "last" },
   ],
 };
 
