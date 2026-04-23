@@ -5,5 +5,3 @@ export const IPC_CHANNELS = {
   getTaskRuntime: "agent-team/get-task-runtime",
   eventStream: "agent-team/event-stream",
 } as const;
-
-type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

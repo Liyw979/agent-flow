@@ -1,9 +1,10 @@
 import type {
+  AgentFinalMessageRecord,
   AgentRuntimeSnapshot,
   MessageRecord,
   TopologyRecord,
 } from "@shared/types";
-import { isReviewAgentInTopology } from "@shared/types";
+import { isAgentFinalMessageRecord, isReviewAgentInTopology } from "@shared/types";
 import { stripReviewResponseMarkup } from "@shared/review-response";
 import { getLoopLimitFailedReviewerName } from "./review-loop-limit";
 
@@ -98,19 +99,22 @@ function buildFinalHistoryItems(input: {
   const finalLoopReviewerName = getLoopLimitFailedReviewerName(input.messages);
 
   return input.messages
-    .filter((message) => message.sender === input.agentId && message.meta?.kind === "agent-final")
+    .filter(
+      (message): message is AgentFinalMessageRecord =>
+        message.sender === input.agentId && isAgentFinalMessageRecord(message),
+    )
     .map((message) => {
       const status =
-        message.meta?.reviewDecision === "needs_revision"
+        message.reviewDecision === "needs_revision"
           ? "needs_revision"
-          : reviewAgent && message.meta?.status === "failed" && finalLoopReviewerName === input.agentId
+          : reviewAgent && message.status === "error" && finalLoopReviewerName === input.agentId
             ? "final_failed_review"
-            : message.meta?.status ?? "completed";
+            : message.status;
       const presentation = getFinalItemPresentation({
         reviewAgent,
         status,
       });
-      const detail = normalizeHistoryDetail(message.meta?.finalMessage ?? message.content);
+      const detail = normalizeHistoryDetail(message.content);
 
       return {
         id: message.id,

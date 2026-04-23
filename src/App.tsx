@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentRuntimeSnapshot,
   RuntimeUpdatedEventPayload,
   UiSnapshotPayload,
 } from "@shared/types";
+import { withOptionalString } from "@shared/object-utils";
 import { ChatWindow } from "./components/ChatWindow";
 import { TopologyGraph } from "./components/TopologyGraph";
 import {
@@ -358,12 +359,11 @@ function App() {
                 setPanelMode((current) => (current === "chat-only" ? "default" : "chat-only"));
               }}
               onSubmit={async ({ content, mentionAgent }) => {
-                await submitTask({
+                await submitTask(withOptionalString({
                   cwd: workspace.cwd,
                   taskId: task.task.id,
                   content,
-                  mentionAgent,
-                });
+                }, "mentionAgent", mentionAgent));
               }}
             />
           </div>
@@ -407,12 +407,11 @@ function App() {
                     setPanelMode((current) => (current === "chat-only" ? "default" : "chat-only"));
                   }}
                   onSubmit={async ({ content, mentionAgent }) => {
-                    await submitTask({
+                    await submitTask(withOptionalString({
                       cwd: workspace.cwd,
                       taskId: task.task.id,
                       content,
-                      mentionAgent,
-                    });
+                    }, "mentionAgent", mentionAgent));
                   }}
                 />
               </div>

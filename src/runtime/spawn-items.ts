@@ -39,7 +39,7 @@ export function extractSpawnItemsFromContent(content: string): { items: SpawnIte
     throw new Error("spawn 上游输出必须提供 JSON 对象，且对象里包含可展开的 items 数组。");
   }
 
-  const rawItems = parsed.items;
+  const rawItems = parsed["items"];
   if (rawItems === undefined) {
     throw new Error("spawn 上游输出缺少 items 字段。");
   }
@@ -57,11 +57,11 @@ export function extractSpawnItemsFromContent(content: string): { items: SpawnIte
       }
 
       const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
-      const title = typeof record.title === "string" && record.title.trim()
-        ? record.title.trim()
+      const title = typeof record["title"] === "string" && record["title"].trim()
+        ? record["title"].trim()
         : `item-${index + 1}`;
-      const id = typeof record.id === "string" && record.id.trim()
-        ? record.id.trim()
+      const id = typeof record["id"] === "string" && record["id"].trim()
+        ? record["id"].trim()
         : `item-${index + 1}`;
       return { id, title };
     }),

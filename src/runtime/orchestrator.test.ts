@@ -6,6 +6,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
+import {
+  getMessageTargetAgentIds,
+  isAgentDispatchMessageRecord,
+  isUserMessageRecord,
+} from "@shared/types";
 import type { OpenCodeExecutionResult } from "./opencode-client";
 import { Orchestrator, isTerminalTaskStatus } from "./orchestrator";
 import { compileTeamDsl, type TeamDslDefinition } from "./team-dsl";
@@ -266,7 +271,7 @@ async function addBuiltinAgents(
     const existingIndex = nextAgents.findIndex((agent) => agent.name === agentName);
     const nextAgent = {
       name: agentName,
-      prompt,
+      prompt: prompt ?? "",
       isWritable: writableAgentName === agentName,
     };
     if (existingIndex >= 0) {
@@ -603,11 +608,9 @@ test("漏洞团队 spawn runtime agent 尚未落库时，getTaskSnapshot 不会�
       getTask: (cwd: string, taskId: string) => { status: string };
       listMessages: (cwd: string, taskId: string) => Array<{
         sender: string;
-        meta?: {
-          kind?: string;
-          targetAgentIds?: string;
-          status?: string;
-        };
+        kind?: string;
+        targetAgentIds?: string[];
+        status?: string;
       }>;
       listTaskAgents: (cwd: string, taskId: string) => Array<{ name: string }>;
     };
@@ -681,9 +684,11 @@ test("漏洞团队 spawn runtime agent 尚未落库时，getTaskSnapshot 不会�
   const runtimeAgentName = await waitForValue(
     async () => {
       const dispatchMessage = typed.store.listMessages(projectPath, task.task.id).findLast(
-        (message) => message.meta?.kind === "agent-dispatch" && message.sender === "初筛",
+        (message) => message.kind === "agent-dispatch" && message.sender === "初筛",
       );
-      return dispatchMessage?.meta?.targetAgentIds ?? null;
+      return dispatchMessage && isAgentDispatchMessageRecord(dispatchMessage)
+        ? getMessageTargetAgentIds(dispatchMessage)[0] ?? null
+        : null;
     },
     (value) => typeof value === "string" && value.startsWith("反方-"),
     3000,
@@ -700,7 +705,7 @@ test("漏洞团队 spawn runtime agent 尚未落库时，getTaskSnapshot 不会�
   assert.notEqual(snapshotDuringDispatchWindow.task.status, "finished");
   assert.equal(
     typed.store.listMessages(projectPath, task.task.id).some(
-      (message) => message.meta?.kind === "task-completed" && message.meta.status === "finished",
+      (message) => message.kind === "task-completed" && message.status === "finished",
     ),
     false,
   );
@@ -748,8 +753,8 @@ test("getTaskSnapshot 在新的 Orchestrator 进程里不会再按 taskId 恢复
 
   let workspace = await writer.getWorkspaceSnapshot(workspacePath);
   workspace = await replaceWorkspaceAgents(writer, workspace.cwd, [
-    { name: "Build", prompt: TEST_AGENT_PROMPTS.Build, isWritable: true },
-    { name: "BA", prompt: TEST_AGENT_PROMPTS.BA },
+    { name: "Build", prompt: TEST_AGENT_PROMPTS["Build"] ?? "", isWritable: true },
+    { name: "BA", prompt: TEST_AGENT_PROMPTS["BA"] ?? "" },
   ]);
 
   const created = await writer.initializeTask({
@@ -786,19 +791,19 @@ test("task init 不会追加额外系统提醒", async () => {
   project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"]);
   const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
 
-  assert.equal(task.messages.some((message) => message.meta?.kind === "runtime-missing"), false);
+  assert.equal(task.messages.some((message) => message.kind === undefined), false);
 });
 
 test("buildProjectGitDiffSummary 在系统没有 git 时返回空字符串", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const originalPath = process.env.PATH;
+  const originalPath = process.env["PATH"];
   const orchestrator = createTestOrchestrator({
     userDataPath,
     enableEventStream: false,
   });
 
-  process.env.PATH = createTempDir();
+  process.env["PATH"] = createTempDir();
 
   try {
     const summary = await (
@@ -809,7 +814,7 @@ test("buildProjectGitDiffSummary 在系统没有 git 时返回空字符串", asy
 
     assert.equal(summary, "");
   } finally {
-    process.env.PATH = originalPath;
+    process.env["PATH"] = originalPath;
   }
 });
 
@@ -1026,7 +1031,7 @@ test("applyTeamDsl 会一次性写入当前 Project 的 agents 与 topology", as
       {
         type: "agent",
         name: "BA",
-        prompt: TEST_AGENT_PROMPTS.BA,
+        prompt: TEST_AGENT_PROMPTS["BA"] ?? "",
         writable: false,
       },
       {
@@ -1292,7 +1297,7 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
     ),
     true,
   );
-  assert.deepEqual(parseInjectedConfig(injectedConfigs.at(-1)).agent?.BA, {
+  assert.deepEqual(parseInjectedConfig(injectedConfigs.at(-1)).agent?.["BA"], {
     mode: "primary",
     prompt: "你是 BA。\n只做需求分析。",
     permission: {
@@ -1376,7 +1381,7 @@ test("未写入 Build 时当前 Project 可以没有可写 Agent", async () => {
   await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。");
 
   const injected = buildInjectedConfigFromAgents((await orchestrator.getWorkspaceSnapshot(project.cwd)).agents);
-  assert.deepEqual(parseInjectedConfig(injected).agent?.BA, {
+  assert.deepEqual(parseInjectedConfig(injected).agent?.["BA"], {
     mode: "primary",
     prompt: "你是 BA。",
     permission: {
@@ -1642,7 +1647,12 @@ test("当前 Project 缺少 Build Agent 时，默认会从 start node 开始，�
   });
 
   const firstUserMessage = submittedTask.messages.find((message) => message.sender === "user");
-  assert.equal(firstUserMessage?.meta?.targetAgentId, "BA");
+  assert.deepEqual(
+    firstUserMessage && isUserMessageRecord(firstUserMessage)
+      ? getMessageTargetAgentIds(firstUserMessage)
+      : [],
+    ["BA"],
+  );
 
   const defaultSubmittedTask = await orchestrator.submitTask({
     cwd: project.cwd,
@@ -1650,7 +1660,12 @@ test("当前 Project 缺少 Build Agent 时，默认会从 start node 开始，�
   });
 
   const defaultUserMessage = defaultSubmittedTask.messages.findLast((message) => message.sender === "user");
-  assert.equal(defaultUserMessage?.meta?.targetAgentId, "BA");
+  assert.deepEqual(
+    defaultUserMessage && isUserMessageRecord(defaultUserMessage)
+      ? getMessageTargetAgentIds(defaultUserMessage)
+      : [],
+    ["BA"],
+  );
 
   await assert.rejects(async () => orchestrator.submitTask({
     cwd: project.cwd,
@@ -2329,10 +2344,10 @@ test("单 Agent 且没有下游时，任务结束后仍保留该 Agent 的最终
   );
 
   const baFinalMessageIndex = snapshot.messages.findIndex(
-    (message) => message.sender === "BA" && message.meta?.kind === "agent-final",
+    (message) => message.sender === "BA" && message.kind === "agent-final",
   );
   const completionMessageIndex = snapshot.messages.findIndex(
-    (message) => message.sender === "system" && message.meta?.kind === "task-completed",
+    (message) => message.sender === "system" && message.kind === "task-completed",
   );
 
   assert.notEqual(baFinalMessageIndex, -1);
@@ -2372,6 +2387,54 @@ test("审视不通过且只返回 needs_revision 标签时，群聊展示会去�
   );
 
   assert.equal(displayContent, "请继续补充实现依据。");
+});
+
+test("审视不通过正文包含多个 markdown 标题时，不应只显示最后一个标题章节", () => {
+  const orchestrator = createTestOrchestrator({
+    userDataPath: createTempDir(),
+    enableEventStream: false,
+  });
+
+  const cleanContent = `## 我认可的事实
+基于已读代码，我认可这些点：
+- Stream.receivedEndOfHeaders() 没有把“缺失 serverName”作为结束阶段的硬拒绝条件；
+
+## 但你仍未证明“绕过”成立
+你现在的论证仍然有一个跳步：
+> “请求进入默认虚拟主机的真实管线”
+>  ≠
+> “请求绕过了访问控制”
+
+## 结论
+所以我仍然维持上一轮的收敛判断：
+目前代码证明的是“缺失主机名时回退默认虚拟主机的实现行为”，
+但还不足以仅凭源码坐实真实可利用的虚拟主机绕过漏洞。`;
+
+  const displayContent = (
+    orchestrator as unknown as {
+      createDisplayContent: (
+        parsedReview: {
+          cleanContent: string;
+          decision: "approved" | "needs_revision" | "invalid";
+          opinion: string | null;
+          rawDecisionBlock: string | null;
+          validationError: string | null;
+        },
+        fallbackMessage?: string | null,
+      ) => string;
+    }
+  ).createDisplayContent(
+    {
+      cleanContent,
+      decision: "needs_revision",
+      opinion: "请继续补充实现依据。",
+      rawDecisionBlock: "<needs_revision>请继续补充实现依据。</needs_revision>",
+      validationError: null,
+    },
+    null,
+  );
+
+  assert.equal(displayContent, cleanContent);
 });
 
 test("审查 Agent 未返回合法标签时应标记为 invalid", () => {
@@ -2486,7 +2549,7 @@ test("审视 Agent 执行中止时不会伪造成整改意见", async () => {
     snapshot.messages.some(
       (message) =>
         message.sender === "CodeReview" &&
-        message.meta?.kind === "revision-request",
+        message.kind === "revision-request",
     ),
     false,
   );
@@ -2612,8 +2675,8 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
     snapshot.messages.some(
       (message) =>
         message.sender === "system" &&
-        message.meta?.kind === "task-completed" &&
-        message.meta?.status === "finished" &&
+        message.kind === "task-completed" &&
+        message.status === "finished" &&
         message.content.includes("所有Agent任务已完成"),
     ),
     true,
@@ -2725,8 +2788,8 @@ test("最大连续回流达到上限后，聊天页面会直接展示明确失�
   const failedCompletionMessage = snapshot.messages.findLast(
     (message) =>
       message.sender === "system"
-      && message.meta?.kind === "task-completed"
-      && message.meta?.status === "failed",
+      && message.kind === "task-completed"
+      && message.status === "failed",
   );
 
   assert.notEqual(failedCompletionMessage, undefined);
@@ -2821,8 +2884,8 @@ test("聊天页面会按每条 needs_revision 边的单独上限展示失败原�
   const failedCompletionMessage = snapshot.messages.findLast(
     (message) =>
       message.sender === "system"
-      && message.meta?.kind === "task-completed"
-      && message.meta?.status === "failed",
+      && message.kind === "task-completed"
+      && message.status === "failed",
   );
 
   assert.notEqual(failedCompletionMessage, undefined);
@@ -2947,8 +3010,8 @@ test("并发审查失败时不会提前追加任务结束系统消息", async ()
       snapshot.messages.filter(
         (message) =>
           message.sender === "system"
-          && message.meta?.kind === "task-completed"
-          && message.meta?.status === "failed",
+          && message.kind === "task-completed"
+          && message.status === "failed",
       ).length === 0,
   );
 
@@ -2967,8 +3030,8 @@ test("并发审查失败时不会提前追加任务结束系统消息", async ()
   const failedCompletionMessages = finishedSnapshot.messages.filter(
     (message) =>
       message.sender === "system"
-      && message.meta?.kind === "task-completed"
-      && message.meta?.status === "failed",
+      && message.kind === "task-completed"
+      && message.status === "failed",
   );
   assert.equal(failedCompletionMessages.length, 0);
 });

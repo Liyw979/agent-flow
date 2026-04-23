@@ -1,8 +1,16 @@
 import { parseTargetAgentIds } from "@shared/chat-message-format";
-import { resolveBuildAgentName } from "@shared/types";
+import {
+  getMessageTargetAgentIds,
+  isAgentDispatchMessageRecord,
+  isAgentFinalMessageRecord,
+  isRevisionRequestMessageRecord,
+  isTaskCompletedMessageRecord,
+  isUserMessageRecord,
+  resolveBuildAgentName,
+} from "@shared/types";
 import type { MessageRecord, TaskAgentRecord, TaskRecord, TopologyRecord } from "@shared/types";
 
-type MinimalMessage = Pick<MessageRecord, "sender" | "content" | "meta">;
+type MinimalMessage = MessageRecord;
 type MinimalAgent = Pick<TaskAgentRecord, "name" | "status" | "runCount">;
 
 export function resolveStandaloneTaskStatusAfterAgentRun(input: {
@@ -37,17 +45,21 @@ export function getPersistedCompletionSeedAgentNames(input: {
   }
 
   for (const message of input.messages) {
-    const targetAgentId = message.meta?.targetAgentId;
-    if (message.sender === "user" && typeof targetAgentId === "string" && targetAgentId.trim()) {
-      seeds.add(targetAgentId.trim());
+    const targetAgentIds = parseTargetAgentIds(getMessageTargetAgentIds(message));
+    if (isUserMessageRecord(message)) {
+      for (const targetAgentId of targetAgentIds) {
+        seeds.add(targetAgentId);
+      }
     }
-    if (message.meta?.kind === "agent-dispatch") {
-      for (const targetName of parseTargetAgentIds(message.meta.targetAgentIds)) {
+    if (isAgentDispatchMessageRecord(message)) {
+      for (const targetName of parseTargetAgentIds(getMessageTargetAgentIds(message))) {
         seeds.add(targetName);
       }
     }
-    if (message.meta?.kind === "revision-request" && typeof targetAgentId === "string" && targetAgentId.trim()) {
-      seeds.add(targetAgentId.trim());
+    if (isRevisionRequestMessageRecord(message)) {
+      for (const targetAgentId of targetAgentIds) {
+        seeds.add(targetAgentId);
+      }
     }
   }
 
@@ -86,17 +98,16 @@ function referencesMissingActivatedAgent(
   message: MinimalMessage | undefined,
   knownAgentNames: Set<string>,
 ): boolean {
-  if (!message?.meta) {
+  if (!message) {
     return false;
   }
 
-  if (message.meta.kind === "agent-dispatch") {
-    return parseTargetAgentIds(message.meta.targetAgentIds).some((targetName) => !knownAgentNames.has(targetName));
+  if (isAgentDispatchMessageRecord(message)) {
+    return parseTargetAgentIds(getMessageTargetAgentIds(message)).some((targetName) => !knownAgentNames.has(targetName));
   }
 
-  if (message.meta.kind === "revision-request") {
-    const targetAgentId = message.meta.targetAgentId?.trim();
-    return Boolean(targetAgentId && !knownAgentNames.has(targetAgentId));
+  if (isRevisionRequestMessageRecord(message)) {
+    return parseTargetAgentIds(getMessageTargetAgentIds(message)).some((targetAgentId) => !knownAgentNames.has(targetAgentId));
   }
 
   return false;
@@ -160,10 +171,13 @@ export function shouldFinishTaskFromPersistedState(input: {
 }
 
 function resolveAgentStatusFromFinalMessage(message: MessageRecord): TaskAgentRecord["status"] {
-  if (message.meta?.reviewDecision === "needs_revision") {
+  if (!isAgentFinalMessageRecord(message)) {
+    return "completed";
+  }
+  if (message.reviewDecision === "needs_revision") {
     return "needs_revision";
   }
-  if (message.meta?.status === "failed") {
+  if (message.status === "error") {
     return "failed";
   }
   return "completed";
@@ -179,18 +193,15 @@ function hasLaterActivationForAgent(
       continue;
     }
 
-    if (message.sender === "user" && message.meta?.targetAgentId === agentName) {
+    if (isUserMessageRecord(message) && parseTargetAgentIds(getMessageTargetAgentIds(message)).includes(agentName)) {
       return true;
     }
 
-    if (message.meta?.kind === "revision-request" && message.meta.targetAgentId === agentName) {
+    if (isRevisionRequestMessageRecord(message) && parseTargetAgentIds(getMessageTargetAgentIds(message)).includes(agentName)) {
       return true;
     }
 
-    if (
-      message.meta?.kind === "agent-dispatch" &&
-      parseTargetAgentIds(message.meta.targetAgentIds).includes(agentName)
-    ) {
+    if (isAgentDispatchMessageRecord(message) && parseTargetAgentIds(getMessageTargetAgentIds(message)).includes(agentName)) {
       return true;
     }
   }
@@ -205,21 +216,21 @@ export function reconcileTaskSnapshotFromMessages(input: {
 }) {
   const latestCompletionMessage = [...input.messages]
     .reverse()
-    .find((message) => message.meta?.kind === "task-completed");
+    .find((message) => isTaskCompletedMessageRecord(message));
 
   const task: TaskRecord =
     latestCompletionMessage &&
-    (latestCompletionMessage.meta?.status === "finished" || latestCompletionMessage.meta?.status === "failed")
+    (latestCompletionMessage.status === "finished" || latestCompletionMessage.status === "failed")
       ? {
           ...input.task,
-          status: latestCompletionMessage.meta.status,
+          status: latestCompletionMessage.status,
           completedAt: latestCompletionMessage.timestamp,
         }
       : input.task;
 
   const latestAgentFinalByName = new Map<string, MessageRecord>();
   for (const message of input.messages) {
-    if (message.meta?.kind !== "agent-final") {
+    if (!isAgentFinalMessageRecord(message)) {
       continue;
     }
     latestAgentFinalByName.set(message.sender, message);

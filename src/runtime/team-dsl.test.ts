@@ -111,14 +111,12 @@ test("compileTeamDsl 支持把递归式图 DSL 编译成 agents + topology", () 
       kind: "agent",
       templateName: "BA",
       prompt: BA_PROMPT,
-      writable: false,
     },
     {
       id: "SecurityResearcher",
       kind: "agent",
       templateName: "SecurityResearcher",
       prompt: "你负责漏洞挖掘。",
-      writable: false,
     },
   ]);
 });
@@ -271,7 +269,6 @@ test("compileTeamDsl 在单 Agent 且没有 links 时，仍然会把该 Agent �
       kind: "agent",
       templateName: "BA",
       prompt: BA_PROMPT,
-      writable: false,
     },
   ]);
 });

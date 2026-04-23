@@ -11,16 +11,16 @@ function resolveDefaultUserDataPath() {
     return path.join(home, "Library", "Application Support", APP_DIRECTORY_NAME);
   }
   if (process.platform === "win32") {
-    const appData = process.env.APPDATA?.trim();
+    const appData = process.env["APPDATA"]?.trim();
     return path.join(appData || path.join(home, "AppData", "Roaming"), APP_DIRECTORY_NAME);
   }
 
-  const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
+  const xdgConfigHome = process.env["XDG_CONFIG_HOME"]?.trim();
   return path.join(xdgConfigHome || path.join(home, ".config"), APP_DIRECTORY_NAME);
 }
 
 export function resolveCliUserDataPath() {
-  const override = process.env.AGENT_TEAM_USER_DATA_DIR?.trim();
+  const override = process.env["AGENT_TEAM_USER_DATA_DIR"]?.trim();
   if (override) {
     return ensureWritableDirectory(path.resolve(override));
   }

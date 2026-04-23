@@ -1,8 +1,5 @@
-export function parseTargetAgentIds(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+export function parseTargetAgentIds(value: string[]): string[] {
+  return value.map((item) => item.trim()).filter(Boolean);
 }
 
 export function buildMentionSuffix(agentIds: string[]): string {
@@ -27,12 +24,13 @@ function stripLeadingMentions(content: string): string {
 }
 
 export function formatAgentDispatchContent(_content: string, targetAgentIds: string[]): string {
+  const body = stripLeadingMentions(_content);
   const mentionSuffix = buildMentionSuffix(targetAgentIds);
-  return mentionSuffix.trim();
+  return [body, mentionSuffix].filter(Boolean).join("\n\n").trim();
 }
 
-export function formatRevisionRequestContent(content: string, targetAgentId?: string): string {
+export function formatRevisionRequestContent(content: string, targetAgentIds: string[]): string {
   const body = stripLeadingMentions(content);
-  const mentionSuffix = targetAgentId ? `@${targetAgentId}` : "";
+  const mentionSuffix = buildMentionSuffix(parseTargetAgentIds(targetAgentIds));
   return [body, mentionSuffix].filter(Boolean).join("\n\n").trim();
 }

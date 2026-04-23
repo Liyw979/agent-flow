@@ -65,6 +65,7 @@ test("StoreService 会在内存里保存 topology / tasks / taskAgents / message
     sender: "system",
     content: "Task 已创建",
     timestamp: "2026-04-21T00:00:01.000Z",
+    kind: "system-message",
   });
 
   assert.equal(store.getTopology(cwd).nodes[0], "Build");

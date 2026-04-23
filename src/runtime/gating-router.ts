@@ -32,7 +32,6 @@ import {
 import { compileTopology } from "./topology-compiler";
 import { spawnRuntimeAgentsForItems } from "./gating-spawn";
 import { extractSpawnItemsFromContent } from "./spawn-items";
-
 export interface GraphDispatchJob {
   agentName: string;
   sourceAgentId: string | null;
@@ -42,6 +41,7 @@ export interface GraphDispatchJob {
 export interface GraphDispatchBatch {
   sourceAgentId: string | null;
   sourceContent?: string;
+  displayContent?: string;
   jobs: GraphDispatchJob[];
   triggerTargets: string[];
 }
@@ -497,7 +497,7 @@ function triggerAssociationDownstream(
     sourceContent,
     buildGatingAgentStates(state),
     {
-      restrictTargets: effectiveRestrictTargets,
+      ...(effectiveRestrictTargets ? { restrictTargets: effectiveRestrictTargets } : {}),
       advanceSourceRevision,
     },
   );
@@ -524,6 +524,7 @@ function triggerApprovedDownstream(
   state: GraphTaskState,
   sourceAgentId: string,
   sourceContent: string,
+  displayContent?: string,
 ): GraphRoutingDecision {
   const runtime = graphStateToSchedulerRuntime(state);
   const scheduler = new GatingScheduler(buildEffectiveTopology(state), runtime);
@@ -543,14 +544,15 @@ function triggerApprovedDownstream(
     };
   }
   if (nextPlan) {
-    return planToDecision(nextPlan, "approved");
+    return planToDecision(nextPlan, "approved", displayContent);
   }
-  return planToDecision(plan, "approved");
+  return planToDecision(plan, "approved", displayContent);
 }
 
 function planToDecision(
   plan: GatingDispatchPlan | null,
   kind: GraphDispatchJob["kind"],
+  displayContent?: string,
 ): GraphRoutingDecision {
   if (!plan || plan.triggerTargets.length === 0) {
     return {
@@ -565,6 +567,7 @@ function planToDecision(
     batch: {
       sourceAgentId: plan.sourceAgentId,
       sourceContent: plan.sourceContent,
+      ...(displayContent ? { displayContent } : {}),
       triggerTargets: [...plan.triggerTargets],
       jobs: dispatchTargets.map((targetName) => ({
         agentName: targetName,
@@ -942,10 +945,14 @@ function continueAfterReviewerLoopLimit(
   const loopLimitEscalationDecision = triggerApprovedDownstream(
     state,
     reviewerAgentId,
-    buildNeedsRevisionLoopLimitEscalationContent({
+    buildNeedsRevisionLoopLimitEscalationForwardContent({
       reviewerAgentId,
       repairTargetAgentId,
       reviewRequest: limitedReviewerRequest,
+    }),
+    buildNeedsRevisionLoopLimitEscalationDisplayContent({
+      reviewerAgentId,
+      repairTargetAgentId,
       maxRevisionRounds: loopLimitDecision.maxRevisionRounds,
     }),
   );
@@ -960,20 +967,24 @@ function continueAfterReviewerLoopLimit(
   };
 }
 
-function buildNeedsRevisionLoopLimitEscalationContent(input: {
+function buildNeedsRevisionLoopLimitEscalationForwardContent(input: {
   reviewerAgentId: string;
   repairTargetAgentId: string;
   reviewRequest: GraphRevisionRequest | undefined;
-  maxRevisionRounds: number;
 }): string {
   const reviewerContent =
     input.reviewRequest?.opinion?.trim()
     || input.reviewRequest?.agentContextContent
     || "当前 reviewer 未提供额外正文。";
-  return [
-    reviewerContent,
-    `${input.reviewerAgentId} -> ${input.repairTargetAgentId} 已连续交流 ${input.maxRevisionRounds} 次，已达到上限，请基于现有材料直接裁决`,
-  ].join("\n\n");
+  return reviewerContent;
+}
+
+function buildNeedsRevisionLoopLimitEscalationDisplayContent(input: {
+  reviewerAgentId: string;
+  repairTargetAgentId: string;
+  maxRevisionRounds: number;
+}): string {
+  return `${input.reviewerAgentId} -> ${input.repairTargetAgentId} 已连续交流 ${input.maxRevisionRounds} 次`;
 }
 
 function findNextPendingRepairReviewer(

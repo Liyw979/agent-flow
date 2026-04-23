@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
+import { withOptionalString, withOptionalValue } from "@shared/object-utils";
 import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import {
@@ -21,14 +22,12 @@ import {
   getWorkspaceNameFromPath,
   type MessageRecord,
   type OpenAgentTerminalPayload,
-  resolveBuildAgentName,
   resolvePrimaryTopologyStartTarget,
   resolveTopologyAgentOrder,
   type SubmitTaskPayload,
   type TaskAgentRecord,
   type TaskRecord,
   type TaskSnapshot,
-  type TopologyEdge,
   type TopologyNodeRecord,
   type TopologyRecord,
   type UpdateTopologyPayload,
@@ -37,10 +36,8 @@ import {
 import {
   formatAgentDispatchContent,
   formatRevisionRequestContent,
+  parseTargetAgentIds,
 } from "@shared/chat-message-format";
-import {
-  stripReviewResponseMarkup,
-} from "@shared/review-response";
 import { buildAgentSystemPrompt } from "./agent-system-prompt";
 import {
   parseReview as parseReviewPure,
@@ -61,7 +58,6 @@ import {
   buildDownstreamForwardedContextFromMessages,
   buildUserHistoryContent as buildUserHistoryContentPure,
   contentContainsNormalized as contentContainsNormalizedPure,
-  extractMention as extractMentionPure,
   getInitialUserMessageContent as getInitialUserMessageContentPure,
   stripTargetMention as stripTargetMentionPure,
 } from "./message-forwarding";
@@ -75,7 +71,7 @@ import type { LangGraphTaskLoopHost } from "./langgraph-host";
 import type { GraphDispatchBatch, GraphAgentResult } from "./gating-router";
 import type { GraphTaskState } from "./gating-state";
 import { buildTaskCompletionMessageContent } from "./task-completion-message";
-import { getRuntimeNode, getRuntimeTemplateName } from "./runtime-topology-graph";
+import { getRuntimeTemplateName } from "./runtime-topology-graph";
 import type { CompiledTeamDsl } from "./team-dsl";
 import { shouldScheduleEventStreamReconnect } from "./event-stream-lifecycle";
 import { resolveExecutionReviewAgent } from "./review-agent-context";
@@ -156,7 +152,6 @@ export class Orchestrator {
   readonly opencodeRunner: OpenCodeRunner;
   private readonly events = new EventEmitter();
   private readonly langGraphRuntimes = new Map<string, LangGraphRuntime>();
-  private readonly autoOpenTaskSession: boolean;
   private readonly enableEventStream: boolean;
   private readonly taskRuntimeOverlays = new Map<string, TaskRuntimeOverlay>();
   private readonly connectedRuntimeTaskIds = new Set<string>();
@@ -172,7 +167,6 @@ export class Orchestrator {
     this.store = new StoreService(options.userDataPath);
     this.opencodeClient = new OpenCodeClient(options.userDataPath);
     this.opencodeRunner = new OpenCodeRunner(this.opencodeClient);
-    this.autoOpenTaskSession = options.autoOpenTaskSession ?? false;
     this.enableEventStream = options.enableEventStream ?? true;
     this.runtimeRefreshDebounceMs = options.runtimeRefreshDebounceMs ?? 120;
     this.terminalLauncher = options.terminalLauncher ?? launchTerminalCommand;
@@ -339,9 +333,9 @@ export class Orchestrator {
     const topology = this.store.getTopology(normalizedCwd);
     const resolution = resolveTaskSubmissionTarget({
       content: payload.content,
-      mentionAgent: payload.mentionAgent,
       availableAgents: agents.map((agent) => agent.name),
-      defaultTargetAgent: resolvePrimaryTopologyStartTarget(topology) ?? undefined,
+      ...withOptionalString({}, "mentionAgent", payload.mentionAgent),
+      ...withOptionalString({}, "defaultTargetAgent", resolvePrimaryTopologyStartTarget(topology) ?? undefined),
     });
     if (!resolution.ok) {
       throw new Error(resolution.message);
@@ -507,9 +501,7 @@ export class Orchestrator {
           : "Task 已创建并完成初始化",
       sender: "system",
       timestamp: new Date().toISOString(),
-      meta: {
-        kind: "task-created",
-      },
+      kind: "task-created",
     };
     this.store.insertMessage(normalizedCwd, taskCreatedMessage);
 
@@ -605,11 +597,10 @@ export class Orchestrator {
       content: normalizedContent,
       sender: "user",
       timestamp: new Date().toISOString(),
-      meta: {
-        scope: "task",
-        taskTitle,
-        targetAgentId,
-      },
+      kind: "user",
+      scope: "task",
+      taskTitle,
+      targetAgentIds: [targetAgentId],
     };
   }
 
@@ -719,6 +710,9 @@ export class Orchestrator {
     const messages = this.store.listMessages(cwd, taskId);
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
+      if (!message) {
+        continue;
+      }
       const timestamp = Date.parse(message.timestamp);
       if (!Number.isFinite(timestamp)) {
         continue;
@@ -726,17 +720,14 @@ export class Orchestrator {
       if (now - timestamp > 1500) {
         break;
       }
-      if (message.sender === sourceAgentId && message.meta?.kind === "agent-final") {
+      if (message.sender === sourceAgentId && message.kind === "agent-final") {
         return false;
       }
-      if (message.sender !== sourceAgentId || message.meta?.kind !== "agent-dispatch") {
+      if (message.sender !== sourceAgentId || message.kind !== "agent-dispatch") {
         continue;
       }
 
-      const historicalTargets = (message.meta.targetAgentIds ?? "")
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean)
+      const historicalTargets = parseTargetAgentIds(message.targetAgentIds)
         .sort()
         .join(",");
       if (historicalTargets === incomingTargets) {
@@ -962,13 +953,15 @@ export class Orchestrator {
     return formatAgentDispatchContent(content, targetAgentIds);
   }
 
-  private extractAgentDisplayContent(content: string): string {
+  private extractAgentDisplayContent(content: string, options?: { preferTrailingDeliverySection?: boolean }): string {
     const trimmed = content.trim();
     if (!trimmed) {
       return "";
     }
 
-    const trailingSection = this.extractTrailingTopLevelSection(trimmed);
+    const trailingSection = options?.preferTrailingDeliverySection
+      ? this.extractTrailingTopLevelSection(trimmed)
+      : trimmed;
     return trailingSection
       .replace(/\n(?:---|\*\*\*)(?:\s*\n?)*$/u, "")
       .trim();
@@ -979,7 +972,8 @@ export class Orchestrator {
     let lastHeadingIndex = -1;
     let match: RegExpExecArray | null = headingPattern.exec(content);
     while (match) {
-      lastHeadingIndex = match.index + match[1].length;
+      const prefix = match[1] ?? "";
+      lastHeadingIndex = match.index + prefix.length;
       match = headingPattern.exec(content);
     }
 
@@ -992,7 +986,10 @@ export class Orchestrator {
   }
 
   protected createDisplayContent(parsedReview: ParsedReview, fallbackMessage?: string | null): string {
-    const cleanContent = this.extractAgentDisplayContent(parsedReview.cleanContent);
+    const preferTrailingDeliverySection = parsedReview.decision === "invalid";
+    const cleanContent = this.extractAgentDisplayContent(parsedReview.cleanContent, {
+      preferTrailingDeliverySection,
+    });
     if (parsedReview.decision === "invalid" && parsedReview.validationError) {
       return [cleanContent, parsedReview.validationError].filter(Boolean).join("\n\n");
     }
@@ -1000,7 +997,9 @@ export class Orchestrator {
       return cleanContent;
     }
 
-    const fallbackContent = this.extractAgentDisplayContent(fallbackMessage?.trim() ?? "");
+    const fallbackContent = this.extractAgentDisplayContent(fallbackMessage?.trim() ?? "", {
+      preferTrailingDeliverySection,
+    });
     if (parsedReview.decision === "invalid" && parsedReview.validationError) {
       return [fallbackContent, parsedReview.validationError].filter(Boolean).join("\n\n");
     }
@@ -1060,7 +1059,7 @@ export class Orchestrator {
   }
 
   protected async ensureAgentSession(
-    cwd: string,
+    _cwd: string,
     task: TaskRecord,
     agent: TaskAgentRecord,
   ): Promise<string> {
@@ -1137,20 +1136,6 @@ export class Orchestrator {
     const orderedNames = this.getOrderedAgentNames(cwd, agents, topologyOverride);
     const agentByName = new Map(agents.map((agent) => [agent.name, agent]));
     return orderedNames.map((name) => agentByName.get(name)).filter((agent): agent is AgentRecord => Boolean(agent));
-  }
-
-  private orderTaskAgents(
-    cwd: string,
-    agents: TaskAgentRecord[],
-    topologyOverride?: TopologyRecord,
-  ): TaskAgentRecord[] {
-    const orderedNames = this.getOrderedAgentNames(
-      cwd,
-      this.listWorkspaceAgents(cwd),
-      topologyOverride,
-    );
-    const agentByName = new Map(agents.map((agent) => [agent.name, agent]));
-    return orderedNames.map((name) => agentByName.get(name)).filter((agent): agent is TaskAgentRecord => Boolean(agent));
   }
 
   private async launchAgentTerminal(
@@ -1366,19 +1351,24 @@ export class Orchestrator {
         node.id
         && node.templateName
         && (node.kind === "spawn" || validNames.has(node.templateName)),
-    ).map((node) => ({
-      id: node.id,
-      kind: node.kind,
-      templateName: node.templateName,
-      spawnRuleId: node.spawnRuleId,
-      spawnEnabled: node.spawnEnabled === true,
-      prompt: node.kind === "agent"
-        ? (agentByName.get(node.templateName)?.prompt || undefined)
-        : (typeof node.prompt === "string" ? node.prompt : undefined),
-      writable: node.kind === "agent"
+    ).map((node) => {
+      const prompt = node.kind === "agent"
+        ? agentByName.get(node.templateName)?.prompt
+        : (typeof node.prompt === "string" ? node.prompt : undefined);
+      const writable = node.kind === "agent"
         ? agentByName.get(node.templateName)?.isWritable === true
-        : node.writable === true,
-    }));
+        : node.writable === true;
+
+      return {
+        id: node.id,
+        kind: node.kind,
+        templateName: node.templateName,
+        ...(node.spawnRuleId ? { spawnRuleId: node.spawnRuleId } : {}),
+        ...(node.spawnEnabled === true ? { spawnEnabled: true } : {}),
+        ...(typeof prompt === "string" ? { prompt } : {}),
+        ...(writable ? { writable: true } : {}),
+      };
+    });
     const spawnRules = topology.spawnRules?.filter(
       (rule) => {
         const spawnNodeName = rule.spawnNodeName
@@ -1407,8 +1397,8 @@ export class Orchestrator {
     return {
       nodes,
       edges,
-      nodeRecords,
-      spawnRules,
+      ...(nodeRecords ? { nodeRecords } : {}),
+      ...(spawnRules ? { spawnRules } : {}),
     };
   }
 
@@ -1444,7 +1434,7 @@ export class Orchestrator {
   private resolveWaitingSourceAgentId(cwd: string, taskId: string, state: GraphTaskState): string {
     const latestAgentMessage = [...this.store.listMessages(cwd, taskId)]
       .reverse()
-      .find((message) => message.meta?.kind === "agent-final");
+      .find((message) => message.kind === "agent-final");
     return latestAgentMessage?.sender ?? state.topology.nodes[0] ?? "Orchestrator";
   }
 
@@ -1476,14 +1466,12 @@ export class Orchestrator {
           timestamp: new Date().toISOString(),
           content: this.buildDispatchMessageContent(
             batch.triggerTargets,
-            batch.sourceContent ?? "",
+            batch.displayContent ?? batch.sourceContent ?? "",
           ),
-          meta: {
-            kind: "agent-dispatch",
-            sourceAgentId,
-            targetAgentIds: batch.triggerTargets.join(","),
-            senderDisplayName: this.resolveMessageSenderDisplayName(state, sourceAgentId),
-          },
+          kind: "agent-dispatch",
+          targetAgentIds: [...batch.triggerTargets],
+          dispatchDisplayContent: batch.displayContent ?? "",
+          senderDisplayName: this.resolveMessageSenderDisplayName(state, sourceAgentId),
         };
         this.store.insertMessage(cwd, triggerMessage);
         this.emit({
@@ -1535,18 +1523,17 @@ export class Orchestrator {
         const revisionContent =
           batch.sourceContent?.trim()
           || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
-        prompt = {
+        prompt = withOptionalString(withOptionalString({
           mode: "structured",
           from: batch.sourceAgentId ?? "Reviewer",
-          userMessage:
-            initialUserContent
-            && !contentContainsNormalizedPure(revisionContent, initialUserContent)
-              ? initialUserContent
-              : undefined,
           agentMessage: revisionContent,
-          gitDiffSummary: this.shouldAttachGitDiffSummary(topology, executableAgentName) ? gitDiffSummary : undefined,
           allowDirectFallbackWhenNoBatch: true,
-        };
+        }, "userMessage",
+          initialUserContent
+          && !contentContainsNormalizedPure(revisionContent, initialUserContent)
+            ? initialUserContent
+            : undefined,
+        ), "gitDiffSummary", this.shouldAttachGitDiffSummary(topology, executableAgentName) ? gitDiffSummary : undefined);
         const remediationMessage: MessageRecord = {
           id: randomUUID(),
           taskId,
@@ -1554,17 +1541,17 @@ export class Orchestrator {
           timestamp: new Date().toISOString(),
           content: formatRevisionRequestContent(
             revisionContent,
-            job.agentName,
+            [job.agentName],
           ),
-          meta: {
-            kind: "revision-request",
-            sourceAgentId: batch.sourceAgentId ?? "Reviewer",
-            targetAgentId: job.agentName,
-            senderDisplayName:
+          kind: "revision-request",
+          targetAgentIds: [job.agentName],
+          ...withOptionalString(
+            {},
+            "senderDisplayName",
             batch.sourceAgentId
-                ? this.resolveMessageSenderDisplayName(state, batch.sourceAgentId)
-                : "Reviewer",
-          },
+              ? this.resolveMessageSenderDisplayName(state, batch.sourceAgentId)
+              : "Reviewer",
+          ),
         };
         this.store.insertMessage(cwd, remediationMessage);
         this.emit({
@@ -1573,13 +1560,15 @@ export class Orchestrator {
           payload: remediationMessage,
         });
       } else {
-        prompt = {
+        prompt = withOptionalString(withOptionalString({
           mode: "structured",
           from: batch.sourceAgentId ?? "System",
-          userMessage: forwardedContext?.userMessage,
-          agentMessage: forwardedContext?.agentMessage,
-          gitDiffSummary: this.shouldAttachGitDiffSummary(topology, executableAgentName) ? gitDiffSummary : undefined,
-        };
+        }, "userMessage", forwardedContext?.userMessage), "agentMessage", forwardedContext?.agentMessage);
+        prompt = withOptionalString(
+          prompt,
+          "gitDiffSummary",
+          this.shouldAttachGitDiffSummary(topology, executableAgentName) ? gitDiffSummary : undefined,
+        );
       }
 
       return {
@@ -1684,16 +1673,12 @@ export class Orchestrator {
         content: this.createDisplayContent(parsedReview, response.fallbackMessage),
         sender: runtimeAgentName,
         timestamp: response.timestamp,
-        meta: {
-          kind: "agent-final",
-          status: response.status,
-          finalMessage: agentContextContent,
-          reviewDecision: parsedReview.decision,
-          reviewOpinion: parsedReview.opinion ?? "",
-          rawResponse: response.finalMessage,
-          sessionId: agentSessionId,
-          senderDisplayName: this.resolveMessageSenderDisplayName(state, runtimeAgentName),
-        },
+        kind: "agent-final",
+        status: response.status,
+        reviewDecision: parsedReview.decision,
+        reviewOpinion: parsedReview.opinion ?? "",
+        rawResponse: response.finalMessage,
+        senderDisplayName: this.resolveMessageSenderDisplayName(state, runtimeAgentName),
       };
       this.store.insertMessage(cwd, taskMessage);
 
@@ -1769,6 +1754,7 @@ export class Orchestrator {
         content: `[${runtimeAgentName}] 执行失败：${error instanceof Error ? error.message : "未知错误"}`,
         sender: "system",
         timestamp: new Date().toISOString(),
+        kind: "system-message",
       };
       this.store.insertMessage(cwd, failedMessage);
       this.updateTaskStatusIfActive(task.cwd, task.id, "failed", null);
@@ -1811,7 +1797,7 @@ export class Orchestrator {
   private async completeTask(
     cwd: string,
     taskId: string,
-    status: TaskRecord["status"],
+    status: Extract<TaskRecord["status"], "finished" | "failed">,
     failureReason?: string | null,
   ) {
     const currentTask = this.store.getTask(cwd, taskId);
@@ -1846,15 +1832,12 @@ export class Orchestrator {
       taskId,
       sender: "system",
       timestamp: completionTimestamp,
-      content: buildTaskCompletionMessageContent({
+      content: buildTaskCompletionMessageContent(withOptionalValue({
         status,
         taskTitle: snapshot.task.title,
-        failureReason,
-      }),
-      meta: {
-        kind: "task-completed",
-        status,
-      },
+      }, "failureReason", failureReason)),
+      kind: "task-completed",
+      status,
     };
     this.store.insertMessage(cwd, completionMessage);
     this.emit({
@@ -1920,10 +1903,7 @@ export class Orchestrator {
       content: `Orchestrator 已收到 ${sourceAgentId} 的结果，但当前拓扑下没有可自动继续推进的下游节点，Task 保持等待状态。`,
       sender: "system",
       timestamp: new Date().toISOString(),
-      meta: {
-        kind: "orchestrator-waiting",
-        sourceAgentId,
-      },
+      kind: "orchestrator-waiting",
     } satisfies MessageRecord;
     this.store.insertMessage(cwd, waitingMessage);
     this.emit({
@@ -1953,15 +1933,15 @@ export class Orchestrator {
 
   private extractSessionIdFromOpenCodeEvent(event: unknown): string | null {
     const record = this.asRecord(event);
-    const properties = this.asRecord(record.properties);
-    const payload = this.asRecord(record.payload);
+    const properties = this.asRecord(record["properties"]);
+    const payload = this.asRecord(record["payload"]);
     const candidates = [
-      record.sessionID,
-      record.sessionId,
-      properties.sessionID,
-      properties.sessionId,
-      payload.sessionID,
-      payload.sessionId,
+      record["sessionID"],
+      record["sessionId"],
+      properties["sessionID"],
+      properties["sessionId"],
+      payload["sessionID"],
+      payload["sessionId"],
     ];
 
     for (const candidate of candidates) {

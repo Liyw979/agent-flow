@@ -5,7 +5,7 @@ import {
 } from "../shared/review-response";
 
 export function buildAgentSystemPrompt(
-  agent: Pick<AgentRecord, "name">,
+  _agent: Pick<AgentRecord, "name">,
   reviewAgent: boolean,
   sourceSectionLabel?: string,
 ): string {

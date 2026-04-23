@@ -216,14 +216,115 @@ export function getNeedsRevisionEdgeLoopLimit(
   return normalizeNeedsRevisionMaxRounds(edge?.maxRevisionRounds);
 }
 
-export interface MessageRecord {
+interface BaseMessageRecord {
   id: string;
-  projectId?: string;
-  taskId: string | null;
+  taskId: string;
   content: string;
   sender: string;
   timestamp: string;
-  meta?: Record<string, string>;
+}
+
+export interface UserMessageRecord extends BaseMessageRecord {
+  kind: "user";
+  sender: "user";
+  scope: "task";
+  taskTitle: string;
+  targetAgentIds: string[];
+}
+
+export interface SystemMessageRecord extends BaseMessageRecord {
+  kind: "system-message";
+  sender: "system";
+}
+
+export interface TaskCreatedMessageRecord extends BaseMessageRecord {
+  kind: "task-created";
+  sender: "system";
+}
+
+export interface AgentFinalMessageRecord extends BaseMessageRecord {
+  kind: "agent-final";
+  reviewDecision: "approved" | "needs_revision" | "invalid";
+  reviewOpinion: string;
+  rawResponse: string;
+  status: "completed" | "error";
+  senderDisplayName?: string;
+}
+
+export interface AgentDispatchMessageRecord extends BaseMessageRecord {
+  kind: "agent-dispatch";
+  targetAgentIds: string[];
+  dispatchDisplayContent: string;
+  senderDisplayName?: string;
+}
+
+export interface RevisionRequestMessageRecord extends BaseMessageRecord {
+  kind: "revision-request";
+  targetAgentIds: string[];
+  senderDisplayName?: string;
+}
+
+export interface TaskCompletedMessageRecord extends BaseMessageRecord {
+  kind: "task-completed";
+  sender: "system";
+  status: "finished" | "failed";
+}
+
+export interface OrchestratorWaitingMessageRecord extends BaseMessageRecord {
+  kind: "orchestrator-waiting";
+  sender: "system";
+}
+
+export type MessageRecord =
+  | UserMessageRecord
+  | SystemMessageRecord
+  | TaskCreatedMessageRecord
+  | AgentFinalMessageRecord
+  | AgentDispatchMessageRecord
+  | RevisionRequestMessageRecord
+  | TaskCompletedMessageRecord
+  | OrchestratorWaitingMessageRecord;
+
+export function isUserMessageRecord(message: MessageRecord): message is UserMessageRecord {
+  return message.kind === "user";
+}
+
+export function isAgentFinalMessageRecord(message: MessageRecord): message is AgentFinalMessageRecord {
+  return message.kind === "agent-final";
+}
+
+export function isAgentDispatchMessageRecord(message: MessageRecord): message is AgentDispatchMessageRecord {
+  return message.kind === "agent-dispatch";
+}
+
+export function isRevisionRequestMessageRecord(message: MessageRecord): message is RevisionRequestMessageRecord {
+  return message.kind === "revision-request";
+}
+
+export function isTaskCompletedMessageRecord(message: MessageRecord): message is TaskCompletedMessageRecord {
+  return message.kind === "task-completed";
+}
+
+export function getMessageTargetAgentIds(message: MessageRecord): string[] {
+  switch (message.kind) {
+    case "user":
+    case "agent-dispatch":
+    case "revision-request":
+      return message.targetAgentIds;
+    default:
+      return [];
+  }
+}
+
+export function getMessageSenderDisplayName(message: MessageRecord): string | undefined {
+  switch (message.kind) {
+    case "agent-final":
+    case "agent-dispatch":
+    case "revision-request":
+      return message.senderDisplayName;
+    default:
+      return undefined;
+  }
 }
 
 export interface AgentRuntimeActivity {
@@ -509,11 +610,13 @@ export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
     edges: rule.edges.map((edge) => ({
       ...edge,
       triggerOn: normalizeTopologyEdgeTrigger(edge.triggerOn),
-      messageMode: normalizeTopologyEdgeMessageMode(edge.messageMode),
+      ...(edge.messageMode
+        ? { messageMode: normalizeTopologyEdgeMessageMode(edge.messageMode) }
+        : {}),
     })),
-    reportToTriggerOn: rule.reportToTriggerOn
-      ? normalizeTopologyEdgeTrigger(rule.reportToTriggerOn)
-      : undefined,
+    ...(rule.reportToTriggerOn
+      ? { reportToTriggerOn: normalizeTopologyEdgeTrigger(rule.reportToTriggerOn) }
+      : {}),
   }));
 }
 

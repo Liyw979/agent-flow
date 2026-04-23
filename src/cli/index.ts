@@ -74,7 +74,7 @@ function buildTaskRunDiagnostics(userDataPath: string, taskId: string): TaskRunD
 function printTaskRunDiagnostics(diagnostics: TaskRunDiagnostics, taskUrl?: string | null) {
   process.stdout.write(`${renderTaskSessionSummary({
     logFilePath: diagnostics.logFilePath,
-    taskUrl,
+    ...(taskUrl ? { taskUrl } : {}),
   })}\n\n`);
 }
 
@@ -424,9 +424,9 @@ async function run() {
   activeTaskDiagnosticsForCrash = activeTaskDiagnostics;
   didPrintTaskDiagnosticsForCrash = false;
 
-  const context = await createCliContext({
-    userDataPath: userDataPath ?? undefined,
-  });
+  const context = await createCliContext(
+    userDataPath ? { userDataPath } : undefined,
+  );
   let observedSettledTaskState = false;
   let forceProcessExit = false;
   let interrupted = false;
@@ -442,7 +442,6 @@ async function run() {
     });
     if (!plan.shouldCleanupOpencode) {
       process.exit(plan.exitCode);
-      return;
     }
     void Promise.resolve()
       .then(async () => {

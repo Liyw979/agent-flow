@@ -185,7 +185,7 @@ export async function assertSchedulerScript(
     const reply = replies[currentIndex];
     assert.notEqual(reply, undefined, `脚本里缺少 ${agentName} 第 ${currentIndex + 1} 轮回复`);
     replyIndexByAgent.set(agentName, currentIndex + 1);
-    return reply;
+    return reply!;
   };
   const buildNextDecision = (lastResponder: string): SchedulerScriptDecision => {
     if (activeBatches.length > 0) {
@@ -522,7 +522,7 @@ export async function assertSchedulerScript(
 
   const firstLine = parsed.lines[0];
   assert.notEqual(firstLine, undefined, "脚本不能为空");
-  appendLine(firstLine.normalized);
+  appendLine(firstLine!.normalized);
   appendDecision({
     type: "execute_batch",
     sourceAgentId: null,

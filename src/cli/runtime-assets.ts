@@ -111,31 +111,6 @@ function hasIndexHtmlFile(webRoot: string | null): boolean {
   return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
 }
 
-function getLatestMtimeMs(targetPath: string): number | null {
-  if (!fs.existsSync(targetPath)) {
-    return null;
-  }
-
-  const stat = fs.statSync(targetPath);
-  if (stat.isFile()) {
-    return stat.mtimeMs;
-  }
-
-  if (!stat.isDirectory()) {
-    return null;
-  }
-
-  let latest = stat.mtimeMs;
-  for (const entry of fs.readdirSync(targetPath, { withFileTypes: true })) {
-    const childPath = path.join(targetPath, entry.name);
-    const childLatest = getLatestMtimeMs(childPath);
-    if (typeof childLatest === "number" && childLatest > latest) {
-      latest = childLatest;
-    }
-  }
-  return latest;
-}
-
 export function isRuntimeWebSourcePath(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, "/");
   return !EXCLUDED_RUNTIME_WEB_SOURCE_PATHS.has(normalized);

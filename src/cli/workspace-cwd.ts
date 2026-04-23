@@ -33,7 +33,7 @@ export function resolveWorkspaceCwdFromFilesystem(requestedCwd: string | undefin
   }
 
   return resolveValidatedWorkspaceCwd({
-    requestedCwd,
+    ...(requestedCwd ? { requestedCwd } : {}),
     currentCwd,
     exists: stats !== null,
     isDirectory: stats?.isDirectory() ?? false,

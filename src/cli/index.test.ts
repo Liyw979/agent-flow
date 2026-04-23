@@ -63,7 +63,7 @@ test("CLI help no longer contains the removed terminal host wording", () => {
 test("task headless prints the log file path through renderTaskSessionSummary", () => {
   assert.match(CLI_SOURCE, /renderTaskSessionSummary/);
   assert.match(CLI_SOURCE, /logFilePath: diagnostics\.logFilePath/);
-  assert.match(CLI_SOURCE, /taskUrl,/);
+  assert.match(CLI_SOURCE, /\.\.\.\(taskUrl \? \{ taskUrl \} : \{\}\)/);
   assert.match(CLI_SOURCE, /buildTaskLogFilePath/);
   assert.match(CLI_SOURCE, /buildTaskLogFilePath\(userDataPath, taskId\)/);
   assert.doesNotMatch(CLI_SOURCE, /agent-team\.log/);
@@ -109,7 +109,7 @@ test("task commands preallocate a task id before creating the CLI context", () =
     appearsInOrder(
       NORMALIZED_CLI_SOURCE,
       "activeTaskDiagnostics = buildTaskRunDiagnostics(userDataPath, randomUUID());",
-      "const context = await createCliContext({",
+      "const context = await createCliContext(",
     ),
     true,
   );

@@ -17,15 +17,15 @@ test("build:embedded-assets 会改为调用 cli 目录下的生成脚本", () =>
 
 test("build 和 test 会先生成 generated-embedded-assets.ts", () => {
   assert.equal(
-    PACKAGE_JSON.scripts?.build,
+    PACKAGE_JSON.scripts?.["build"],
     "bun run build:web && bun run build:embedded-assets && tsc --noEmit",
   );
   assert.equal(
-    PACKAGE_JSON.scripts?.knip,
+    PACKAGE_JSON.scripts?.["knip"],
     "bun run build:embedded-assets && knip",
   );
   assert.equal(
-    PACKAGE_JSON.scripts?.test,
+    PACKAGE_JSON.scripts?.["test"],
     "bun run build:embedded-assets && tsx --test",
   );
 });

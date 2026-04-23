@@ -9,6 +9,20 @@ import type {
   TopologyRecord,
 } from "@shared/types";
 
+type TestMessageInput = {
+  id?: string;
+  taskId?: string;
+  sender: string;
+  content: string;
+  timestamp?: string;
+  kind?: MessageRecord["kind"];
+  targetAgentIds?: string[];
+  agentFinalStatus?: "completed" | "error";
+  taskCompletedStatus?: "finished" | "failed";
+  reviewDecision?: "approved" | "needs_revision" | "invalid";
+  senderDisplayName?: string;
+};
+
 import {
   buildDownstreamForwardedContextFromMessages,
   buildUserHistoryContent,
@@ -51,16 +65,106 @@ function createTopologyForTest(input: {
   };
 }
 
-function createMessage(input: Partial<MessageRecord> & Pick<MessageRecord, "sender" | "content">): MessageRecord {
-  return {
-    id: input.id ?? `${input.sender}:${input.content}`,
-    projectId: input.projectId ?? "project-1",
-    taskId: input.taskId ?? "task-1",
-    sender: input.sender,
-    content: input.content,
-    timestamp: input.timestamp ?? "2026-04-16T00:00:00.000Z",
-    meta: input.meta,
-  };
+function createMessage(input: TestMessageInput): MessageRecord {
+  const id = input.id ?? `${input.sender}:${input.content}`;
+  const taskId = input.taskId ?? "task-1";
+  const timestamp = input.timestamp ?? "2026-04-16T00:00:00.000Z";
+  const kind = input.kind ?? (input.sender === "user" ? "user" : "system-message");
+
+  switch (kind) {
+    case "user":
+      return {
+        id,
+        taskId,
+        sender: "user",
+        content: input.content,
+        timestamp,
+        kind: "user",
+        scope: "task",
+        taskTitle: "demo",
+        targetAgentIds: input.targetAgentIds ?? [],
+      };
+    case "agent-final": {
+      const message: MessageRecord = {
+        id,
+        taskId,
+        sender: input.sender,
+        content: input.content,
+        timestamp,
+        kind: "agent-final",
+        status: input.agentFinalStatus ?? "completed",
+        reviewDecision: input.reviewDecision ?? "approved",
+        reviewOpinion: "",
+        rawResponse: input.content,
+        ...(input.senderDisplayName ? { senderDisplayName: input.senderDisplayName } : {}),
+      };
+      return message;
+    }
+    case "agent-dispatch": {
+      const message: MessageRecord = {
+        id,
+        taskId,
+        sender: input.sender,
+        content: input.content,
+        timestamp,
+        kind: "agent-dispatch",
+        targetAgentIds: input.targetAgentIds ?? [],
+        dispatchDisplayContent: input.content,
+        ...(input.senderDisplayName ? { senderDisplayName: input.senderDisplayName } : {}),
+      };
+      return message;
+    }
+    case "revision-request": {
+      const message: MessageRecord = {
+        id,
+        taskId,
+        sender: input.sender,
+        content: input.content,
+        timestamp,
+        kind: "revision-request",
+        targetAgentIds: input.targetAgentIds ?? [],
+        ...(input.senderDisplayName ? { senderDisplayName: input.senderDisplayName } : {}),
+      };
+      return message;
+    }
+    case "task-completed":
+      return {
+        id,
+        taskId,
+        sender: "system",
+        content: input.content,
+        timestamp,
+        kind: "task-completed",
+        status: input.taskCompletedStatus ?? "finished",
+      };
+    case "task-created":
+      return {
+        id,
+        taskId,
+        sender: "system",
+        content: input.content,
+        timestamp,
+        kind: "task-created",
+      };
+    case "orchestrator-waiting":
+      return {
+        id,
+        taskId,
+        sender: "system",
+        content: input.content,
+        timestamp,
+        kind: "orchestrator-waiting",
+      };
+    case "system-message":
+      return {
+        id,
+        taskId,
+        sender: "system",
+        content: input.content,
+        timestamp,
+        kind: "system-message",
+      };
+  }
 }
 
 function createAgent(input: Partial<TaskAgentRecord> & Pick<TaskAgentRecord, "name" | "status">): TaskAgentRecord {
@@ -80,20 +184,12 @@ test("下游结构化 prompt 的 Initial Task 继续使用首条用户任务，�
     createMessage({
       sender: "user",
       content: "@Build 初始任务：实现加法工具",
-      meta: {
-        scope: "task",
-        taskTitle: "demo",
-        targetAgentId: "Build",
-      },
+      targetAgentIds: ["Build"],
     }),
     createMessage({
       sender: "user",
       content: "@Build 追问：顺便补一份使用说明",
-      meta: {
-        scope: "task",
-        taskTitle: "demo",
-        targetAgentId: "Build",
-      },
+      targetAgentIds: ["Build"],
     }),
   ];
 
@@ -114,18 +210,12 @@ test("边配置为 none 时，下游只收到 continue，不再携带上游最�
     createMessage({
       sender: "user",
       content: "@Build 初始任务：实现加法工具",
-      meta: {
-        scope: "task",
-        taskTitle: "demo",
-        targetAgentId: "Build",
-      },
+      targetAgentIds: ["Build"],
     }),
     createMessage({
       sender: "Build",
       content: "我已经写完加法工具，并补了测试。",
-      meta: {
-        kind: "agent-final",
-      },
+      kind: "agent-final",
     }),
   ];
 
@@ -147,33 +237,23 @@ test("边配置为 all 时，下游会收到完整消息记录，并排除刚生
     createMessage({
       sender: "user",
       content: "@Build 初始任务：实现加法工具",
-      meta: {
-        scope: "task",
-        taskTitle: "demo",
-        targetAgentId: "Build",
-      },
+      targetAgentIds: ["Build"],
     }),
     createMessage({
       sender: "Build",
       content: "我已经写完加法工具。",
-      meta: {
-        kind: "agent-final",
-      },
+      kind: "agent-final",
     }),
     createMessage({
       sender: "Build",
       content: "@CodeReview",
-      meta: {
-        kind: "agent-dispatch",
-        targetAgentIds: "CodeReview",
-      },
+      kind: "agent-dispatch",
+      targetAgentIds: ["CodeReview"],
     }),
     createMessage({
       sender: "CodeReview",
       content: "我认为还需要补边界值测试。",
-      meta: {
-        kind: "agent-final",
-      },
+      kind: "agent-final",
     }),
   ];
 
@@ -206,11 +286,7 @@ test("群聊消息保留寻址 @Agent，但下游转发读取时会去掉该寻�
     createMessage({
       sender: "user",
       content: storedUserContent,
-      meta: {
-        scope: "task",
-        taskTitle: "demo",
-        targetAgentId: "BA",
-      },
+      targetAgentIds: ["BA"],
     }),
   ];
 
@@ -219,6 +295,36 @@ test("群聊消息保留寻址 @Agent，但下游转发读取时会去掉该寻�
   assert.equal(messages[0]?.content.includes("@BA"), true);
   assert.equal(forwardedUserContent.includes("@BA"), false);
   assert.equal(forwardedUserContent.includes("返回c"), true);
+});
+
+test("单目标消息也只通过 targetAgentIds 数组表达目标", () => {
+  const messages = [
+    createMessage({
+      sender: "user",
+      content: "@Build 初始任务：实现加法工具",
+      targetAgentIds: ["Build"],
+    }),
+    createMessage({
+      sender: "TaskReview",
+      content: "请补充实现依据。\n\n@Build",
+      kind: "revision-request",
+      targetAgentIds: ["Build"],
+    }),
+  ];
+
+  assert.equal(getInitialUserMessageContent(messages), "初始任务：实现加法工具");
+  assert.deepEqual(getPersistedCompletionSeedAgentNames({
+    topology: createTopologyForTest({
+      projectId: "project-1",
+      nodes: ["Build", "TaskReview"],
+      edges: [{ source: "TaskReview", target: "Build", triggerOn: "needs_revision" }],
+    }),
+    agents: [
+      createAgent({ name: "Build", status: "idle" }),
+      createAgent({ name: "TaskReview", status: "completed", runCount: 1 }),
+    ],
+    messages,
+  }), ["TaskReview", "Build"]);
 });
 
 test("旧运行数据里悬空 idle Agent 不会阻止持久化补偿逻辑判定任务结束", () => {
@@ -270,11 +376,7 @@ test("最新一条仍是用户 @Agent 追问时，持久化补偿逻辑不会提
     createMessage({
       sender: "user",
       content: "@UnitTest 你的指责呢",
-      meta: {
-        scope: "task",
-        taskTitle: "demo",
-        targetAgentId: "UnitTest",
-      },
+      targetAgentIds: ["UnitTest"],
     }),
   ];
 
@@ -305,19 +407,14 @@ test("spawn 运行时实例刚被 dispatch 但尚未完成时，持久化补偿�
     createMessage({
       sender: "初筛",
       content: "初筛发现了一个可疑点。",
-      meta: {
-        kind: "agent-final",
-      },
+      kind: "agent-final",
     }),
     createMessage({
       sender: "初筛",
       content: `@${runtimeAgentName}`,
       timestamp: "2026-04-16T00:00:01.000Z",
-      meta: {
-        kind: "agent-dispatch",
-        sourceAgentId: "初筛",
-        targetAgentIds: runtimeAgentName,
-      },
+      kind: "agent-dispatch",
+      targetAgentIds: [runtimeAgentName],
     }),
   ];
 
@@ -347,19 +444,14 @@ test("spawn 运行时实例已写入 dispatch 消息但尚未落库为 task agen
     createMessage({
       sender: "初筛",
       content: "初筛发现了一个可疑点。",
-      meta: {
-        kind: "agent-final",
-      },
+      kind: "agent-final",
     }),
     createMessage({
       sender: "初筛",
       content: `@${runtimeAgentName}`,
       timestamp: "2026-04-16T00:00:01.000Z",
-      meta: {
-        kind: "agent-dispatch",
-        sourceAgentId: "初筛",
-        targetAgentIds: runtimeAgentName,
-      },
+      kind: "agent-dispatch",
+      targetAgentIds: [runtimeAgentName],
     }),
   ];
 

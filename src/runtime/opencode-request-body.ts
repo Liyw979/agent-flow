@@ -19,7 +19,7 @@ export function buildSubmitMessageBody(payload: SubmitMessageBodyInput): Record<
 
   const system = payload.system?.trim();
   if (system) {
-    body.system = system;
+    body["system"] = system;
   }
 
   return body;

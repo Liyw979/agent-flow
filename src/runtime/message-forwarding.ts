@@ -1,12 +1,16 @@
 import {
   DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE,
+  getMessageTargetAgentIds,
+  isAgentDispatchMessageRecord,
+  isUserMessageRecord,
   type MessageRecord,
   type TopologyEdgeMessageMode,
 } from "@shared/types";
+import { withOptionalString } from "@shared/object-utils";
 
-type MinimalMessage = Pick<MessageRecord, "sender" | "content" | "meta">;
+type MinimalMessage = MessageRecord;
 
-export function extractMention(content: string): string | undefined {
+function extractMention(content: string): string | undefined {
   const match = content.match(/@([^\s]+)/u);
   return match?.[1];
 }
@@ -50,11 +54,11 @@ export function contentContainsNormalized(content: string, candidate: string): b
 export function getInitialUserMessageContent(messages: MinimalMessage[]): string {
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
-    if (message?.sender !== "user") {
+    if (!message || !isUserMessageRecord(message)) {
       continue;
     }
     const rawContent = message.content.trim();
-    const targetAgentName = message.meta?.targetAgentId?.trim();
+    const targetAgentName = getMessageTargetAgentIds(message)[0]?.trim();
     if (!targetAgentName) {
       return rawContent;
     }
@@ -76,15 +80,15 @@ export function buildDownstreamForwardedContextFromMessages(
   const initialUserContent = getInitialUserMessageContent(messages);
   const latestSourceContent = sourceContent.trim();
   const agentMessage = resolveForwardedAgentMessage(messages, latestSourceContent, messageMode);
-  return {
-    userMessage:
-      includeInitialTask
-      && initialUserContent
-      && !contentContainsNormalized(agentMessage, initialUserContent)
-        ? initialUserContent
-        : undefined,
+  return withOptionalString({
     agentMessage,
-  };
+  }, "userMessage",
+    includeInitialTask
+    && initialUserContent
+    && !contentContainsNormalized(agentMessage, initialUserContent)
+      ? initialUserContent
+      : undefined,
+  );
 }
 
 function resolveForwardedAgentMessage(
@@ -116,12 +120,12 @@ function isForwardableMessage(message: MinimalMessage): boolean {
   if (!message.content.trim()) {
     return false;
   }
-  return message.meta?.kind !== "agent-dispatch";
+  return !isAgentDispatchMessageRecord(message);
 }
 
 function formatForwardableMessage(message: MinimalMessage): string {
   const sender = message.sender.trim() || "Unknown";
-  const targetAgentName = message.meta?.targetAgentId?.trim();
+  const targetAgentName = getMessageTargetAgentIds(message)[0]?.trim();
   const content = sender === "user" && targetAgentName
     ? stripTargetMention(message.content, targetAgentName)
     : message.content.trim();

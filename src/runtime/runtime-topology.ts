@@ -75,7 +75,7 @@ export function instantiateSpawnBundle(input: {
       sourceNodeId: sourceNode.id,
       groupId,
       role: agent.role,
-      spawnRuleId: templateNode?.spawnRuleId,
+      ...(templateNode?.spawnRuleId ? { spawnRuleId: templateNode.spawnRuleId } : {}),
     };
   });
 
@@ -89,7 +89,7 @@ export function instantiateSpawnBundle(input: {
       source: sourceNodeInstance.id,
       target: targetNodeInstance.id,
       triggerOn: edge.triggerOn,
-      messageMode: edge.messageMode,
+      ...(edge.messageMode ? { messageMode: edge.messageMode } : {}),
       ...(edge.triggerOn === "needs_revision" && typeof edge.maxRevisionRounds === "number"
         ? { maxRevisionRounds: edge.maxRevisionRounds }
         : {}),
@@ -122,11 +122,11 @@ export function instantiateSpawnBundle(input: {
     groupId,
     activationId: input.activationId,
     spawnNodeName: effectiveSpawnNodeName,
-    sourceTemplateName: rule.sourceTemplateName,
-    reportToTemplateName: rule.reportToTemplateName,
     item: input.item,
     nodes,
     edges,
+    ...(rule.sourceTemplateName ? { sourceTemplateName: rule.sourceTemplateName } : {}),
+    ...(rule.reportToTemplateName ? { reportToTemplateName: rule.reportToTemplateName } : {}),
   };
 }
 

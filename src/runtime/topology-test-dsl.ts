@@ -200,7 +200,7 @@ function normalizeSpawnLinks(config: SpawnTemplateInput | undefined): SpawnRule[
       sourceRole: objectLink.sourceRole,
       targetRole: objectLink.targetRole,
       triggerOn: normalizeTopologyEdgeTrigger(objectLink.triggerOn),
-      messageMode: objectLink.messageMode,
+      ...(objectLink.messageMode ? { messageMode: objectLink.messageMode } : {}),
     };
   });
 }
@@ -240,33 +240,39 @@ export function createTopology(
   input: CreateTopologyDslInput | CreateTopologyLegacyInput,
 ): TopologyRecord {
   if (isLegacyInput(input)) {
-    return {
+    const topology: TopologyRecord = {
       projectId: input.projectId,
       nodes: [...input.nodes],
       edges: input.edges.map((edge) => ({
         ...edge,
         triggerOn: normalizeTopologyEdgeTrigger(edge.triggerOn),
       })),
-      nodeRecords: input.nodeRecords?.map((node) => ({ ...node })),
-      spawnRules: input.spawnRules?.map((rule) => ({
-        ...rule,
-        spawnNodeName: rule.spawnNodeName ?? rule.name,
-        spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
-        edges: rule.edges.map((edge) => ({
-          ...edge,
-          triggerOn: normalizeTopologyEdgeTrigger(edge.triggerOn),
-        })),
-      })),
+      ...(input.nodeRecords ? { nodeRecords: input.nodeRecords.map((node) => ({ ...node })) } : {}),
+      ...(input.spawnRules
+        ? {
+            spawnRules: input.spawnRules.map((rule) => ({
+              ...rule,
+              spawnNodeName: rule.spawnNodeName ?? rule.name,
+              spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
+              edges: rule.edges.map((edge) => ({
+                ...edge,
+                triggerOn: normalizeTopologyEdgeTrigger(edge.triggerOn),
+              })),
+            })),
+          }
+        : {}),
     };
+    return topology;
   }
 
   const nodes = collectNodes(input);
 
-  return {
+  const topology: TopologyRecord = {
     projectId: input.projectId,
     nodes,
     edges: buildEdges(input),
-    nodeRecords: buildNodeRecords(nodes, input),
-    spawnRules: buildSpawnRules(input),
+    ...(buildNodeRecords(nodes, input).length > 0 ? { nodeRecords: buildNodeRecords(nodes, input) } : {}),
+    ...(buildSpawnRules(input).length > 0 ? { spawnRules: buildSpawnRules(input) } : {}),
   };
+  return topology;
 }

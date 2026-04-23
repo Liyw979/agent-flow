@@ -18,13 +18,13 @@ export function validateProjectAgents(_agents: AgentRecord[]): void {
   // 拓扑中的 writable 现在完全由 JSON 显式声明，允许多个 Agent 同时可写。
 }
 
-export type OpenCodePermissionValue =
+type OpenCodePermissionValue =
   | PermissionMode
   | Record<string, PermissionMode>;
 
-export type OpenCodePermissionConfig = Record<string, OpenCodePermissionValue>;
+type OpenCodePermissionConfig = Record<string, OpenCodePermissionValue>;
 
-export function buildReadonlyAgentPermissionConfig(): OpenCodePermissionConfig {
+function buildReadonlyAgentPermissionConfig(): OpenCodePermissionConfig {
   return {
     write: "deny",
     edit: "deny",

@@ -109,14 +109,13 @@ export function createEmptyGraphTaskState(input: {
 }
 
 export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
-  return {
-    ...state,
-    topology: {
-      ...state.topology,
-      nodes: [...state.topology.nodes],
-      edges: state.topology.edges.map((edge) => ({ ...edge })),
-      langgraph: state.topology.langgraph
-        ? {
+  const topology: TopologyRecord = {
+    ...state.topology,
+    nodes: [...state.topology.nodes],
+    edges: state.topology.edges.map((edge) => ({ ...edge })),
+    ...(state.topology.langgraph
+      ? {
+          langgraph: {
             start: {
               id: state.topology.langgraph.start.id,
               targets: [...state.topology.langgraph.start.targets],
@@ -127,15 +126,26 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
                   sources: [...state.topology.langgraph.end.sources],
                 }
               : null,
-          }
-        : undefined,
-      nodeRecords: state.topology.nodeRecords?.map((node) => ({ ...node })),
-      spawnRules: state.topology.spawnRules?.map((rule) => ({
-        ...rule,
-        spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
-        edges: rule.edges.map((edge) => ({ ...edge })),
-      })),
-    },
+          },
+        }
+      : {}),
+    ...(state.topology.nodeRecords
+      ? { nodeRecords: state.topology.nodeRecords.map((node) => ({ ...node })) }
+      : {}),
+    ...(state.topology.spawnRules
+      ? {
+          spawnRules: state.topology.spawnRules.map((rule) => ({
+            ...rule,
+            spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
+            edges: rule.edges.map((edge) => ({ ...edge })),
+          })),
+        }
+      : {}),
+  };
+
+  return {
+    ...state,
+    topology,
     runtimeNodes: state.runtimeNodes.map((node) => ({ ...node })),
     runtimeEdges: state.runtimeEdges.map((edge) => ({ ...edge })),
     spawnBundles: state.spawnBundles.map((bundle) => ({

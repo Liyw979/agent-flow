@@ -10,6 +10,10 @@ import {
   type TopologyRecord,
   usesOpenCodeBuiltinPrompt,
 } from "./types";
+import { readFileSync } from "node:fs";
+
+const TYPES_SOURCE = readFileSync(new URL("./types.ts", import.meta.url), "utf8");
+const MESSAGE_RECORD_BLOCK = TYPES_SOURCE.match(/export interface MessageRecord \{[\s\S]*?\n\}/u)?.[0] ?? "";
 
 test("默认拓扑只生成首节点到次节点的 association 边", () => {
   const agents: TopologyAgentSeed[] = [
@@ -110,4 +114,16 @@ test("只有 Build 继续视为 OpenCode 内置 prompt", () => {
 test("旧的 review_pass / review_fail 别名不再被识别为合法 trigger", () => {
   assert.equal(normalizeTopologyEdgeTrigger("review_pass"), "association");
   assert.equal(normalizeTopologyEdgeTrigger("review_fail"), "association");
+});
+
+test("MessageRecord 不再暴露无生产用途的 projectId / sessionId / sourceAgentId", () => {
+  assert.equal(MESSAGE_RECORD_BLOCK.includes("  projectId?: string;\n"), false);
+  assert.equal(MESSAGE_RECORD_BLOCK.includes("  sessionId?: string;\n"), false);
+  assert.equal(MESSAGE_RECORD_BLOCK.includes("  sourceAgentId?: string;\n"), false);
+});
+
+test("MessageRecord 使用必选 kind 作为判别字段，并为用户消息保留显式种类", () => {
+  assert.equal(MESSAGE_RECORD_BLOCK.includes("  kind?:"), false);
+  assert.match(TYPES_SOURCE, /kind:\s*"user"/u);
+  assert.match(TYPES_SOURCE, /kind:\s*"system-message"/u);
 });

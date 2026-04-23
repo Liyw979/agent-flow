@@ -5,6 +5,13 @@ import type { GraphTaskState } from "./gating-state";
 export function buildEffectiveTopology(state: GraphTaskState): TopologyRecord {
   const runtimeNodeIds = state.runtimeNodes.map((node) => node.id);
   const staticNodeIds = state.topology.nodes.filter((name) => !runtimeNodeIds.includes(name));
+  const runtimeNodeRecords = state.runtimeNodes.map((node) => ({
+    id: node.id,
+    kind: node.kind,
+    templateName: node.templateName,
+    ...(node.spawnRuleId ? { spawnRuleId: node.spawnRuleId } : {}),
+  }));
+
   return {
     ...state.topology,
     nodes: [...staticNodeIds, ...runtimeNodeIds],
@@ -14,12 +21,7 @@ export function buildEffectiveTopology(state: GraphTaskState): TopologyRecord {
     ],
     nodeRecords: [
       ...(state.topology.nodeRecords?.map((node) => ({ ...node })) ?? []),
-      ...state.runtimeNodes.map((node) => ({
-        id: node.id,
-        kind: node.kind,
-        templateName: node.templateName,
-        spawnRuleId: node.spawnRuleId,
-      })),
+      ...runtimeNodeRecords,
     ],
   };
 }
@@ -54,10 +56,6 @@ export function getRuntimeTemplateName(state: GraphTaskState, runtimeAgentId: st
   return state.runtimeNodes.find((node) => node.id === runtimeAgentId)?.templateName ?? null;
 }
 
-export function getRuntimeNode(state: GraphTaskState, runtimeAgentId: string) {
-  return state.runtimeNodes.find((node) => node.id === runtimeAgentId) ?? null;
-}
-
 export function getNextSpawnSequence(state: GraphTaskState, spawnRuleId: string): number {
   const next = (state.spawnSequenceByRule[spawnRuleId] ?? 0) + 1;
   state.spawnSequenceByRule[spawnRuleId] = next;
@@ -74,12 +72,4 @@ export function buildSpawnItemTitle(sourceContent: string | undefined, fallbackI
 
 export function buildSpawnItemId(spawnRuleId: string, sequence: number): string {
   return `${spawnRuleId}-${String(sequence).padStart(4, "0")}`;
-}
-
-function ensureRuntimeNodeStatuses(state: GraphTaskState): void {
-  for (const node of state.runtimeNodes) {
-    if (!state.agentStatusesByName[node.id]) {
-      state.agentStatusesByName[node.id] = "idle";
-    }
-  }
 }

@@ -5,7 +5,7 @@ const INVALID_LOG_FILE_SEGMENT_PATTERN = /[\\/:*?"<>|]/;
 
 let appLogRootPath: string | null = null;
 
-export interface AppLogScope {
+interface AppLogScope {
   taskId?: string | null;
   runtimeKey?: string | null;
 }

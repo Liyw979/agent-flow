@@ -1,7 +1,7 @@
-import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { withOptionalString, withOptionalValue } from "@shared/object-utils";
 import { buildSubmitMessageBody } from "./opencode-request-body";
 import { toOpenCodeAgentName } from "./opencode-agent-name";
 import { appendAppLog } from "./app-log";
@@ -254,11 +254,10 @@ export class OpenCodeClient {
     const normalized = this.normalizeTarget(target);
     const opencodeAgent = toOpenCodeAgentName(payload.agent);
 
-    const body = buildSubmitMessageBody({
+    const body = buildSubmitMessageBody(withOptionalString({
       agent: opencodeAgent,
       content: payload.content,
-      system: payload.system,
-    });
+    }, "system", payload.system));
     // Do not send deprecated `tools` here. OpenCode copies that field into session-level
     // permissions, which can accidentally reopen write/edit/bash access for restricted agents.
 
@@ -576,29 +575,20 @@ export class OpenCodeClient {
     });
   }
 
-  private isPidAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   protected async startServer(target: OpenCodeRuntimeTargetInput): Promise<ServeHandle> {
     const state = this.getProjectServerState(target);
 
     const serverEnv = { ...process.env };
     // Isolate the embedded runtime from parent OpenCode config injection.
-    delete serverEnv.OPENCODE_CONFIG;
-    delete serverEnv.OPENCODE_CONFIG_CONTENT;
-    delete serverEnv.OPENCODE_CONFIG_DIR;
-    delete serverEnv.OPENCODE_DB;
-    delete serverEnv.OPENCODE_CLIENT;
-    serverEnv.OPENCODE_CLIENT = "agent-team-orchestrator";
-    serverEnv.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
+    delete serverEnv["OPENCODE_CONFIG"];
+    delete serverEnv["OPENCODE_CONFIG_CONTENT"];
+    delete serverEnv["OPENCODE_CONFIG_DIR"];
+    delete serverEnv["OPENCODE_DB"];
+    delete serverEnv["OPENCODE_CLIENT"];
+    serverEnv["OPENCODE_CLIENT"] = "agent-team-orchestrator";
+    serverEnv["OPENCODE_DISABLE_PROJECT_CONFIG"] = "true";
     if (state.injectedConfigContent) {
-      serverEnv.OPENCODE_CONFIG_CONTENT = state.injectedConfigContent;
+      serverEnv["OPENCODE_CONFIG_CONTENT"] = state.injectedConfigContent;
     }
     appendAppLog("info", "opencode.serve_starting", {
       projectPath: state.projectPath,
@@ -700,16 +690,6 @@ export class OpenCodeClient {
   async getAttachBaseUrl(target: OpenCodeRuntimeTargetInput): Promise<string> {
     const server = await this.ensureServer(target);
     return this.buildBaseUrl(server.port);
-  }
-
-  private terminateStaleServeOnPort(port: number) {
-    const pids = this.findListeningPids(port);
-    for (const pid of pids) {
-      if (!this.isOpenCodeServeProcess(pid)) {
-        continue;
-      }
-      this.killProcess(pid);
-    }
   }
 
   private findListeningPids(port: number): number[] {
@@ -843,11 +823,11 @@ export class OpenCodeClient {
   }
 
   private handleEvent(event: OpenCodeEvent) {
-    const eventType = typeof event.type === "string" ? event.type : "";
-    const properties = this.asRecord(event.properties);
+    const eventType = typeof event["type"] === "string" ? event["type"] : "";
+    const properties = this.asRecord(event["properties"]);
 
     if (eventType === "session.idle") {
-      const sessionId = typeof properties.sessionID === "string" ? properties.sessionID : null;
+      const sessionId = typeof properties["sessionID"] === "string" ? properties["sessionID"] : null;
       if (!sessionId) {
         return;
       }
@@ -865,11 +845,11 @@ export class OpenCodeClient {
     }
 
     if (eventType === "session.error") {
-      const sessionId = typeof properties.sessionID === "string" ? properties.sessionID : null;
+      const sessionId = typeof properties["sessionID"] === "string" ? properties["sessionID"] : null;
       if (!sessionId) {
         return;
       }
-      const error = this.extractEventError(properties.error) ?? "OpenCode session 发生未知错误";
+      const error = this.extractEventError(properties["error"]) ?? "OpenCode session 发生未知错误";
       this.sessionErrors.set(sessionId, error);
       const waiters = this.sessionWaiters.get(sessionId) ?? [];
       this.sessionWaiters.delete(sessionId);
@@ -903,11 +883,10 @@ export class OpenCodeClient {
     });
     const requestWithServer = async (server: ServeHandle) => {
       const url = `${this.buildBaseUrl(server.port)}${pathname}`;
-      return this.fetchWithTimeout(url, {
+      return this.fetchWithTimeout(url, withOptionalValue({
         method: options.method,
         headers,
-        body: options.body,
-      }, timeoutMs);
+      }, "body", options.body), timeoutMs);
     };
     const server = await this.ensureServer(normalized);
     const url = `${this.buildBaseUrl(server.port)}${pathname}`;
@@ -1049,7 +1028,7 @@ export class OpenCodeClient {
 
     const normalizedRecords = messages.map((raw) => {
       const envelope = this.asRecord(raw);
-      const info = this.asRecord(envelope.info ?? raw);
+      const info = this.asRecord(envelope["info"] ?? raw);
       const normalized = this.normalizeMessageEnvelope(raw, "assistant");
       return {
         raw,
@@ -1164,49 +1143,49 @@ export class OpenCodeClient {
     fallbackSender: string,
   ): OpenCodeNormalizedMessage {
     const envelope = this.asRecord(raw);
-    const info = this.asRecord(envelope.info ?? raw);
-    const parts = Array.isArray(envelope.parts) ? (envelope.parts as Array<Record<string, unknown>>) : [];
-    const time = this.asRecord(info.time);
+    const info = this.asRecord(envelope["info"] ?? raw);
+    const parts = Array.isArray(envelope["parts"]) ? (envelope["parts"] as Array<Record<string, unknown>>) : [];
+    const time = this.asRecord(info["time"]);
     const created =
-      this.toIsoString(time.created) ??
-      this.toIsoString(info.createdAt) ??
+      this.toIsoString(time["created"]) ??
+      this.toIsoString(info["createdAt"]) ??
       new Date().toISOString();
     const completed =
-      this.toIsoString(time.completed) ??
-      this.toIsoString(info.completedAt) ??
+      this.toIsoString(time["completed"]) ??
+      this.toIsoString(info["completedAt"]) ??
       null;
     const sender =
-      typeof info.role === "string"
-        ? info.role
-        : typeof envelope.sender === "string"
-          ? envelope.sender
+      typeof info["role"] === "string"
+        ? info["role"]
+        : typeof envelope["sender"] === "string"
+          ? envelope["sender"]
           : fallbackSender;
     const content =
       parts.length > 0
         ? this.extractVisibleMessageText(parts)
-        : typeof envelope.content === "string"
-          ? envelope.content
-          : typeof envelope.text === "string"
-            ? envelope.text
+        : typeof envelope["content"] === "string"
+          ? envelope["content"]
+          : typeof envelope["text"] === "string"
+            ? envelope["text"]
             : "";
 
     return {
       id:
-        (typeof info.id === "string" ? info.id : null) ??
-        (typeof envelope.id === "string" ? envelope.id : null) ??
+        (typeof info["id"] === "string" ? info["id"] : null) ??
+        (typeof envelope["id"] === "string" ? envelope["id"] : null) ??
         randomUUID(),
       content,
       sender,
       timestamp: created,
       completedAt: completed,
-      error: this.extractEventError(info.error ?? envelope.error),
+      error: this.extractEventError(info["error"] ?? envelope["error"]),
       raw,
     };
   }
 
   private extractParentMessageId(info: Record<string, unknown>): string | null {
-    return typeof info.parentID === "string" && info.parentID.trim()
-      ? info.parentID
+    return typeof info["parentID"] === "string" && info["parentID"].trim()
+      ? info["parentID"]
       : null;
   }
 
@@ -1226,7 +1205,7 @@ export class OpenCodeClient {
       return true;
     }
 
-    return typeof info.finish === "string" && info.finish === "stop";
+    return typeof info["finish"] === "string" && info["finish"] === "stop";
   }
 
   private isRecoverableTransportError(errorMessage: string): boolean {
@@ -1246,7 +1225,7 @@ export class OpenCodeClient {
       }
 
       const record = this.asRecord(raw);
-      const parts = Array.isArray(record.parts) ? (record.parts as Array<Record<string, unknown>>) : [];
+      const parts = Array.isArray(record["parts"]) ? (record["parts"] as Array<Record<string, unknown>>) : [];
       const extracted = this.extractRuntimeActivities(parts, normalized, messageIndex);
 
       if (extracted.length === 0 && normalized.content.trim()) {
@@ -1302,7 +1281,11 @@ export class OpenCodeClient {
     const activities: OpenCodeRuntimeActivity[] = [];
 
     for (const partIndex of pickRecentPartIndexes(parts.length, 4)) {
-      const activity = this.partToRuntimeActivity(parts[partIndex], message, messageIndex, partIndex);
+      const part = parts[partIndex];
+      if (!part) {
+        continue;
+      }
+      const activity = this.partToRuntimeActivity(part, message, messageIndex, partIndex);
       if (activity) {
         activities.push(activity);
       }
@@ -1317,7 +1300,7 @@ export class OpenCodeClient {
     messageIndex: number,
     partIndex: number,
   ): OpenCodeRuntimeActivity | null {
-    const type = typeof part.type === "string" ? part.type : "";
+    const type = typeof part["type"] === "string" ? part["type"] : "";
     const timestamp = message.completedAt ?? message.timestamp;
     const toolName = this.extractToolName(part);
 
@@ -1343,13 +1326,13 @@ export class OpenCodeClient {
       };
     }
 
-    if (type === "step-start" && typeof part.name === "string" && part.name.trim()) {
+    if (type === "step-start" && typeof part["name"] === "string" && part["name"].trim()) {
       const detail = this.extractPartDetail(part);
       return {
         id: `${message.id}:${messageIndex}:${partIndex}:step`,
         kind: "step",
-        label: part.name.trim(),
-        detail: detail || `执行步骤：${part.name.trim()}`,
+        label: part["name"].trim(),
+        detail: detail || `执行步骤：${part["name"].trim()}`,
         timestamp,
       };
     }
@@ -1389,28 +1372,28 @@ export class OpenCodeClient {
   }
 
   private extractToolName(part: Record<string, unknown>): string | null {
-    const type = typeof part.type === "string" ? part.type.toLowerCase() : "";
+    const type = typeof part["type"] === "string" ? part["type"].toLowerCase() : "";
     const directTool =
-      (typeof part.toolName === "string" && part.toolName.trim()) ||
-      (typeof part.tool === "string" && part.tool.trim()) ||
-      (typeof part.name === "string" && part.name.trim()) ||
+      (typeof part["toolName"] === "string" && part["toolName"].trim()) ||
+      (typeof part["tool"] === "string" && part["tool"].trim()) ||
+      (typeof part["name"] === "string" && part["name"].trim()) ||
       null;
 
     if (directTool && type.includes("tool")) {
       return directTool;
     }
 
-    const toolRecord = this.asRecord(part.tool);
-    if (typeof toolRecord.name === "string" && toolRecord.name.trim()) {
-      return toolRecord.name.trim();
+    const toolRecord = this.asRecord(part["tool"]);
+    if (typeof toolRecord["name"] === "string" && toolRecord["name"].trim()) {
+      return toolRecord["name"].trim();
     }
 
-    const callRecord = this.asRecord(part.call);
-    if (typeof callRecord.tool === "string" && callRecord.tool.trim()) {
-      return callRecord.tool.trim();
+    const callRecord = this.asRecord(part["call"]);
+    if (typeof callRecord["tool"] === "string" && callRecord["tool"].trim()) {
+      return callRecord["tool"].trim();
     }
-    if (typeof callRecord.name === "string" && callRecord.name.trim()) {
-      return callRecord.name.trim();
+    if (typeof callRecord["name"] === "string" && callRecord["name"].trim()) {
+      return callRecord["name"].trim();
     }
 
     return null;
@@ -1418,15 +1401,15 @@ export class OpenCodeClient {
 
   private extractPartDetail(part: Record<string, unknown>): string {
     const textCandidates = [
-      typeof part.summary === "string" ? part.summary : "",
-      typeof part.text === "string" ? part.text : "",
-      typeof part.title === "string" ? part.title : "",
-      typeof part.description === "string" ? part.description : "",
-      this.extractStructuredDetail(part.input),
-      this.extractStructuredDetail(part.args),
-      this.extractStructuredDetail(part.arguments),
-      this.extractStructuredDetail(part.payload),
-      this.extractStructuredDetail(part.output),
+      typeof part["summary"] === "string" ? part["summary"] : "",
+      typeof part["text"] === "string" ? part["text"] : "",
+      typeof part["title"] === "string" ? part["title"] : "",
+      typeof part["description"] === "string" ? part["description"] : "",
+      this.extractStructuredDetail(part["input"]),
+      this.extractStructuredDetail(part["args"]),
+      this.extractStructuredDetail(part["arguments"]),
+      this.extractStructuredDetail(part["payload"]),
+      this.extractStructuredDetail(part["output"]),
     ]
       .map((value) => value.trim())
       .filter(Boolean);
@@ -1435,63 +1418,63 @@ export class OpenCodeClient {
   }
 
   private extractReasoningDetail(part: Record<string, unknown>): string {
-    const type = typeof part.type === "string" ? part.type.toLowerCase() : "";
-    if (type === "reasoning" && typeof part.text === "string") {
-      return part.text.trim();
+    const type = typeof part["type"] === "string" ? part["type"].toLowerCase() : "";
+    if (type === "reasoning" && typeof part["text"] === "string") {
+      return part["text"].trim();
     }
-    if (typeof part.reasoning === "string") {
-      return part.reasoning.trim();
+    if (typeof part["reasoning"] === "string") {
+      return part["reasoning"].trim();
     }
 
     return "";
   }
 
   private extractToolCallDetail(part: Record<string, unknown>): string {
-    const callRecord = this.asRecord(part.call);
-    const toolRecord = this.asRecord(part.tool);
-    const metadataRecord = this.asRecord(part.metadata);
-    const stateRecord = this.asRecord(part.state);
+    const callRecord = this.asRecord(part["call"]);
+    const toolRecord = this.asRecord(part["tool"]);
+    const metadataRecord = this.asRecord(part["metadata"]);
+    const stateRecord = this.asRecord(part["state"]);
     const argsValue =
-      part.input ??
-      part.args ??
-      part.arguments ??
-      part.payload ??
-      part.options ??
-      part.params ??
-      part.data ??
-      part.body ??
-      callRecord.input ??
-      callRecord.args ??
-      callRecord.arguments ??
-      callRecord.payload ??
-      callRecord.options ??
-      callRecord.params ??
-      callRecord.data ??
-      callRecord.body ??
-      toolRecord.input ??
-      toolRecord.args ??
-      toolRecord.arguments ??
-      toolRecord.payload ??
-      toolRecord.options ??
-      toolRecord.params ??
-      toolRecord.data ??
-      toolRecord.body ??
-      metadataRecord.input ??
-      metadataRecord.args ??
-      metadataRecord.arguments ??
-      metadataRecord.payload ??
-      metadataRecord.options ??
-      metadataRecord.params ??
-      metadataRecord.data ??
-      metadataRecord.body ??
-      stateRecord.input ??
-      stateRecord.args ??
-      stateRecord.arguments ??
-      stateRecord.payload ??
-      stateRecord.options ??
-      stateRecord.params ??
-      stateRecord.data ??
-      stateRecord.body;
+      part["input"] ??
+      part["args"] ??
+      part["arguments"] ??
+      part["payload"] ??
+      part["options"] ??
+      part["params"] ??
+      part["data"] ??
+      part["body"] ??
+      callRecord["input"] ??
+      callRecord["args"] ??
+      callRecord["arguments"] ??
+      callRecord["payload"] ??
+      callRecord["options"] ??
+      callRecord["params"] ??
+      callRecord["data"] ??
+      callRecord["body"] ??
+      toolRecord["input"] ??
+      toolRecord["args"] ??
+      toolRecord["arguments"] ??
+      toolRecord["payload"] ??
+      toolRecord["options"] ??
+      toolRecord["params"] ??
+      toolRecord["data"] ??
+      toolRecord["body"] ??
+      metadataRecord["input"] ??
+      metadataRecord["args"] ??
+      metadataRecord["arguments"] ??
+      metadataRecord["payload"] ??
+      metadataRecord["options"] ??
+      metadataRecord["params"] ??
+      metadataRecord["data"] ??
+      metadataRecord["body"] ??
+      stateRecord["input"] ??
+      stateRecord["args"] ??
+      stateRecord["arguments"] ??
+      stateRecord["payload"] ??
+      stateRecord["options"] ??
+      stateRecord["params"] ??
+      stateRecord["data"] ??
+      stateRecord["body"];
     const summary = this.extractStructuredArgsDetail(argsValue);
     return summary ? `参数: ${summary}` : "";
   }
@@ -1582,18 +1565,18 @@ export class OpenCodeClient {
 
     const record = this.asRecord(value);
     const direct = [
-      typeof record.command === "string" ? record.command : "",
-      typeof record.cmd === "string" ? record.cmd : "",
-      typeof record.path === "string" ? record.path : "",
-      typeof record.file === "string" ? record.file : "",
-      typeof record.pattern === "string" ? record.pattern : "",
-      typeof record.query === "string" ? record.query : "",
-      typeof record.message === "string" ? record.message : "",
-      typeof record.text === "string" ? record.text : "",
-      typeof record.url === "string" ? record.url : "",
-      typeof record.location === "string" ? record.location : "",
-      typeof record.agent === "string" ? record.agent : "",
-      typeof record.name === "string" ? record.name : "",
+      typeof record["command"] === "string" ? record["command"] : "",
+      typeof record["cmd"] === "string" ? record["cmd"] : "",
+      typeof record["path"] === "string" ? record["path"] : "",
+      typeof record["file"] === "string" ? record["file"] : "",
+      typeof record["pattern"] === "string" ? record["pattern"] : "",
+      typeof record["query"] === "string" ? record["query"] : "",
+      typeof record["message"] === "string" ? record["message"] : "",
+      typeof record["text"] === "string" ? record["text"] : "",
+      typeof record["url"] === "string" ? record["url"] : "",
+      typeof record["location"] === "string" ? record["location"] : "",
+      typeof record["agent"] === "string" ? record["agent"] : "",
+      typeof record["name"] === "string" ? record["name"] : "",
     ]
       .map((item) => item.trim())
       .filter(Boolean);
@@ -1629,12 +1612,12 @@ export class OpenCodeClient {
 
   private extractEventError(value: unknown): string | null {
     const record = this.asRecord(value);
-    if (typeof record.message === "string") {
-      return record.message;
+    if (typeof record["message"] === "string") {
+      return record["message"];
     }
-    const data = this.asRecord(record.data);
-    if (typeof data.message === "string") {
-      return data.message;
+    const data = this.asRecord(record["data"]);
+    if (typeof data["message"] === "string") {
+      return data["message"];
     }
     return null;
   }
@@ -1758,8 +1741,8 @@ export class OpenCodeClient {
   private extractVisibleMessageText(parts: Array<Record<string, unknown>>): string {
     const text = parts
       .map((part) => {
-        if (part.type === "text" && typeof part.text === "string") {
-          return part.text;
+        if (part["type"] === "text" && typeof part["text"] === "string") {
+          return part["text"];
         }
         return "";
       })

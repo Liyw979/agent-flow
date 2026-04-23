@@ -1,4 +1,4 @@
-export interface TopologyPanelBodyPadding {
+interface TopologyPanelBodyPadding {
   x: number;
   y: number;
 }

@@ -13,16 +13,97 @@ function createMessage(input: {
   sender: string;
   timestamp: string;
   content: string;
-  meta?: Record<string, string>;
+  kind: MessageRecord["kind"];
+  targetAgentIds?: string[];
 }): MessageRecord {
+  if (input.kind === "user") {
+    return {
+      id: input.id,
+      taskId: "task-1",
+      sender: "user",
+      timestamp: input.timestamp,
+      content: input.content,
+      kind: "user",
+      scope: "task",
+      taskTitle: "demo",
+      targetAgentIds: input.targetAgentIds ?? [],
+    };
+  }
+  if (input.kind === "agent-final") {
+    return {
+      id: input.id,
+      taskId: "task-1",
+      sender: input.sender,
+      timestamp: input.timestamp,
+      content: input.content,
+      kind: "agent-final",
+      status: "completed",
+      reviewDecision: "approved",
+      reviewOpinion: "",
+      rawResponse: input.content,
+    };
+  }
+  if (input.kind === "agent-dispatch") {
+    return {
+      id: input.id,
+      taskId: "task-1",
+      sender: input.sender,
+      timestamp: input.timestamp,
+      content: input.content,
+      kind: "agent-dispatch",
+      targetAgentIds: input.targetAgentIds ?? [],
+      dispatchDisplayContent: input.content,
+    };
+  }
+  if (input.kind === "revision-request") {
+    return {
+      id: input.id,
+      taskId: "task-1",
+      sender: input.sender,
+      timestamp: input.timestamp,
+      content: input.content,
+      kind: "revision-request",
+      targetAgentIds: input.targetAgentIds ?? [],
+    };
+  }
+  if (input.kind === "task-completed") {
+    return {
+      id: input.id,
+      taskId: "task-1",
+      sender: "system",
+      timestamp: input.timestamp,
+      content: input.content,
+      kind: "task-completed",
+      status: "finished",
+    };
+  }
+  if (input.kind === "task-created") {
+    return {
+      id: input.id,
+      taskId: "task-1",
+      sender: "system",
+      timestamp: input.timestamp,
+      content: input.content,
+      kind: "task-created",
+    };
+  }
+  if (input.kind === "orchestrator-waiting") {
+    return {
+      id: input.id,
+      taskId: "task-1",
+      sender: "system",
+      timestamp: input.timestamp,
+      content: input.content,
+      kind: "orchestrator-waiting",
+    };
+  }
   return {
     id: input.id,
-    projectId: "project-1",
     taskId: "task-1",
-    sender: input.sender,
+    sender: "system",
     timestamp: input.timestamp,
     content: input.content,
-    meta: input.meta,
+    kind: "system-message",
   };
 }
 
@@ -33,6 +114,8 @@ test("collectIncrementalChatTranscript 只返回新增的群聊合并消息", ()
       sender: "user",
       timestamp: "2026-04-19T10:00:00.000Z",
       content: "@Build 请实现 DSL",
+      kind: "user",
+      targetAgentIds: ["Build"],
     }),
   ];
   const next = [
@@ -42,19 +125,15 @@ test("collectIncrementalChatTranscript 只返回新增的群聊合并消息", ()
       sender: "Build",
       timestamp: "2026-04-19T10:00:01.000Z",
       content: "已完成首轮实现。",
-      meta: {
-        kind: "agent-final",
-      },
+      kind: "agent-final",
     }),
     createMessage({
       id: "m3",
       sender: "Build",
       timestamp: "2026-04-19T10:00:02.000Z",
       content: "",
-      meta: {
-        kind: "agent-dispatch",
-        targetAgentIds: "CodeReview",
-      },
+      kind: "agent-dispatch",
+      targetAgentIds: ["CodeReview"],
     }),
   ];
 
@@ -71,6 +150,7 @@ test("collectIncrementalChatTranscript 在没有新增群聊消息时返回空�
       sender: "system",
       timestamp: "2026-04-19T10:00:00.000Z",
       content: "Task 已创建并完成初始化",
+      kind: "system-message",
     }),
   ];
 
@@ -85,9 +165,29 @@ test("renderChatStreamEntries 输出的是群聊文本，不包含 agent runtime
       timestamp: "2026-04-19T10:00:00.000Z",
       content: "Build 已完成。\n\n@CodeReview",
       kinds: ["agent-final", "agent-dispatch"],
-      metaChain: [
-        { kind: "agent-final" },
-        { kind: "agent-dispatch", targetAgentIds: "CodeReview" },
+      messageChain: [
+        {
+          id: "m1-final",
+          taskId: "task-1",
+          sender: "Build",
+          timestamp: "2026-04-19T10:00:00.000Z",
+          content: "Build 已完成。",
+          kind: "agent-final",
+          status: "completed",
+          reviewDecision: "approved",
+          reviewOpinion: "",
+          rawResponse: "Build 已完成。",
+        },
+        {
+          id: "m1-dispatch",
+          taskId: "task-1",
+          sender: "Build",
+          timestamp: "2026-04-19T10:00:00.000Z",
+          content: "@CodeReview",
+          kind: "agent-dispatch",
+          targetAgentIds: ["CodeReview"],
+          dispatchDisplayContent: "@CodeReview",
+        },
       ],
     },
   ]);
@@ -111,7 +211,7 @@ test("renderChatStreamEntries 的标题左对齐，正文上下不保留空白 p
       timestamp: "2026-04-20T01:47:01.000Z",
       content: "入口应该是ba啊",
       kinds: ["user"],
-      metaChain: [{ kind: "user" }],
+      messageChain: [],
     },
   ]);
 
@@ -128,8 +228,8 @@ test("renderChatStreamEntries 不再输出状态行样式文本", () => {
       sender: "system",
       timestamp: "2026-04-19T10:00:03.000Z",
       content: "所有Agent任务已完成",
-      kinds: ["system"],
-      metaChain: [{ kind: "task-status" }],
+      kinds: ["system-message"],
+      messageChain: [],
     },
   ]);
 

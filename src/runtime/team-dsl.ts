@@ -3,7 +3,6 @@ import {
   createTopologyLangGraphRecord,
   normalizeNeedsRevisionMaxRounds,
   normalizeTopologyEdgeMessageMode,
-  type TopologyEdge,
   type TopologyEdgeMessageMode,
   type TopologyEdgeTrigger,
   type TopologyLangGraphRecord,
@@ -117,7 +116,7 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
         source: edge.source,
         target: edge.target,
         triggerOn: edge.triggerOn,
-        messageMode: edge.messageMode,
+        ...(edge.messageMode ? { messageMode: edge.messageMode } : {}),
         ...(edge.triggerOn === "needs_revision"
           ? {
               maxRevisionRounds: normalizeNeedsRevisionMaxRounds(edge.maxRevisionRounds),
@@ -129,15 +128,19 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
         const rightKey = `${right.source}__${right.target}__${right.triggerOn}__${right.messageMode ?? ""}__${right.maxRevisionRounds ?? ""}`;
         return leftKey.localeCompare(rightKey);
       }),
-    langgraph: topology.langgraph
-      ? normalizeComparableLangGraph(topology.langgraph)
-      : undefined,
-    nodeRecords: topology.nodeRecords
-      ? [...topology.nodeRecords].sort((left, right) => left.id.localeCompare(right.id))
-      : undefined,
-    spawnRules: topology.spawnRules
-      ? [...topology.spawnRules].sort((left, right) => left.id.localeCompare(right.id))
-      : undefined,
+    ...(topology.langgraph
+      ? { langgraph: normalizeComparableLangGraph(topology.langgraph) }
+      : {}),
+    ...(topology.nodeRecords
+      ? {
+          nodeRecords: [...topology.nodeRecords].sort((left, right) => left.id.localeCompare(right.id)),
+        }
+      : {}),
+    ...(topology.spawnRules
+      ? {
+          spawnRules: [...topology.spawnRules].sort((left, right) => left.id.localeCompare(right.id)),
+        }
+      : {}),
   };
 }
 
@@ -293,6 +296,9 @@ function formatGraphDslParseError(error: z.ZodError): string {
   }
 
   const issue = error.issues[0];
+  if (!issue) {
+    return "团队拓扑 JSON 校验失败。";
+  }
   const path = formatZodIssuePath(issue.path);
   if (
     issue.path.at(-1) === "type"
@@ -411,8 +417,8 @@ function collectGraphDslNodeDefinitions(
         messageMode: normalizeTopologyEdgeMessageMode(link.message_type),
       })),
       exitWhen: "all_completed",
-      reportToTemplateName: reportTarget?.target,
-      reportToTriggerOn: reportTarget?.triggerOn,
+      ...(reportTarget?.target ? { reportToTemplateName: reportTarget.target } : {}),
+      ...(reportTarget?.triggerOn ? { reportToTriggerOn: reportTarget.triggerOn } : {}),
     });
     collectGraphDslNodeDefinitions(node.graph, context);
   }
@@ -439,8 +445,10 @@ function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
     const compiledAgent = compiledAgentsByName.get(node.id);
     return {
       ...node,
-      ...(compiledAgent?.prompt !== null ? { prompt: compiledAgent?.prompt ?? undefined } : {}),
-      writable: compiledAgent?.isWritable === true,
+      ...(compiledAgent?.prompt !== null && compiledAgent?.prompt !== undefined
+        ? { prompt: compiledAgent.prompt }
+        : {}),
+      ...(compiledAgent?.isWritable === true ? { writable: true } : {}),
     };
   });
 

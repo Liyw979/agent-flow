@@ -4,6 +4,45 @@ import assert from "node:assert/strict";
 import type { MessageRecord, TaskAgentRecord, TaskRecord } from "@shared/types";
 import { reconcileTaskSnapshotFromMessages } from "./task-lifecycle-rules";
 
+function createAgentFinalMessage(input: {
+  id: string;
+  sender: string;
+  timestamp: string;
+  content: string;
+  reviewDecision?: "approved" | "needs_revision" | "invalid";
+  status?: "completed" | "error";
+}): MessageRecord {
+  return {
+    id: input.id,
+    taskId: "task-1",
+    sender: input.sender,
+    timestamp: input.timestamp,
+    content: input.content,
+    kind: "agent-final",
+    status: input.status ?? "completed",
+    reviewDecision: input.reviewDecision ?? "approved",
+    reviewOpinion: "",
+    rawResponse: input.content,
+  };
+}
+
+function createTaskCompletedMessage(input: {
+  id: string;
+  timestamp: string;
+  content: string;
+  status: "finished" | "failed";
+}): MessageRecord {
+  return {
+    id: input.id,
+    taskId: "task-1",
+    sender: "system",
+    timestamp: input.timestamp,
+    content: input.content,
+    kind: "task-completed",
+    status: input.status,
+  };
+}
+
 test("task-completed 与更晚的 agent-final 必须纠正滞后的 task/agent 状态", () => {
   const task: TaskRecord = {
     id: "task-1",
@@ -46,30 +85,18 @@ test("task-completed 与更晚的 agent-final 必须纠正滞后的 task/agent �
     },
   ];
   const messages: MessageRecord[] = [
-    {
+    createAgentFinalMessage({
       id: "message-1",
-      taskId: "task-1",
       sender: "CodeReview",
       timestamp: "2026-04-21T03:48:00.819Z",
       content: "<approved>通过</approved>",
-      meta: {
-        kind: "agent-final",
-        status: "completed",
-        reviewDecision: "approved",
-        finalMessage: "通过",
-      },
-    },
-    {
+    }),
+    createTaskCompletedMessage({
       id: "message-2",
-      taskId: "task-1",
-      sender: "system",
       timestamp: "2026-04-21T03:48:00.910Z",
       content: "所有Agent任务已完成",
-      meta: {
-        kind: "task-completed",
-        status: "finished",
-      },
-    },
+      status: "finished",
+    }),
   ];
 
   const reconciled = reconcileTaskSnapshotFromMessages({

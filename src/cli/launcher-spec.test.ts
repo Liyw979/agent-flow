@@ -42,7 +42,7 @@ test("buildCliLauncherSpec 鐩存帴浣跨敤褰撳墠 Node 杩涚▼鍚姩 C
     "hello",
   ]);
   assert.equal(spec.cwd, "/repo/agent-team");
-  assert.equal(spec.env.PATH, "/usr/bin");
+  assert.equal(spec.env["PATH"], "/usr/bin");
 });
 
 test("buildCliLauncherSpec 鍦?Windows 浠撳簱璺緞涓嬩篃浼氱敓鎴愬悎娉曠殑 loader file URL", () => {

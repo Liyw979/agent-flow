@@ -7,26 +7,6 @@ type ReviewSignalKind = "needs_revision" | "approved";
 
 const REVIEW_SIGNAL_TAG_PATTERN = /<\/?(?:needs_revision|approved)>/gu;
 
-const REVIEW_SIGNAL_TOKENS: Record<ReviewSignalKind, { start: string; end: string }> = {
-  needs_revision: {
-    start: REVIEW_NEEDS_REVISION_LABEL,
-    end: REVIEW_NEEDS_REVISION_END_LABEL,
-  },
-  approved: {
-    start: REVIEW_APPROVED_LABEL,
-    end: REVIEW_APPROVED_END_LABEL,
-  },
-};
-
-function formatReviewResponseBlock(
-  content: string,
-  kind: ReviewSignalKind = "needs_revision",
-): string {
-  const normalized = content.trim();
-  const token = REVIEW_SIGNAL_TOKENS[kind];
-  return `${token.start}${normalized}${token.end}`;
-}
-
 export function stripLeadingReviewResponseLabel(content: string): string {
   return content.replace(REVIEW_SIGNAL_TAG_PATTERN, "").trim();
 }

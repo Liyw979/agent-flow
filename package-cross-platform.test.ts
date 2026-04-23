@@ -39,6 +39,15 @@ test("AGENTS.md 记录交付前需要先运行 bun tsc --noEmit", () => {
   assert.match(AGENTS_MD, /类型检查通过作为交付前置条件|交付前.*bun tsc --noEmit/);
 });
 
+test("AGENTS.md 交付前检查移除旧的 bun test 描述，并改为 bun test --only-failures 与 bun run knip --fix", () => {
+  assert.doesNotMatch(
+    AGENTS_MD,
+    /每次交付前必须在仓库根目录运行 `bun test`，并以测试通过作为交付前置条件。/,
+  );
+  assert.match(AGENTS_MD, /bun test --only-failures/);
+  assert.match(AGENTS_MD, /bun run knip --fix/);
+});
+
 test("AGENTS.md 记录漏洞团队初筛先连反方的拓扑设计技巧", () => {
   assert.match(AGENTS_MD, /初筛.*反方/);
   assert.match(AGENTS_MD, /先质疑.*再进入正反对抗|先由反方挑战.*再进入正反对抗/);

@@ -67,7 +67,7 @@ test("单指定一个自定义 Agent 可写时，注入的 readonly 配置里不
   };
 
   assert.deepEqual(Object.keys(parsed.agent ?? {}), ["QA"]);
-  assert.deepEqual(parsed.agent?.QA?.permission, {
+  assert.deepEqual(parsed.agent?.["QA"]?.permission, {
     write: "deny",
     edit: "deny",
     bash: "deny",
@@ -87,7 +87,7 @@ test("不可写 Agent 只拒绝写入相关 OpenCode 工具权限", () => {
     agent?: Record<string, { permission?: Record<string, unknown> }>;
   };
 
-  assert.deepEqual(parsed.agent?.QA?.permission, {
+  assert.deepEqual(parsed.agent?.["QA"]?.permission, {
     write: "deny",
     edit: "deny",
     bash: "deny",

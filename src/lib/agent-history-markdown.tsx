@@ -1,4 +1,3 @@
-import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CSSProperties } from "react";
 
@@ -19,10 +18,20 @@ export function AgentHistoryMarkdown({
   content: string;
   className?: string;
 }) {
+  if (className) {
+    return (
+      <MarkdownMessage
+        content={content}
+        className={className}
+        inheritTypography
+        style={AGENT_HISTORY_MARKDOWN_STYLE}
+      />
+    );
+  }
+
   return (
     <MarkdownMessage
       content={content}
-      className={className}
       inheritTypography
       style={AGENT_HISTORY_MARKDOWN_STYLE}
     />

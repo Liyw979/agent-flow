@@ -51,7 +51,7 @@ test("Build agent request body omits system", () => {
   });
 
   assert.equal("system" in body, false);
-  assert.equal(body.agent, "build");
+  assert.equal(body["agent"], "build");
 });
 
 test("Review agent request body keeps system", () => {
@@ -63,14 +63,14 @@ test("Review agent request body keeps system", () => {
     }, true, "[From Build Agent]"),
   });
 
-  assert.equal(typeof body.system, "string");
-  assert.match(String(body.system), /\[From Build Agent\]/);
+  assert.equal(typeof body["system"], "string");
+  assert.match(String(body["system"]), /\[From Build Agent\]/);
   assert.match(
-    String(body.system),
+    String(body["system"]),
     new RegExp(REVIEW_NEEDS_REVISION_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
   );
   assert.match(
-    String(body.system),
+    String(body["system"]),
     new RegExp(REVIEW_APPROVED_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
   );
 });

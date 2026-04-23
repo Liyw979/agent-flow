@@ -172,7 +172,7 @@ export class GatingScheduler {
   recordAssociationBatchResponse(
     responderAgentId: string,
     outcome: "approved" | "fail",
-    agentStates: GatingAgentState[],
+    _agentStates: GatingAgentState[],
   ): GatingBatchContinuation | null {
     for (const [sourceAgentId, batch] of this.runtime.activeAssociationBatchBySource.entries()) {
       if (!batch.pendingTargets.includes(responderAgentId)) {

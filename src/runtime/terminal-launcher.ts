@@ -27,7 +27,7 @@ function quotePowerShellString(value: string): string {
 function readWindowsTerminalLauncher(
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
 ): WindowsTerminalLauncher {
-  const raw = env?.AGENT_TEAM_WINDOWS_TERMINAL?.trim().toLowerCase();
+  const raw = env?.["AGENT_TEAM_WINDOWS_TERMINAL"]?.trim().toLowerCase();
   return raw === "powershell" ? "powershell" : "cmd";
 }
 
@@ -96,7 +96,7 @@ export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLau
       args: buildWindowsStartArgs({
         command: input.command,
         cwd: input.cwd,
-        env: input.env,
+        ...(input.env ? { env: input.env } : {}),
       }),
       cwd: input.cwd,
     };
@@ -147,13 +147,14 @@ export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLau
 export async function launchTerminalCommand(input: TerminalLaunchInput): Promise<void> {
   const spec = buildTerminalLaunchSpec(input);
   const platform = input.platform ?? process.platform;
+  const spawnOptions = {
+    cwd: spec.cwd,
+    detached: true,
+    stdio: platform === "win32" ? "inherit" : "ignore",
+  } as const;
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(spec.command, spec.args, {
-      cwd: spec.cwd,
-      detached: true,
-      stdio: platform === "win32" ? "inherit" : "ignore",
-    });
+    const child = spawn(spec.command, spec.args, spawnOptions);
 
     child.once("error", reject);
     child.once("spawn", () => {
