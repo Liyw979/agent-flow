@@ -8,7 +8,6 @@ import { buildEffectiveTopology } from "./runtime-topology-graph";
 
 test("buildEffectiveTopology 不会因为 nodeRecords 只保存局部节点而丢掉 topology.nodes 里的静态节点", () => {
   const topology: TopologyRecord = {
-    projectId: "runtime-topology-node-records",
     nodes: ["BA", "Build", "QA"],
     edges: [
       { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },

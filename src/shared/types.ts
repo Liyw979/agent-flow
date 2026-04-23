@@ -141,7 +141,6 @@ export interface TopologyLangGraphRecord {
 }
 
 export interface TopologyRecord {
-  projectId?: string;
   nodes: string[];
   edges: TopologyEdge[];
   langgraph?: TopologyLangGraphRecord;

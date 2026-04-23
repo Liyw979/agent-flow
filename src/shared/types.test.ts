@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 
 const TYPES_SOURCE = readFileSync(new URL("./types.ts", import.meta.url), "utf8");
 const MESSAGE_RECORD_BLOCK = TYPES_SOURCE.match(/export interface MessageRecord \{[\s\S]*?\n\}/u)?.[0] ?? "";
+const TOPOLOGY_RECORD_BLOCK = TYPES_SOURCE.match(/export interface TopologyRecord \{[\s\S]*?\n\}/u)?.[0] ?? "";
 
 test("默认拓扑只生成首节点到次节点的 transfer 边", () => {
   const agents: TopologyAgentSeed[] = [
@@ -126,6 +127,10 @@ test("MessageRecord 不再暴露无生产用途的 projectId / sessionId / sourc
   assert.equal(MESSAGE_RECORD_BLOCK.includes("  projectId?: string;\n"), false);
   assert.equal(MESSAGE_RECORD_BLOCK.includes("  sessionId?: string;\n"), false);
   assert.equal(MESSAGE_RECORD_BLOCK.includes("  sourceAgentId?: string;\n"), false);
+});
+
+test("TopologyRecord 不再暴露无生产用途的 projectId", () => {
+  assert.equal(TOPOLOGY_RECORD_BLOCK.includes("  projectId?: string;\n"), false);
 });
 
 test("MessageRecord 使用必选 kind 作为判别字段，并为用户消息保留显式种类", () => {

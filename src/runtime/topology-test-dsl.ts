@@ -38,14 +38,12 @@ interface SpawnTemplateInput {
 }
 
 interface CreateTopologyDslInput {
-  projectId: string;
   nodes?: string[];
   downstream: DownstreamMap;
   spawn?: Record<string, SpawnTemplateInput>;
 }
 
 interface CreateTopologyLegacyInput {
-  projectId: string;
   nodes: string[];
   edges: TopologyRecord["edges"];
   nodeRecords?: TopologyRecord["nodeRecords"];
@@ -243,7 +241,6 @@ export function createTopology(
 ): TopologyRecord {
   if (isLegacyInput(input)) {
     const topology: TopologyRecord = {
-      projectId: input.projectId,
       nodes: [...input.nodes],
       edges: input.edges.map((edge) => ({
         ...edge,
@@ -270,7 +267,6 @@ export function createTopology(
   const nodes = collectNodes(input);
 
   const topology: TopologyRecord = {
-    projectId: input.projectId,
     nodes,
     edges: buildEdges(input),
     ...(buildNodeRecords(nodes, input).length > 0 ? { nodeRecords: buildNodeRecords(nodes, input) } : {}),
