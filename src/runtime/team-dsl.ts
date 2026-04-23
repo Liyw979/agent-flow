@@ -1,4 +1,5 @@
 import {
+  LANGGRAPH_END_NODE_ID,
   type AgentRecord,
   createTopologyLangGraphRecord,
   normalizeActionRequiredMaxRounds,
@@ -153,6 +154,15 @@ function normalizeComparableLangGraph(langgraph: TopologyLangGraphRecord): Topol
       ? {
           id: langgraph.end.id,
           sources: [...langgraph.end.sources].sort((left, right) => left.localeCompare(right)),
+          ...(langgraph.end.incoming
+            ? {
+                incoming: [...langgraph.end.incoming].sort((left, right) => {
+                  const leftKey = `${left.source}__${left.triggerOn ?? ""}`;
+                  const rightKey = `${right.source}__${right.triggerOn ?? ""}`;
+                  return leftKey.localeCompare(rightKey);
+                }),
+              }
+            : {}),
         }
       : null,
   };
@@ -318,6 +328,12 @@ function formatGraphDslParseError(error: z.ZodError): string {
   ) {
     return `${formatZodIssuePath(issue.path)} 必须使用对象格式，并显式写出 from、to、trigger_type、message_type。`;
   }
+  if (
+    issue.code === z.ZodIssueCode.unrecognized_keys
+    && issue.path[0] === "links"
+  ) {
+    return `${formatZodIssuePath(issue.path)} 只允许显式写出 from、to、trigger_type、message_type。`;
+  }
   if (issue.code === z.ZodIssueCode.invalid_type) {
     if (issue.received === "undefined") {
       return `${path} 必须显式写出，不能省略。`;
@@ -362,6 +378,7 @@ function collectGraphDslNodeDefinitions(
     agentDefinitions: Map<string, TeamDslAgentRecord>;
     nodeRecords: Map<string, TopologyNodeRecord>;
     spawnRules: Map<string, SpawnRule>;
+    isRootGraph: boolean;
   },
 ): void {
   const localNames = new Set<string>();
@@ -375,7 +392,11 @@ function collectGraphDslNodeDefinitions(
     throw new Error(`graph.entry 指向了不存在的节点：${graph.entry}`);
   }
   for (const link of graph.links) {
-    if (!localNames.has(link.from) || !localNames.has(link.to)) {
+    const isDirectEndLink = context.isRootGraph && link.to === LANGGRAPH_END_NODE_ID;
+    if (link.to === LANGGRAPH_END_NODE_ID && !isDirectEndLink) {
+      throw new Error(`graph.links 只有根图可以直接连接 __end__：${link.from} -> ${link.to}`);
+    }
+    if (!localNames.has(link.from) || (!localNames.has(link.to) && !isDirectEndLink)) {
       throw new Error(`graph.links 引用了不存在的节点：${link.from} -> ${link.to}`);
     }
   }
@@ -409,6 +430,10 @@ function collectGraphDslNodeDefinitions(
       spawnEnabled: true,
       spawnRuleId,
     });
+    collectGraphDslNodeDefinitions(node.graph, {
+      ...context,
+      isRootGraph: false,
+    });
     context.spawnRules.set(spawnRuleId, {
       id: spawnRuleId,
       name: node.name,
@@ -429,8 +454,18 @@ function collectGraphDslNodeDefinitions(
       ...(reportTarget?.target ? { reportToTemplateName: reportTarget.target } : {}),
       ...(reportTarget?.triggerOn ? { reportToTriggerOn: reportTarget.triggerOn } : {}),
     });
-    collectGraphDslNodeDefinitions(node.graph, context);
   }
+}
+
+function collectGraphDslEndLinks(graph: GraphDslGraph): GraphDslLink[] {
+  return graph.links
+    .filter((link) => link.to === LANGGRAPH_END_NODE_ID)
+    .filter((value, index, list) =>
+      list.findIndex((item) =>
+        item.from === value.from
+        && item.trigger_type === value.trigger_type
+        && item.message_type === value.message_type,
+      ) === index);
 }
 
 function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
@@ -441,6 +476,7 @@ function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
     agentDefinitions,
     nodeRecords,
     spawnRules,
+    isRootGraph: true,
   });
 
   const compiledAgents = normalizeCompiledWritableAgents(
@@ -460,10 +496,12 @@ function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
       ...(compiledAgent?.isWritable === true ? { writable: true } : {}),
     };
   });
+  const nonEndLinks = input.links.filter((link) => link.to !== LANGGRAPH_END_NODE_ID);
+  const endLinks = collectGraphDslEndLinks(input);
 
   const topology: TopologyRecord = {
     nodes: input.nodes.map((node) => node.name),
-    edges: input.links.map((link) => ({
+    edges: nonEndLinks.map((link) => ({
       source: link.from,
       target: link.to,
       triggerOn: link.trigger_type,
@@ -471,14 +509,17 @@ function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
     })),
     langgraph: createTopologyLangGraphRecord({
       nodes: input.nodes.map((node) => node.name),
-      edges: input.links.map((link) => ({
+      edges: nonEndLinks.map((link) => ({
         source: link.from,
         target: link.to,
         triggerOn: link.trigger_type,
         messageMode: link.message_type,
       })),
       startTargets: [input.entry],
-      endSources: null,
+      endIncoming: endLinks.map((link) => ({
+        source: link.from,
+        triggerOn: link.trigger_type,
+      })),
     }),
     nodeRecords: compiledNodeRecords,
     spawnRules: [...spawnRules.values()],
@@ -504,12 +545,4 @@ export function matchesAppliedTeamDsl(
     return false;
   }
   return matchesAppliedTeamDslTopology(currentTopology, compiled);
-}
-
-export function toAgentRecord(agent: CompiledTeamDslAgent): AgentRecord {
-  return {
-    name: agent.name,
-    prompt: agent.prompt,
-    isWritable: agent.isWritable,
-  };
 }

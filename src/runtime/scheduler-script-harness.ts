@@ -344,6 +344,7 @@ export async function assertSchedulerScript(
         }
       } else if (normalizedReplyTargets.length > 0) {
         const directReviewFailTargets = parsed.resolver.getTriggeredTargets(agentName, "continue");
+        const directReviewPassTargets = parsed.resolver.getTriggeredTargets(agentName, "complete");
         const matchesHandoffTargets = parsed.resolver.matchCanonicalTargets(
           agentName,
           normalizedReplyTargets,
@@ -356,10 +357,16 @@ export async function assertSchedulerScript(
           directReviewFailTargets,
           "continue",
         );
+        const matchesDirectReviewPassTargets = parsed.resolver.matchCanonicalTargets(
+          agentName,
+          normalizedReplyTargets,
+          directReviewPassTargets,
+          "complete",
+        );
         assert.equal(
-          Boolean(matchesHandoffTargets || matchesDirectReviewFailTargets),
+          Boolean(matchesHandoffTargets || matchesDirectReviewFailTargets || matchesDirectReviewPassTargets),
           true,
-          `${agentName} 的初始/全量派发目标必须等于 topology.handoff 默认顺序，或匹配其 direct action_required 下游`,
+          `${agentName} 的初始/全量派发目标必须等于 topology.handoff 默认顺序，或匹配其 direct complete / continue 下游`,
         );
       }
     }
@@ -995,13 +1002,10 @@ function createAgentRefResolver(topology: TopologyRecord): AgentRefResolver {
     sourceAgentName: string,
     actualTargetName: string,
     canonicalTargetName: string,
-    triggerOn: "transfer" | "continue" | "complete",
+    _triggerOn: "transfer" | "continue" | "complete",
   ): boolean => {
     if (actualTargetName === canonicalTargetName) {
       return true;
-    }
-    if (triggerOn !== "transfer") {
-      return false;
     }
     const dynamicRef = getDynamicRef(actualTargetName);
     if (!dynamicRef) {

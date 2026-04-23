@@ -34,7 +34,7 @@
 - `nodes`
   当前图声明的节点数组。每个元素必须是一个对象，且必须通过 `type` 明确声明为 `agent` 或 `spawn`。
 - `links`
-  当前图声明的有向边数组。每条边必须使用对象格式，显式写出 `from`、`to`、`trigger_type`、`message_type`。
+  当前图声明的有向边数组。每条边都必须使用对象格式，并显式写出 `from`、`to`、`trigger_type`、`message_type`；根图若连接 `__end__` 也不例外。
 
 ## 2. `nodes` 怎么写
 
@@ -137,7 +137,7 @@
 
 ## 3. `links` 怎么写
 
-`links` 统一写成对象数组，必须显式写出 `from`、`to`、`trigger_type`、`message_type`：
+`links` 统一写成对象数组。普通业务边必须显式写出 `from`、`to`、`trigger_type`、`message_type`：
 
 ```json
 [
@@ -167,6 +167,30 @@
 - `message_type`
   消息传递策略，决定沿这条边派发下游时携带哪些上游内容。
 
+根图如果需要显式结束，也可以写 `__end__` 终止边：
+
+```json
+[
+  {
+    "from": "初筛",
+    "to": "__end__",
+    "trigger_type": "complete",
+    "message_type": "none"
+  }
+]
+```
+
+`__end__` 终止边说明：
+
+- `from`
+  终止来源节点名；必须能在根图当前层 `nodes` 中找到。
+- `to`
+  固定写 `__end__`。
+- `trigger_type`
+  必填。`__end__` 会按 `complete` / `continue` / `transfer` 这些现有 trigger 语义命中。
+- `message_type`
+  必填。当前 `__end__` 不消费上游消息正文，但 DSL 仍要求显式写出，建议统一写 `none`。
+
 `trigger_type` 当前支持三种值：
 
 - `transfer`
@@ -175,6 +199,26 @@
   表示当前分支已经完成判定后再流转。通常用于 reviewer / 裁决类节点在确认当前分支可以结束后，再把流程推进到下一个节点。
 - `continue`
   表示当前分支需要继续处理时的回流。当前节点明确要求继续修改、补充或回应时，流程会沿这条边把意见退回给对应下游节点。
+
+`continue` / `complete` 标签协议：
+
+- Agent 需要命中 `trigger_type = "continue"` 或 `trigger_type = "complete"` 的条件边时，回复开头必须先输出对应标签，再输出正文。
+- `<continue>` 表示当前分支还需要继续处理；运行时会匹配当前节点的 `trigger_type = "continue"` 下游边。
+- `<complete>` 表示当前分支已经完成判定；运行时会匹配当前节点的 `trigger_type = "complete"` 下游边。
+- 根图可以把 `complete` 边直接连到 `__end__`，表示该节点回复以 `<complete>` 开头时直接结束流程。
+- 拓扑 JSON 的 prompt 只提示开头标签写法。
+
+示例：
+
+```txt
+<continue>
+请继续补充这个分支需要处理的证据、修改建议或回应正文。
+```
+
+```txt
+<complete>
+当前分支已经完成判定，可以结束。
+```
 
 `message_type` 当前支持三种值：
 
@@ -235,7 +279,9 @@
 `vulnerability-team.topology.json` 展示了递归 `spawn` 的写法：
 
 - 根图入口是 `初筛`
-- `初筛` 的默认 prompt 要求每轮只返回一个可疑漏洞点
+- `初筛 -> 疑点辩论` 不是无条件流转：有新的 finding 时，`初筛` 的回复开头先输出 `<continue>`，再输出 finding 正文，并命中 `{ "from": "初筛", "to": "疑点辩论", "trigger_type": "continue", "message_type": "all" }`
+- 没有新的 finding 时，`初筛` 的回复开头先输出 `<complete>`，再输出简短说明，并命中 `{ "from": "初筛", "to": "__end__", "trigger_type": "complete", "message_type": "none" }`，直接结束到 `END`
+- `初筛` 的默认 prompt 要求每轮只返回一个可疑漏洞点，并且回复开头先输出 `<complete>` / `<continue>` 审查标签，再输出正文
 - `疑点辩论` 是 `spawn` 节点
 - `spawn.graph` 里定义正方、反方、裁决总结的子图
 - 在这份漏洞团队拓扑里，`裁决总结` 的要求是：若裁定为真实漏洞，就输出正式漏洞报告；若裁定为误报，就什么都不做

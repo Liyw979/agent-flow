@@ -13,6 +13,7 @@ import {
   BUILD_AGENT_NAME,
   createDefaultTopology,
   normalizeActionRequiredMaxRounds,
+  createTopologyLangGraphRecord,
   normalizeTopologyEdgeTrigger,
   type DeleteTaskPayload,
   type GetTaskRuntimePayload,
@@ -1391,10 +1392,21 @@ export class Orchestrator {
       spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
       edges: rule.edges.map((edge) => ({ ...edge })),
     }));
+    const endIncoming = topology.langgraph?.end?.incoming?.filter((edge) => validTopologyNames.has(edge.source))
+      ?? topology.langgraph?.end?.sources
+        .filter((source) => validTopologyNames.has(source))
+        .map((source) => ({ source }));
+    const langgraph = createTopologyLangGraphRecord({
+      nodes,
+      edges,
+      startTargets: topology.langgraph?.start.targets ?? [resolvePrimaryTopologyStartTarget(topology)],
+      ...(endIncoming ? { endIncoming } : {}),
+    });
 
     return {
       nodes,
       edges,
+      langgraph,
       ...(nodeRecords ? { nodeRecords } : {}),
       ...(spawnRules ? { spawnRules } : {}),
     };

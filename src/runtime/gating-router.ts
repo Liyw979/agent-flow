@@ -3,6 +3,7 @@ import {
   getActionRequiredEdgeLoopLimit,
   getSpawnRules,
   type AgentStatus,
+  type TopologyEdgeTrigger,
 } from "@shared/types";
 
 import { resolveActionRequiredRequestContinuationAction } from "./gating-rules";
@@ -175,6 +176,17 @@ export function applyAgentResultToGraphState(
     buildGatingAgentStates(nextState),
   );
   applySchedulerRuntimeToGraphState(nextState, runtime);
+
+  if (shouldFinishGraphTaskFromEndEdge(nextState, result)) {
+    nextState.taskStatus = "finished";
+    nextState.waitingReason = null;
+    return {
+      state: nextState,
+      decision: {
+        type: "finished",
+      },
+    };
+  }
 
   if (result.reviewDecision === "continue") {
     return {
@@ -350,6 +362,15 @@ function handleActionRequired(
   }
 
   if (continuationAction === "ignore") {
+    if (actionRequiredTargets.length > 0) {
+      return triggerActionRequiredRequestDownstream(
+        state,
+        result.agentName,
+        result.opinion?.trim()
+        || result.agentContextContent
+        || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。",
+      );
+    }
     state.taskStatus = "failed";
     return {
       type: "failed",
@@ -446,18 +467,31 @@ function triggerActionRequiredRequestDownstream(
       errorMessage: `${sourceAgentId} 没有可用的 continue 下游`,
     };
   }
+  const sourceContent =
+    revisionContent
+    || state.pendingActionRequiredRequestsByAgent[sourceAgentId]?.opinion?.trim()
+    || state.pendingActionRequiredRequestsByAgent[sourceAgentId]?.agentContextContent
+    || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
+  let dispatchTargets: string[];
+  try {
+    dispatchTargets = targets.flatMap((targetName) =>
+      isSpawnNode(state, targetName)
+        ? materializeSpawnNodeTargets(state, targetName, sourceContent, false)
+        : [targetName]);
+  } catch (error) {
+    return {
+      type: "failed",
+      errorMessage: error instanceof Error ? error.message : `${sourceAgentId} 下游 spawn 展开失败`,
+    };
+  }
 
   return {
     type: "execute_batch",
     batch: {
       sourceAgentId,
-      sourceContent:
-        revisionContent
-        || state.pendingActionRequiredRequestsByAgent[sourceAgentId]?.opinion?.trim()
-        || state.pendingActionRequiredRequestsByAgent[sourceAgentId]?.agentContextContent
-        || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。",
-      triggerTargets: [...targets],
-      jobs: targets.map((targetName) => ({
+      sourceContent,
+      triggerTargets: [...dispatchTargets],
+      jobs: dispatchTargets.map((targetName) => ({
         agentName: targetName,
         sourceAgentId,
         kind: "continue_request",
@@ -647,7 +681,7 @@ function replaceHandoffBatchTarget(
   replacementTargets: string[],
 ): void {
   const batch = state.activeHandoffBatchBySource[sourceAgentId];
-  if (!batch || replacementTargets.length === 0) {
+  if (!batch) {
     return;
   }
 
@@ -661,6 +695,10 @@ function replaceHandoffBatchTarget(
   batch.pendingTargets = replaceTargets(batch.pendingTargets);
   batch.respondedTargets = batch.respondedTargets.filter((currentTarget) => currentTarget !== targetName);
   batch.failedTargets = batch.failedTargets.filter((currentTarget) => currentTarget !== targetName);
+
+  if (batch.targets.length === 0) {
+    delete state.activeHandoffBatchBySource[sourceAgentId];
+  }
 }
 
 function uniqueTargetNames(targets: string[]): string[] {
@@ -704,6 +742,11 @@ function materializeSpawnNodeTargets(
     sequence,
     allowRawFallback,
   );
+  if (parsed.items.length === 0) {
+    state.agentStatusesByName[targetName] = "completed";
+    state.agentContextByName[targetName] = sourceContent;
+    return [];
+  }
   const activationId = buildSpawnActivationId(spawnRuleId, sequence);
   const items = parsed.items.map((item, index, itemsList) => ({
     ...item,
@@ -1046,6 +1089,55 @@ function shouldFinishGraphTask(state: GraphTaskState): boolean {
   }
 
   return runnableReachableNodes.size > 0;
+}
+
+function shouldFinishGraphTaskFromEndEdge(
+  state: GraphTaskState,
+  result: Pick<GraphAgentResult, "agentName" | "signalDone" | "reviewAgent" | "reviewDecision">,
+): boolean {
+  const endNode = state.topology.langgraph?.end;
+  const endSources = endNode?.sources ?? [];
+  if (!endSources.includes(result.agentName)) {
+    return false;
+  }
+  const incoming = endNode?.incoming?.filter((edge) => edge.source === result.agentName) ?? [];
+  if (incoming.length > 0) {
+    if (!incoming.some((edge) => endTriggerMatchesResult(edge.triggerOn, result))) {
+      return false;
+    }
+  } else if (!result.signalDone) {
+    return false;
+  }
+  if (Object.keys(state.pendingActionRequiredRequestsByAgent).length > 0) {
+    return false;
+  }
+  if (Object.keys(state.activeHandoffBatchBySource).length > 0) {
+    return false;
+  }
+  if (state.spawnActivations.some((activation) => !activation.dispatched)) {
+    return false;
+  }
+  if (state.runningAgents.length > 0 || state.queuedAgents.length > 0) {
+    return false;
+  }
+
+  return true;
+}
+
+function endTriggerMatchesResult(
+  triggerOn: TopologyEdgeTrigger | undefined,
+  result: Pick<GraphAgentResult, "reviewAgent" | "reviewDecision">,
+): boolean {
+  if (!triggerOn) {
+    return true;
+  }
+  if (triggerOn === "transfer") {
+    return !result.reviewAgent;
+  }
+  if (triggerOn === "complete") {
+    return result.reviewAgent && result.reviewDecision === "complete";
+  }
+  return result.reviewAgent && result.reviewDecision === "continue";
 }
 
 function collectReachableNodeNames(

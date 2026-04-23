@@ -101,8 +101,7 @@ export function instantiateSpawnBundle(input: {
 
   const sourceToSpawnEdge = input.topology.edges.find((edge) =>
     edge.source === sourceNode.id
-    && edge.target === spawnNode.id
-    && edge.triggerOn === "transfer",
+    && edge.target === spawnNode.id,
   );
   const entryNode = nodes.find((node) => node.role === rule.entryRole);
   if (sourceToSpawnEdge && entryNode) {

@@ -124,6 +124,11 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
               ? {
                   id: state.topology.langgraph.end.id,
                   sources: [...state.topology.langgraph.end.sources],
+                  ...(state.topology.langgraph.end.incoming
+                    ? {
+                        incoming: state.topology.langgraph.end.incoming.map((edge) => ({ ...edge })),
+                      }
+                    : {}),
                 }
               : null,
           },

@@ -130,9 +130,15 @@ export interface TopologyLangGraphStartNode {
   targets: string[];
 }
 
+export interface TopologyLangGraphEndIncoming {
+  source: string;
+  triggerOn?: TopologyEdgeTrigger;
+}
+
 export interface TopologyLangGraphEndNode {
   id: typeof LANGGRAPH_END_NODE_ID;
   sources: string[];
+  incoming?: TopologyLangGraphEndIncoming[];
 }
 
 export interface TopologyLangGraphRecord {
@@ -441,10 +447,10 @@ export function getTopologyEdgeId(edge: Pick<TopologyEdge, "source" | "target" |
 }
 
 export function isReviewAgentInTopology(
-  topology: Pick<TopologyRecord, "edges">,
+  topology: Pick<TopologyRecord, "edges"> & Partial<Pick<TopologyRecord, "langgraph">>,
   agentName: string,
 ): boolean {
-  return topology.edges.some(
+  const hasReviewEdge = topology.edges.some(
     (edge) =>
       edge.source === agentName &&
       (() => {
@@ -452,6 +458,19 @@ export function isReviewAgentInTopology(
         return triggerOn === "complete" || triggerOn === "continue";
       })(),
   );
+  if (hasReviewEdge) {
+    return true;
+  }
+
+  return topology.langgraph?.end?.incoming?.some(
+    (edge) =>
+      edge.source === agentName &&
+      edge.triggerOn &&
+      (() => {
+        const triggerOn = normalizeTopologyEdgeTrigger(edge.triggerOn);
+        return triggerOn === "complete" || triggerOn === "continue";
+      })(),
+  ) === true;
 }
 
 export function resolveBuildAgentName(
@@ -614,6 +633,10 @@ export function createTopologyLangGraphRecord(input: {
   edges: TopologyEdge[];
   startTargets?: ReadonlyArray<string | null | undefined>;
   endSources?: ReadonlyArray<string | null | undefined> | null;
+  endIncoming?: ReadonlyArray<{
+    source: string | null | undefined;
+    triggerOn?: TopologyEdgeTrigger | null | undefined;
+  }> | null;
 }): TopologyLangGraphRecord {
   const knownNodes = new Set(input.nodes);
   const normalizeRefs = (values: ReadonlyArray<string | null | undefined> | null | undefined) =>
@@ -632,7 +655,21 @@ export function createTopologyLangGraphRecord(input: {
     startTargets = [input.nodes[0]!];
   }
 
-  const endSources = normalizeRefs(input.endSources);
+  const endIncoming = (input.endIncoming ?? [])
+    .filter((value): value is { source: string; triggerOn?: TopologyEdgeTrigger | null | undefined } =>
+      Boolean(value?.source) && typeof value.source === "string" && value.source.trim().length > 0)
+    .map((value) => ({
+      source: value.source.trim(),
+      ...(value.triggerOn ? { triggerOn: normalizeTopologyEdgeTrigger(value.triggerOn) } : {}),
+    }))
+    .filter((value) => knownNodes.has(value.source))
+    .filter((value, index, list) =>
+      list.findIndex((item) => item.source === value.source && item.triggerOn === value.triggerOn) === index,
+    );
+  const endSources = normalizeRefs([
+    ...((input.endSources ?? []) as ReadonlyArray<string | null | undefined>),
+    ...endIncoming.map((item) => item.source),
+  ]);
 
   return {
     start: {
@@ -643,6 +680,7 @@ export function createTopologyLangGraphRecord(input: {
       ? {
           id: LANGGRAPH_END_NODE_ID,
           sources: endSources,
+          ...(endIncoming.length > 0 ? { incoming: endIncoming } : {}),
         }
       : null,
   };
