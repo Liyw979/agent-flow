@@ -16,16 +16,6 @@ export type TaskStatus =
 export type PermissionMode = "allow" | "ask" | "deny";
 
 export const BUILD_AGENT_NAME = "Build";
-export const RESTRICTED_AGENT_PERMISSION_KEYS = [
-  "write",
-  "edit",
-  "bash",
-  "task",
-  "patch",
-] as const;
-
-export type RestrictedAgentPermissionKey =
-  (typeof RESTRICTED_AGENT_PERMISSION_KEYS)[number];
 
 export function usesOpenCodeBuiltinPrompt(agentName: string): boolean {
   return agentName.trim().toLowerCase() === BUILD_AGENT_NAME.toLowerCase();
@@ -39,11 +29,6 @@ export type AgentRole =
   | "unit_test"
   | "integration_test"
   | string;
-
-export interface ToolPermission {
-  name: string;
-  mode: PermissionMode;
-}
 
 export function getWorkspaceNameFromPath(workspacePath: string): string {
   const normalized = workspacePath.trim().replace(/[\\/]+$/, "");
@@ -343,22 +328,6 @@ export interface AgentTeamEvent {
   cwd: string;
   payload: unknown;
 }
-
-export const DEFAULT_TOOL_PERMISSIONS: ToolPermission[] = [
-  { name: "read", mode: "allow" },
-  { name: "write", mode: "ask" },
-  { name: "edit", mode: "ask" },
-  { name: "bash", mode: "ask" },
-  { name: "grep", mode: "allow" },
-  { name: "glob", mode: "allow" },
-  { name: "list", mode: "allow" },
-  { name: "patch", mode: "ask" },
-  { name: "task", mode: "ask" },
-  { name: "lsp", mode: "allow" },
-  { name: "todowrite", mode: "allow" },
-  { name: "webfetch", mode: "allow" },
-  { name: "skill", mode: "allow" },
-];
 
 export function normalizeTopologyEdgeTrigger(value: unknown): "association" | "approved" | "needs_revision" {
   if (value === "approved" || value === "needs_revision") {

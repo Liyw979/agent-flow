@@ -1,7 +1,6 @@
 import {
-  DEFAULT_TOOL_PERMISSIONS,
-  RESTRICTED_AGENT_PERMISSION_KEYS,
   type AgentRecord,
+  type PermissionMode,
   type TopologyRecord,
 } from "@shared/types";
 import { toOpenCodeAgentName } from "./opencode-agent-name";
@@ -17,6 +16,22 @@ export function resolveProjectAgents(input: {
 
 export function validateProjectAgents(_agents: AgentRecord[]): void {
   // 拓扑中的 writable 现在完全由 JSON 显式声明，允许多个 Agent 同时可写。
+}
+
+export type OpenCodePermissionValue =
+  | PermissionMode
+  | Record<string, PermissionMode>;
+
+export type OpenCodePermissionConfig = Record<string, OpenCodePermissionValue>;
+
+export function buildReadonlyAgentPermissionConfig(): OpenCodePermissionConfig {
+  return {
+    write: "deny",
+    edit: "deny",
+    bash: "deny",
+    task: "deny",
+    patch: "deny",
+  };
 }
 
 export function extractDslAgentsFromTopology(
@@ -51,23 +66,9 @@ export function extractDslAgentsFromTopology(
 }
 
 export function buildInjectedConfigFromAgents(agents: AgentRecord[]): string | null {
-  const deniedPermission = {
-    write: "deny",
-    edit: "deny",
-    bash: "deny",
-    task: "deny",
-    patch: "deny",
-  } as const;
-  const writablePermission = Object.fromEntries(
-    RESTRICTED_AGENT_PERMISSION_KEYS.map((name) => [
-      name,
-      DEFAULT_TOOL_PERMISSIONS.find((permission) => permission.name === name)?.mode ?? "ask",
-    ]),
-  );
-
   const injectedAgents = Object.fromEntries(
     agents.flatMap((agent) => {
-      if (agent.name.trim().toLowerCase() === "build") {
+      if (agent.name.trim().toLowerCase() === "build" || agent.isWritable === true) {
         return [];
       }
       return [[
@@ -75,7 +76,7 @@ export function buildInjectedConfigFromAgents(agents: AgentRecord[]): string | n
         {
           mode: "primary",
           prompt: agent.prompt ?? "",
-          permission: agent.isWritable ? writablePermission : deniedPermission,
+          permission: buildReadonlyAgentPermissionConfig(),
         },
       ]];
     }),

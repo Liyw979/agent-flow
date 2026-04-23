@@ -24,6 +24,14 @@ function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "agent-team-orchestrator-"));
 }
 
+function parseInjectedConfig(content: string | null | undefined): {
+  agent?: Record<string, { mode?: string; prompt?: string; permission?: unknown }>;
+} {
+  return JSON.parse(content ?? "{}") as {
+    agent?: Record<string, { mode?: string; prompt?: string; permission?: unknown }>;
+  };
+}
+
 const activeOrchestrators = new Set<Orchestrator>();
 
 function createTestOrchestrator(
@@ -1284,10 +1292,17 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
     ),
     true,
   );
-  assert.equal(
-    injectedConfigs.at(-1),
-    "{\"agent\":{\"BA\":{\"mode\":\"primary\",\"prompt\":\"你是 BA。\\n只做需求分析。\",\"permission\":{\"write\":\"deny\",\"edit\":\"deny\",\"bash\":\"deny\",\"task\":\"deny\",\"patch\":\"deny\"}}}}",
-  );
+  assert.deepEqual(parseInjectedConfig(injectedConfigs.at(-1)).agent?.BA, {
+    mode: "primary",
+    prompt: "你是 BA。\n只做需求分析。",
+    permission: {
+      write: "deny",
+      edit: "deny",
+      bash: "deny",
+      task: "deny",
+      patch: "deny",
+    },
+  });
 });
 
 test("openAgentTerminal 会通过服务端终端启动器 attach 到对应 session", async () => {
@@ -1360,10 +1375,18 @@ test("未写入 Build 时当前 Project 可以没有可写 Agent", async () => {
   const project = await orchestrator.getWorkspaceSnapshot(projectPath);
   await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。");
 
-  assert.equal(
-    buildInjectedConfigFromAgents((await orchestrator.getWorkspaceSnapshot(project.cwd)).agents),
-    "{\"agent\":{\"BA\":{\"mode\":\"primary\",\"prompt\":\"你是 BA。\",\"permission\":{\"write\":\"deny\",\"edit\":\"deny\",\"bash\":\"deny\",\"task\":\"deny\",\"patch\":\"deny\"}}}}",
-  );
+  const injected = buildInjectedConfigFromAgents((await orchestrator.getWorkspaceSnapshot(project.cwd)).agents);
+  assert.deepEqual(parseInjectedConfig(injected).agent?.BA, {
+    mode: "primary",
+    prompt: "你是 BA。",
+    permission: {
+      write: "deny",
+      edit: "deny",
+      bash: "deny",
+      task: "deny",
+      patch: "deny",
+    },
+  });
 });
 
 test("Build 与其他显式可写 Agent 可以同时保持可写", async () => {
@@ -1386,10 +1409,7 @@ test("Build 与其他显式可写 Agent 可以同时保持可写", async () => {
     ],
   );
 
-  assert.equal(
-    buildInjectedConfigFromAgents(project.agents),
-    "{\"agent\":{\"BA\":{\"mode\":\"primary\",\"prompt\":\"你是 BA。\",\"permission\":{\"write\":\"ask\",\"edit\":\"ask\",\"bash\":\"ask\",\"task\":\"ask\",\"patch\":\"ask\"}}}}",
-  );
+  assert.equal(buildInjectedConfigFromAgents(project.agents), null);
 });
 
 test("多个自定义 Agent 可以同时保持可写", async () => {
