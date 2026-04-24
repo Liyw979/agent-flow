@@ -32,7 +32,7 @@ test("CLI no longer accepts the removed review shortcut", () => {
 
 test("CLI help only includes task headless and task ui commands", () => {
   assert.match(CLI_SOURCE, /task headless --file <topology-json> --message <message> \[--cwd <path>\] \[--show-message\]/);
-  assert.match(CLI_SOURCE, /task ui --file <topology-json> --message <message> \[--cwd <path>\]/);
+  assert.match(CLI_SOURCE, /task ui --file <topology-json> --message <message> \[--cwd <path>\] \[--show-message\]/);
   assert.doesNotMatch(CLI_SOURCE, /task ui <taskId> \[--cwd <path>\]/);
   assert.doesNotMatch(CLI_SOURCE, /task attach <taskId> <agentId>/);
   assert.doesNotMatch(CLI_SOURCE, /task show <taskId>/);
@@ -75,6 +75,13 @@ test("task headless 默认保留 attach、隐藏消息记录，并继续传递�
   assert.match(CLI_SOURCE, /printMessages: streamingPlan\.printMessages,/);
   assert.match(CLI_SOURCE, /const printMessages = options\?\.printMessages !== false;/);
   assert.match(CLI_SOURCE, /默认打印诊断信息与 attach 调试命令；传 `--show-message` 后再额外展示完整消息记录。/);
+});
+
+test("task ui 默认保留 attach、隐藏消息记录，并继续传递输出开关", () => {
+  assert.match(CLI_SOURCE, /printAttach: streamingPlan\.printAttach,/);
+  assert.match(CLI_SOURCE, /printMessages: streamingPlan\.printMessages,/);
+  assert.match(CLI_SOURCE, /task ui --file <topology-json> --message <message> \[--cwd <path>\] \[--show-message\]/);
+  assert.match(CLI_SOURCE, /`task ui` 默认打印诊断信息与 attach 调试命令；传 `--show-message` 后再额外展示完整消息记录，同时保持网页界面照常打开。/);
 });
 
 test("CLI no longer depends on ProjectSnapshot or ensureProjectForPath", () => {

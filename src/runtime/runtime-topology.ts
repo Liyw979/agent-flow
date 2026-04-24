@@ -129,12 +129,20 @@ export function instantiateSpawnBundle(input: {
   const reportSourceNode = terminalRoles.length === 1
     ? nodes.find((node) => node.role === terminalRoles[0])
     : undefined;
+  const spawnToReportEdge = reportNode
+    ? input.topology.edges.find((edge) =>
+      edge.source === spawnNode.id
+      && edge.target === reportNode.id)
+    : undefined;
   if (reportSourceNode && reportNode) {
     edges.push({
       source: reportSourceNode.id,
       target: reportNode.id,
-      triggerOn: rule.reportToTriggerOn ?? "complete",
-      messageMode: "last",
+      triggerOn: spawnToReportEdge?.triggerOn ?? rule.reportToTriggerOn ?? "complete",
+      messageMode: spawnToReportEdge?.messageMode ?? rule.reportToMessageMode ?? "last",
+      ...(spawnToReportEdge?.triggerOn === "continue" && typeof spawnToReportEdge.maxRevisionRounds === "number"
+        ? { maxRevisionRounds: spawnToReportEdge.maxRevisionRounds }
+        : {}),
     });
   }
 

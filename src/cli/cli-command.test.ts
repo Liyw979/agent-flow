@@ -85,6 +85,27 @@ test("parseCliCommand 解析 task ui 新建任务", () => {
     file: "config/team-topologies/development-team.topology.json",
     message: "请开始执行",
     cwd: "/tmp/project",
+    showMessage: false,
+  });
+});
+
+test("parseCliCommand 解析 task ui 的 --show-message", () => {
+  const parsed = parseCliCommand([
+    "task",
+    "ui",
+    "--file",
+    "config/team-topologies/development-team.topology.json",
+    "--message",
+    "请开始执行",
+    "--show-message",
+  ]);
+
+  assert.deepEqual(parsed, {
+    kind: "task.ui",
+    cwd: undefined,
+    file: "config/team-topologies/development-team.topology.json",
+    message: "请开始执行",
+    showMessage: true,
   });
 });
 
@@ -124,6 +145,7 @@ test("parseCliCommand 允许 task ui 单独接收 --cwd", () => {
     file: "config/team-topologies/development-team.topology.json",
     message: "请开始执行",
     cwd: "/tmp/project",
+    showMessage: false,
   });
 });
 
@@ -157,7 +179,7 @@ test("Commander help 只包含 task headless/task ui 命令", () => {
   assert.match(CLI_COMMAND_SOURCE, /\.name\("agent-team"\)/);
   assert.doesNotMatch(CLI_COMMAND_SOURCE, new RegExp(`\\.name\\("${LEGACY_CLI_NAME}"\\)`));
   assert.match(CLI_SOURCE, /task headless --file <topology-json> --message <message> \[--cwd <path>\] \[--show-message\]/);
-  assert.match(CLI_SOURCE, /task ui --file <topology-json> --message <message> \[--cwd <path>\]/);
+  assert.match(CLI_SOURCE, /task ui --file <topology-json> --message <message> \[--cwd <path>\] \[--show-message\]/);
   assert.doesNotMatch(CLI_SOURCE, /task ui <taskId> \[--cwd <path>\]/);
   assert.doesNotMatch(CLI_SOURCE, /task attach <taskId> <agentId>/);
   assert.doesNotMatch(CLI_SOURCE, /task run --file <topology-json> --message <message>/);

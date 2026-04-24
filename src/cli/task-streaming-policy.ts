@@ -15,7 +15,7 @@ interface CliTaskStreamingPlan {
 export function resolveCliTaskStreamingPlan(
   input: ResolveCliTaskStreamingPlanInput,
 ): CliTaskStreamingPlan {
-  if (input.command.kind === "task.headless") {
+  if (!input.isResume) {
     return {
       enabled: true,
       includeHistory: input.command.showMessage,
@@ -24,19 +24,10 @@ export function resolveCliTaskStreamingPlan(
     };
   }
 
-  if (input.isResume) {
-    return {
-      enabled: true,
-      includeHistory: false,
-      printAttach: false,
-      printMessages: true,
-    };
-  }
-
   return {
     enabled: true,
-    includeHistory: true,
-    printAttach: true,
-    printMessages: true,
+    includeHistory: false,
+    printAttach: false,
+    printMessages: input.command.showMessage,
   };
 }

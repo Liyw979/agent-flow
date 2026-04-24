@@ -24,13 +24,19 @@ import {
   shouldRequireSourceDispatchAssertion,
 } from "./scheduler-script-emulator";
 import { parseSchedulerScriptLine } from "./scheduler-script-dsl";
-import { createGraphTaskState, type GraphRoutingDecision } from "./gating-router";
+import {
+  createGraphTaskState,
+  type GraphRoutingDecision,
+} from "./gating-router";
 import { compileTeamDsl } from "./team-dsl";
 import { createTopology } from "./topology-test-dsl";
 
 function readBuiltinTopology(fileName: string) {
   return JSON.parse(
-    fs.readFileSync(path.resolve("config", "team-topologies", fileName), "utf8"),
+    fs.readFileSync(
+      path.resolve("config", "team-topologies", fileName),
+      "utf8",
+    ),
   ) as Parameters<typeof compileTeamDsl>[0];
 }
 
@@ -69,7 +75,9 @@ test("scheduler script emulator 模块不再单独导出 parseSchedulerScriptLin
 });
 
 test("scheduler script drived 支持漏洞团队 2 个 finding 且每个 finding 各有两轮正反讨论后结束", async () => {
-  const topology = compileTeamDsl(readBuiltinTopology("vulnerability-team.topology.json")).topology;
+  const topology = compileTeamDsl(
+    readBuiltinTopology("vulnerability-team.topology.json"),
+  ).topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
@@ -88,21 +96,59 @@ test("scheduler script drived 支持漏洞团队 2 个 finding 且每个 finding
     "线索发现: 当前项目里没有新的可疑点，结束本轮流程。",
   ];
 
-  await runSchedulerScriptDrived({
-    topology,
-    script,
-  });
+  await runSchedulerScriptDrived({ topology, script });
+});
+
+test("scheduler script drived 支持内置漏洞团队拓扑里的讨论总结直接 transfer 回线索发现", async () => {
+  const topology = compileTeamDsl(
+    readBuiltinTopology("vulnerability-team.topology.json"),
+  ).topology;
+
+  const script = [
+    "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
+    "线索发现: 发现第 1 个可疑点：上传文件名可能被直接拼进目标路径。 @漏洞挑战-1",
+    "漏洞挑战-1: 当前材料已经足够，可以进入总结。 @讨论总结-1",
+    "讨论总结-1: 当前这条更像误报。 @线索发现",
+    "线索发现: 当前项目里没有新的可疑点，结束本轮流程。",
+  ];
+
+  await runSchedulerScriptDrived({ topology, script });
 });
 
 test("scheduler script emulator 纯函数会从真实核心轨迹里收集必须显式出现的 dispatch 断言", async () => {
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "BA",
+        target: "Build",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -120,11 +166,36 @@ test("scheduler script emulator 纯函数会从真实核心轨迹里收集必须
       kind: item.kind,
     })),
     [
-      { lineIndex: 1, senderId: "BA", targets: ["Build"], kind: "inline_dispatch" },
-      { lineIndex: 2, senderId: "Build", targets: ["CodeReview", "UnitTest", "TaskReview"], kind: "inline_dispatch" },
-      { lineIndex: 3, senderId: "CodeReview", targets: ["Build"], kind: "inline_dispatch" },
-      { lineIndex: 6, senderId: "Build", targets: ["CodeReview"], kind: "inline_dispatch" },
-      { lineIndex: 8, senderId: "Build", targets: ["UnitTest", "TaskReview"], kind: "dispatch_assertion" },
+      {
+        lineIndex: 1,
+        senderId: "BA",
+        targets: ["Build"],
+        kind: "inline_dispatch",
+      },
+      {
+        lineIndex: 2,
+        senderId: "Build",
+        targets: ["CodeReview", "UnitTest", "TaskReview"],
+        kind: "inline_dispatch",
+      },
+      {
+        lineIndex: 3,
+        senderId: "CodeReview",
+        targets: ["Build"],
+        kind: "inline_dispatch",
+      },
+      {
+        lineIndex: 6,
+        senderId: "Build",
+        targets: ["CodeReview"],
+        kind: "inline_dispatch",
+      },
+      {
+        lineIndex: 8,
+        senderId: "Build",
+        targets: ["UnitTest", "TaskReview"],
+        kind: "dispatch_assertion",
+      },
     ],
   );
 });
@@ -133,11 +204,36 @@ test("scheduler script emulator 纯函数会从真实核心轨迹里收集每批
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "BA",
+        target: "Build",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -156,8 +252,16 @@ test("scheduler script emulator 纯函数会从真实核心轨迹里收集每批
         consumerAgentId: item.consumerAgentId,
       })),
     [
-      { dispatchLineIndex: 8, consumerLineIndex: 9, consumerAgentId: "UnitTest" },
-      { dispatchLineIndex: 8, consumerLineIndex: 10, consumerAgentId: "TaskReview" },
+      {
+        dispatchLineIndex: 8,
+        consumerLineIndex: 9,
+        consumerAgentId: "UnitTest",
+      },
+      {
+        dispatchLineIndex: 8,
+        consumerLineIndex: 10,
+        consumerAgentId: "TaskReview",
+      },
     ],
   );
 });
@@ -166,11 +270,36 @@ test("scheduler script emulator 纯函数会基于真实核心轨迹自动派生
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "BA",
+        target: "Build",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -185,51 +314,58 @@ test("scheduler script emulator 纯函数会基于真实核心轨迹自动派生
   });
 
   assert.ok(
-    variants.some((variant) =>
-      variant.kind === "missing_target"
-      && variant.sourceLineIndex === 1
-      && variant.removedTarget === "Build"
+    variants.some(
+      (variant) =>
+        variant.kind === "missing_target" &&
+        variant.sourceLineIndex === 1 &&
+        variant.removedTarget === "Build",
     ),
   );
   assert.ok(
-    variants.some((variant) =>
-      variant.kind === "missing_target"
-      && variant.sourceLineIndex === 2
-      && variant.removedTarget === "CodeReview"
+    variants.some(
+      (variant) =>
+        variant.kind === "missing_target" &&
+        variant.sourceLineIndex === 2 &&
+        variant.removedTarget === "CodeReview",
     ),
   );
   assert.ok(
-    variants.some((variant) =>
-      variant.kind === "missing_consumer_line"
-      && variant.sourceLineIndex === 0
-      && variant.removedMessageLineIndex === 1
+    variants.some(
+      (variant) =>
+        variant.kind === "missing_consumer_line" &&
+        variant.sourceLineIndex === 0 &&
+        variant.removedMessageLineIndex === 1,
     ),
   );
   assert.ok(
-    variants.some((variant) =>
-      variant.kind === "missing_dispatch_line"
-      && variant.sourceLineIndex === 8
+    variants.some(
+      (variant) =>
+        variant.kind === "missing_dispatch_line" &&
+        variant.sourceLineIndex === 8,
     ),
   );
   assert.ok(
-    variants.some((variant) =>
-      variant.kind === "missing_consumer_line"
-      && variant.sourceLineIndex === 8
-      && variant.removedMessageLineIndex === 9
+    variants.some(
+      (variant) =>
+        variant.kind === "missing_consumer_line" &&
+        variant.sourceLineIndex === 8 &&
+        variant.removedMessageLineIndex === 9,
     ),
   );
   assert.ok(
-    variants.some((variant) =>
-      variant.kind === "missing_consumer_line"
-      && variant.sourceLineIndex === 8
-      && variant.removedMessageLineIndex === 10
+    variants.some(
+      (variant) =>
+        variant.kind === "missing_consumer_line" &&
+        variant.sourceLineIndex === 8 &&
+        variant.removedMessageLineIndex === 10,
     ),
   );
   assert.ok(
-    variants.some((variant) =>
-      variant.kind === "truncate_after_line"
-      && variant.sourceLineIndex === 8
-      && variant.script.length === 9
+    variants.some(
+      (variant) =>
+        variant.kind === "truncate_after_line" &&
+        variant.sourceLineIndex === 8 &&
+        variant.script.length === 9,
     ),
   );
 });
@@ -256,10 +392,11 @@ test("scheduler script emulator 自动派生的 missing_consumer_line 会抓住 
     script,
     trace,
   });
-  const variant = variants.find((item) =>
-    item.kind === "missing_consumer_line"
-    && item.sourceLineIndex === 1
-    && item.removedMessageLineIndex === 2
+  const variant = variants.find(
+    (item) =>
+      item.kind === "missing_consumer_line" &&
+      item.sourceLineIndex === 1 &&
+      item.removedMessageLineIndex === 2,
   );
 
   assert.ok(variant, "必须派生出删掉第 1 轮消费者消息的负例");
@@ -276,9 +413,24 @@ test("scheduler script emulator 在 review 决策无法唯一推断时直接失�
   const topology: TopologyRecord = {
     nodes: ["Build", "Judge"],
     edges: [
-      { source: "Build", target: "Judge", triggerOn: "transfer", messageMode: "last" },
-      { source: "Judge", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "Judge", target: "Build", triggerOn: "complete", messageMode: "last" },
+      {
+        source: "Build",
+        target: "Judge",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Judge",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
+      {
+        source: "Judge",
+        target: "Build",
+        triggerOn: "complete",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -425,9 +577,24 @@ test("scheduler script emulator 纯函数在下一条是显式 dispatch 行时�
   const topology: TopologyRecord = {
     nodes: ["Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "UnitTest", triggerOn: "complete", messageMode: "last" },
-      { source: "CodeReview", target: "TaskReview", triggerOn: "complete", messageMode: "last" },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "UnitTest",
+        triggerOn: "complete",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "TaskReview",
+        triggerOn: "complete",
+        messageMode: "last",
+      },
     ],
   };
   const state = createGraphTaskState({
@@ -471,10 +638,30 @@ test("scheduler script emulator 纯函数允许 reviewer 的 execute_batch 先�
   const topology: TopologyRecord = {
     nodes: ["Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
   const state = createGraphTaskState({
@@ -519,10 +706,7 @@ test("scheduler script emulator 纯函数只在下一条显式 dispatch 目标�
     dispatchAssertionTargetsCovered(["UnitTest", "TaskReview"], ["UnitTest"]),
     true,
   );
-  assert.equal(
-    dispatchAssertionTargetsCovered(["Build"], ["UnitTest"]),
-    false,
-  );
+  assert.equal(dispatchAssertionTargetsCovered(["Build"], ["UnitTest"]), false);
 });
 
 test("scheduler script emulator 纯函数会生成包含脚本目标与实际目标的调度目标不匹配文案", () => {
@@ -761,7 +945,11 @@ test("scheduler script emulator 纯函数会要求 reviewer 触发出的外层 e
           sourceAgentId: "TaskReview",
           triggerTargets: ["Build"],
           jobs: [
-            { agentId: "Build", sourceAgentId: "TaskReview", kind: "continue_request" },
+            {
+              agentId: "Build",
+              sourceAgentId: "TaskReview",
+              kind: "continue_request",
+            },
           ],
         },
       },
@@ -775,9 +963,24 @@ test("scheduler script emulator 不会根据正文关键词替拓扑上的 revie
   const topology: TopologyRecord = {
     nodes: ["Build", "Judge"],
     edges: [
-      { source: "Build", target: "Judge", triggerOn: "transfer", messageMode: "last" },
-      { source: "Judge", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "Judge", target: "Build", triggerOn: "complete", messageMode: "last" },
+      {
+        source: "Build",
+        target: "Judge",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Judge",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
+      {
+        source: "Judge",
+        target: "Build",
+        triggerOn: "complete",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -797,7 +1000,9 @@ test("scheduler script emulator 不会根据正文关键词替拓扑上的 revie
 });
 
 test("scheduler script emulator 在漏洞团队里把第二个 finding 错写成上一轮实例时直接失败", async () => {
-  const topology = compileTeamDsl(readBuiltinTopology("vulnerability-team.topology.json")).topology;
+  const topology = compileTeamDsl(
+    readBuiltinTopology("vulnerability-team.topology.json"),
+  ).topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
@@ -823,7 +1028,12 @@ test("scheduler script emulator 要求 execute_batch 必须显式写在当前 ag
   const topology: TopologyRecord = {
     nodes: ["BA", "Build"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
+      {
+        source: "BA",
+        target: "Build",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -849,12 +1059,7 @@ test("scheduler script emulator 不允许 dispatch source 在 batch 未被消费
     },
   });
 
-  const script = [
-    "user: @A start",
-    "A: first @B",
-    "A: second @B",
-    "B: ack",
-  ];
+  const script = ["user: @A start", "A: first @B", "A: second @B", "B: ack"];
 
   await assert.rejects(
     runSchedulerScriptDrived({
@@ -866,7 +1071,9 @@ test("scheduler script emulator 不允许 dispatch source 在 batch 未被消费
 });
 
 test("scheduler script emulator 不再支持非法短别名", async () => {
-  const topology = compileTeamDsl(readBuiltinTopology("vulnerability-team.topology.json")).topology;
+  const topology = compileTeamDsl(
+    readBuiltinTopology("vulnerability-team.topology.json"),
+  ).topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点。",
@@ -886,10 +1093,30 @@ test("scheduler script emulator 要求 reviewer 的 continue 行即使处于等�
   const topology: TopologyRecord = {
     nodes: ["Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -915,10 +1142,30 @@ test("scheduler script emulator 支持 reviewer 在 finished 前就把 deferred 
   const topology: TopologyRecord = {
     nodes: ["Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -944,10 +1191,30 @@ test("scheduler script emulator 会拒绝非 reviewer 的 UnitTest 显式回流�
   const topology: TopologyRecord = {
     nodes: ["Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -973,10 +1240,30 @@ test("scheduler script emulator 会拒绝非 reviewer 的 TaskReview 显式回�
   const topology: TopologyRecord = {
     nodes: ["Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -1002,7 +1289,12 @@ test("scheduler script emulator 对拼错的显式目标会直接报节点不存
   const topology: TopologyRecord = {
     nodes: ["BA", "Build"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
+      {
+        source: "BA",
+        target: "Build",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -1024,11 +1316,36 @@ test("scheduler script emulator 在显式目标与真实调度不一致时直接
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "BA",
+        target: "Build",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -1046,7 +1363,10 @@ test("scheduler script emulator 在显式目标与真实调度不一致时直接
     (error: unknown) => {
       assert.match(String(error), /调度目标不匹配/u);
       assert.match(String(error), /脚本写的是 \[UnitTest, TaskReview\]/u);
-      assert.match(String(error), /实际是 \[CodeReview, UnitTest, TaskReview\]/u);
+      assert.match(
+        String(error),
+        /实际是 \[CodeReview, UnitTest, TaskReview\]/u,
+      );
       assert.doesNotMatch(String(error), /匹配数量为 0|无法唯一推断/u);
       return true;
     },
@@ -1057,11 +1377,36 @@ test("scheduler script emulator 会把 reviewer 之后遗漏的后续派发归�
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "BA",
+        target: "Build",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -1085,7 +1430,10 @@ test("scheduler script emulator 会把 reviewer 之后遗漏的后续派发归�
       script,
     }),
     (error: unknown) => {
-      assert.match(String(error), /^AssertionError \[ERR_ASSERTION\]: Build: 脚本包含 \[\]，当前步骤模拟值为 \[UnitTest TaskReview\]/u);
+      assert.match(
+        String(error),
+        /^AssertionError \[ERR_ASSERTION\]: Build: 脚本包含 \[\]，当前步骤模拟值为 \[UnitTest TaskReview\]/u,
+      );
       assert.doesNotMatch(String(error), /CodeReview: 已确认通过/u);
       return true;
     },
@@ -1096,11 +1444,36 @@ test("scheduler script emulator 会拒绝漏掉 reviewer 之后的 Build 派发�
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "BA",
+        target: "Build",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -1127,11 +1500,36 @@ test("scheduler script emulator 会拒绝漏掉最终 UnitTest 回复", async ()
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "BA",
+        target: "Build",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -1158,11 +1556,36 @@ test("scheduler script emulator 会拒绝漏掉最终 TaskReview 回复", async 
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "BA",
+        target: "Build",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "CodeReview",
+        target: "Build",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 
@@ -1189,10 +1612,30 @@ test("scheduler script emulator 会拒绝漏掉最后一批全部消费者", asy
   const topology: TopologyRecord = {
     nodes: ["Implementer", "UnitTest", "TaskReview", "CodeReview"],
     edges: [
-      { source: "Implementer", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Implementer", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Implementer", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "UnitTest", target: "Implementer", triggerOn: "continue", messageMode: "last" },
+      {
+        source: "Implementer",
+        target: "UnitTest",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Implementer",
+        target: "TaskReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "Implementer",
+        target: "CodeReview",
+        triggerOn: "transfer",
+        messageMode: "last",
+      },
+      {
+        source: "UnitTest",
+        target: "Implementer",
+        triggerOn: "continue",
+        messageMode: "last",
+      },
     ],
   };
 

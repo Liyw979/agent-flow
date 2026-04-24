@@ -131,10 +131,16 @@ type AgentExecutionPrompt =
       allowDirectFallbackWhenNoBatch?: boolean;
     }
   | {
+      mode: "control";
+      content: string;
+      allowDirectFallbackWhenNoBatch?: boolean;
+    }
+  | {
       mode: "structured";
       from: string;
       userMessage?: string;
       agentMessage?: string;
+      omitSourceAgentSectionLabel?: boolean;
       gitDiffSummary?: string;
       allowDirectFallbackWhenNoBatch?: boolean;
     };
@@ -910,12 +916,20 @@ export class Orchestrator {
       return `[${from}] ${content || "（无）"}`.trim();
     }
 
+    if (prompt.mode === "control") {
+      return prompt.content.trim() || "（无）";
+    }
+
     const sections: string[] = [];
     if (prompt.userMessage?.trim()) {
       sections.push(`[Initial Task]\n${prompt.userMessage.trim()}`);
     }
     if (prompt.agentMessage?.trim()) {
-      sections.push(`${buildSourceAgentMessageSectionLabel(prompt.from)}\n${prompt.agentMessage.trim()}`);
+      sections.push(
+        prompt.omitSourceAgentSectionLabel
+          ? prompt.agentMessage.trim()
+          : `${buildSourceAgentMessageSectionLabel(prompt.from)}\n${prompt.agentMessage.trim()}`,
+      );
     }
     if (sections.length === 0) {
       sections.push("[Initial Task]\n（无）");
@@ -1468,18 +1482,21 @@ export class Orchestrator {
     return batch.jobs.map((job, index) => {
       this.ensureRuntimeTaskAgent(task, job.agentId);
       const executableAgentId = this.resolveExecutableAgentId(cwd, state, job.agentId);
+      const messageMode = batch.sourceAgentId
+        ? this.getEdgeMessageMode(
+          buildEffectiveTopology(state),
+          batch.sourceAgentId,
+          job.agentId,
+          job.kind === "raw" ? "transfer" : job.kind,
+        )
+        : "last";
       const forwardedContext = batch.sourceAgentId
         ? buildDownstreamForwardedContextFromMessages(
           taskMessages,
           batch.sourceContent ?? "",
           {
             includeInitialTask,
-            messageMode: this.getEdgeMessageMode(
-              buildEffectiveTopology(state),
-              batch.sourceAgentId,
-              job.agentId,
-              job.kind === "raw" ? "transfer" : job.kind,
-            ),
+            messageMode,
           },
         )
         : null;
@@ -1532,11 +1549,24 @@ export class Orchestrator {
           cwd,
           payload: remediationMessage,
         });
+      } else if (messageMode === "none") {
+        prompt = {
+          mode: "control",
+          content: forwardedContext?.agentMessage ?? "continue",
+        };
       } else {
-        prompt = withOptionalString(withOptionalString({
-          mode: "structured",
-          from: batch.sourceAgentId ?? "System",
-        }, "userMessage", forwardedContext?.userMessage), "agentMessage", forwardedContext?.agentMessage);
+        prompt = withOptionalString(
+          withOptionalString(
+            withOptionalValue({
+              mode: "structured",
+              from: batch.sourceAgentId ?? "System",
+            }, "omitSourceAgentSectionLabel", messageMode === "all" ? true : undefined),
+            "userMessage",
+            forwardedContext?.userMessage,
+          ),
+          "agentMessage",
+          forwardedContext?.agentMessage,
+        );
         prompt = withOptionalString(
           prompt,
           "gitDiffSummary",

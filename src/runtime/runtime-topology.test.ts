@@ -17,6 +17,7 @@ function createVulnTopology(): TopologyRecord {
     ],
     edges: [
       { source: "线索发现", target: "疑点辩论工厂", triggerOn: "transfer", messageMode: "all" },
+      { source: "疑点辩论工厂", target: "线索发现", triggerOn: "transfer", messageMode: "none" },
     ],
     spawnRules: [
       {
@@ -109,7 +110,7 @@ test("instantiateSpawnBundle 会为一个 finding 生成论证、挑战、summar
       triggerOn: "complete",
     },
     {
-      messageMode: "last",
+      messageMode: "none",
       source: "Summary模板-1",
       target: "线索发现",
       triggerOn: "transfer",
@@ -135,6 +136,55 @@ test("instantiateSpawnBundle 会继承 source -> spawn 的 messageMode 到 entry
     target: "漏洞论证模板-1",
     triggerOn: "transfer",
     messageMode: "all",
+  });
+});
+
+test("instantiateSpawnBundle 在未声明 spawn -> report 静态边时，会回退使用 spawnRule.reportToMessageMode", () => {
+  const topology = createVulnTopology();
+  topology.edges = topology.edges.filter((edge) => !(edge.source === "疑点辩论工厂" && edge.target === "线索发现"));
+  if (topology.spawnRules?.[0]) {
+    topology.spawnRules[0] = {
+      ...topology.spawnRules[0],
+      reportToMessageMode: "none",
+    };
+  }
+
+  const bundle = instantiateSpawnBundle({
+    topology,
+    spawnRuleId: "finding-debate",
+    activationId: "activation-1",
+    item: {
+      id: "finding-001",
+      title: "上传文件名拼接路径",
+    },
+  });
+
+  assert.deepEqual(bundle.edges.at(-1), {
+    messageMode: "none",
+    source: "Summary模板-1",
+    target: "线索发现",
+    triggerOn: "transfer",
+  });
+});
+
+test("instantiateSpawnBundle 会继承 spawn -> report target 的 messageMode 到回流运行时实例边", () => {
+  const topology = createVulnTopology();
+
+  const bundle = instantiateSpawnBundle({
+    topology,
+    spawnRuleId: "finding-debate",
+    activationId: "activation-1",
+    item: {
+      id: "finding-001",
+      title: "上传文件名拼接路径",
+    },
+  });
+
+  assert.deepEqual(bundle.edges.at(-1), {
+    source: "Summary模板-1",
+    target: "线索发现",
+    triggerOn: "transfer",
+    messageMode: "none",
   });
 });
 

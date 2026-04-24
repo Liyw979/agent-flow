@@ -879,7 +879,7 @@ function continueCompletedSpawnActivations(
   const aggregatedContent = buildSpawnActivationContent(state, activation.id, activation.sourceContent);
   state.agentStatusesByName[activation.spawnNodeName] = "completed";
   state.agentContextByName[activation.spawnNodeName] = aggregatedContent;
-  return triggerHandoffDownstream(state, activation.spawnNodeName, aggregatedContent);
+  return triggerHandoffDownstream(state, completedAgentId, aggregatedContent);
 }
 
 function buildSpawnActivationContent(

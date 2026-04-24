@@ -354,12 +354,17 @@ function parseGraphDsl(input: unknown): GraphDslGraph {
 function resolveSpawnReportTo(
   graph: GraphDslGraph,
   spawnNodeName: string,
-): { target: string; triggerOn: TopologyEdgeTrigger } | undefined {
+): {
+  target: string;
+  triggerOn: TopologyEdgeTrigger;
+  messageMode: TopologyEdgeMessageMode;
+} | undefined {
   const outgoingLinks = graph.links.filter((link) => link.from === spawnNodeName);
   return outgoingLinks.length === 1
     ? {
         target: outgoingLinks[0]!.to,
         triggerOn: outgoingLinks[0]!.trigger_type,
+        messageMode: outgoingLinks[0]!.message_type,
       }
     : undefined;
 }
@@ -372,6 +377,34 @@ function resolveSpawnSourceTemplateName(
   return incomingLinks.length === 1 ? incomingLinks[0]!.from : undefined;
 }
 
+function resolveGraphExternalReport(
+  graph: GraphDslGraph,
+  availableExternalTargets: ReadonlySet<string>,
+): {
+  source: string;
+  target: string;
+  triggerOn: TopologyEdgeTrigger;
+  messageMode: TopologyEdgeMessageMode;
+} | undefined {
+  const localNames = new Set(graph.nodes.map((node) => node.id));
+  const externalLinks = graph.links.filter((link) =>
+    !localNames.has(link.to) && availableExternalTargets.has(link.to),
+  );
+  if (externalLinks.length === 0) {
+    return undefined;
+  }
+  if (externalLinks.length > 1) {
+    throw new Error("spawn 子图最多只能声明一条直接回到外层节点的出口。");
+  }
+  const externalLink = externalLinks[0]!;
+  return {
+    source: externalLink.from,
+    target: externalLink.to,
+    triggerOn: externalLink.trigger_type,
+    messageMode: externalLink.message_type,
+  };
+}
+
 function collectGraphDslNodeDefinitions(
   graph: GraphDslGraph,
   context: {
@@ -379,6 +412,7 @@ function collectGraphDslNodeDefinitions(
     nodeRecords: Map<string, TopologyNodeRecord>;
     spawnRules: Map<string, SpawnRule>;
     isRootGraph: boolean;
+    availableExternalTargets: ReadonlySet<string>;
   },
 ): void {
   const localNames = new Set<string>();
@@ -393,10 +427,11 @@ function collectGraphDslNodeDefinitions(
   }
   for (const link of graph.links) {
     const isDirectEndLink = context.isRootGraph && link.to === LANGGRAPH_END_NODE_ID;
+    const isExternalTarget = !localNames.has(link.to) && context.availableExternalTargets.has(link.to);
     if (link.to === LANGGRAPH_END_NODE_ID && !isDirectEndLink) {
       throw new Error(`graph.links 只有根图可以直接连接 __end__：${link.from} -> ${link.to}`);
     }
-    if (!localNames.has(link.from) || (!localNames.has(link.to) && !isDirectEndLink)) {
+    if (!localNames.has(link.from) || (!localNames.has(link.to) && !isDirectEndLink && !isExternalTarget)) {
       throw new Error(`graph.links 引用了不存在的节点：${link.from} -> ${link.to}`);
     }
   }
@@ -423,6 +458,17 @@ function collectGraphDslNodeDefinitions(
     const spawnRuleId = `spawn-rule:${node.id}`;
     const reportTarget = resolveSpawnReportTo(graph, node.id);
     const sourceTemplateName = resolveSpawnSourceTemplateName(graph, node.id);
+    const childAvailableExternalTargets = new Set([
+      ...context.availableExternalTargets,
+      ...localNames,
+    ]);
+    const externalReportTarget = resolveGraphExternalReport(node.graph, childAvailableExternalTargets);
+    if (reportTarget && externalReportTarget) {
+      throw new Error(`spawn 节点 ${node.id} 不能同时在外层和子图里声明回到外层的出口。`);
+    }
+    const reportToTemplateName = externalReportTarget?.target ?? reportTarget?.target;
+    const reportToTriggerOn = externalReportTarget?.triggerOn ?? reportTarget?.triggerOn;
+    const reportToMessageMode = externalReportTarget?.messageMode ?? reportTarget?.messageMode;
     context.nodeRecords.set(node.id, {
       id: node.id,
       kind: "spawn",
@@ -433,6 +479,7 @@ function collectGraphDslNodeDefinitions(
     collectGraphDslNodeDefinitions(node.graph, {
       ...context,
       isRootGraph: false,
+      availableExternalTargets: childAvailableExternalTargets,
     });
     context.spawnRules.set(spawnRuleId, {
       id: spawnRuleId,
@@ -443,15 +490,18 @@ function collectGraphDslNodeDefinitions(
         role: childNode.id,
         templateName: childNode.id,
       })),
-      edges: node.graph.links.map((link) => ({
-        sourceRole: link.from,
-        targetRole: link.to,
-        triggerOn: link.trigger_type,
-        messageMode: link.message_type,
-      })),
+      edges: node.graph.links
+        .filter((link) => node.graph.nodes.some((childNode) => childNode.id === link.to))
+        .map((link) => ({
+          sourceRole: link.from,
+          targetRole: link.to,
+          triggerOn: link.trigger_type,
+          messageMode: link.message_type,
+        })),
       exitWhen: "all_completed",
-      ...(reportTarget?.target ? { reportToTemplateName: reportTarget.target } : {}),
-      ...(reportTarget?.triggerOn ? { reportToTriggerOn: reportTarget.triggerOn } : {}),
+      ...(reportToTemplateName ? { reportToTemplateName } : {}),
+      ...(reportToTriggerOn ? { reportToTriggerOn } : {}),
+      ...(reportToMessageMode ? { reportToMessageMode } : {}),
     });
   }
 }
@@ -476,6 +526,7 @@ function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
     nodeRecords,
     spawnRules,
     isRootGraph: true,
+    availableExternalTargets: new Set<string>(),
   });
 
   const compiledAgents = normalizeCompiledWritableAgents(

@@ -85,6 +85,7 @@ export interface SpawnRule {
   exitWhen: "one_side_agrees" | "all_completed";
   reportToTemplateName?: string;
   reportToTriggerOn?: TopologyEdgeTrigger;
+  reportToMessageMode?: TopologyEdgeMessageMode;
 }
 
 export interface TopologyNodeRecord {
@@ -626,6 +627,9 @@ export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
     })),
     ...(rule.reportToTriggerOn
       ? { reportToTriggerOn: normalizeTopologyEdgeTrigger(rule.reportToTriggerOn) }
+      : {}),
+    ...(rule.reportToMessageMode
+      ? { reportToMessageMode: rule.reportToMessageMode }
       : {}),
   }));
 }
