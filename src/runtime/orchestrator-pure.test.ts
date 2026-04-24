@@ -29,6 +29,7 @@ import {
   buildUserHistoryContent,
   getInitialUserMessageContent,
 } from "./message-forwarding";
+import { resolveForwardingActiveAgentIdsFromState } from "./forwarding-active-agents";
 import {
   resolveAgentStatusFromReview,
   resolveActionRequiredRequestContinuationAction,
@@ -298,6 +299,126 @@ test("边配置为 last-all 时，只转发当前激活 agent 的最后消息", 
     [
       "[agent-3] agent-3 的最后一条消息",
       "[bgent-3] bgent-3 的最后一条消息",
+    ].join("\n\n"),
+  );
+});
+
+test("spawn 组里的 last-all 参与者会包含当前 finding 的来源 agent", () => {
+  const activeAgentIds = resolveForwardingActiveAgentIdsFromState(
+    {
+      runtimeNodes: [
+        {
+          id: "漏洞挑战-3",
+          kind: "agent",
+          templateName: "漏洞挑战",
+          displayName: "漏洞挑战-3",
+          sourceNodeId: "线索发现",
+          groupId: "spawn-rule:疑点辩论:finding-003",
+          role: "漏洞挑战",
+        },
+        {
+          id: "漏洞论证-3",
+          kind: "agent",
+          templateName: "漏洞论证",
+          displayName: "漏洞论证-3",
+          sourceNodeId: "线索发现",
+          groupId: "spawn-rule:疑点辩论:finding-003",
+          role: "漏洞论证",
+        },
+        {
+          id: "讨论总结-3",
+          kind: "agent",
+          templateName: "讨论总结",
+          displayName: "讨论总结-3",
+          sourceNodeId: "线索发现",
+          groupId: "spawn-rule:疑点辩论:finding-003",
+          role: "讨论总结",
+        },
+      ],
+    },
+    "漏洞论证-3",
+    "讨论总结-3",
+  );
+
+  assert.deepEqual(activeAgentIds, ["线索发现", "漏洞挑战-3", "漏洞论证-3", "讨论总结-3"]);
+});
+
+test("spawn 组里的 last-all 转发会包含来源 agent 与同组 agent 的最后消息", () => {
+  const messages = [
+    createMessage({
+      sender: "user",
+      content: "@线索发现 请持续挖掘当前代码中的可疑漏洞点。",
+      targetAgentIds: ["线索发现"],
+    }),
+    createMessage({
+      sender: "线索发现",
+      content: "线索发现发现了 safe4 的可疑点。",
+      kind: "agent-final",
+    }),
+    createMessage({
+      sender: "漏洞挑战-3",
+      content: "漏洞挑战-3 认为证据还不够支撑中危结论。",
+      kind: "agent-final",
+    }),
+    createMessage({
+      sender: "漏洞论证-3",
+      content: "漏洞论证-3 补充了接口可达性与异常触发路径。",
+      kind: "agent-final",
+    }),
+  ];
+  const activeAgentIds = resolveForwardingActiveAgentIdsFromState(
+    {
+      runtimeNodes: [
+        {
+          id: "漏洞挑战-3",
+          kind: "agent",
+          templateName: "漏洞挑战",
+          displayName: "漏洞挑战-3",
+          sourceNodeId: "线索发现",
+          groupId: "spawn-rule:疑点辩论:finding-003",
+          role: "漏洞挑战",
+        },
+        {
+          id: "漏洞论证-3",
+          kind: "agent",
+          templateName: "漏洞论证",
+          displayName: "漏洞论证-3",
+          sourceNodeId: "线索发现",
+          groupId: "spawn-rule:疑点辩论:finding-003",
+          role: "漏洞论证",
+        },
+        {
+          id: "讨论总结-3",
+          kind: "agent",
+          templateName: "讨论总结",
+          displayName: "讨论总结-3",
+          sourceNodeId: "线索发现",
+          groupId: "spawn-rule:疑点辩论:finding-003",
+          role: "讨论总结",
+        },
+      ],
+    },
+    "漏洞论证-3",
+    "讨论总结-3",
+  );
+
+  const forwarded = buildDownstreamForwardedContextFromMessages(
+    messages,
+    "漏洞论证-3 补充了接口可达性与异常触发路径。",
+    {
+      messageMode: "last-all",
+      includeInitialTask: true,
+      activeAgentIds,
+    },
+  );
+
+  assert.equal(forwarded.userMessage, "请持续挖掘当前代码中的可疑漏洞点。");
+  assert.equal(
+    forwarded.agentMessage,
+    [
+      "[线索发现] 线索发现发现了 safe4 的可疑点。",
+      "[漏洞挑战-3] 漏洞挑战-3 认为证据还不够支撑中危结论。",
+      "[漏洞论证-3] 漏洞论证-3 补充了接口可达性与异常触发路径。",
     ].join("\n\n"),
   );
 });

@@ -75,6 +75,7 @@ import {
   buildTaskRoundFinishedMessageContent,
 } from "./task-completion-message";
 import { buildEffectiveTopology, getRuntimeTemplateName } from "./runtime-topology-graph";
+import { resolveForwardingActiveAgentIdsFromState } from "./forwarding-active-agents";
 import type { CompiledTeamDsl } from "./team-dsl";
 import { shouldScheduleEventStreamReconnect } from "./event-stream-lifecycle";
 import { resolveExecutionReviewAgent } from "./review-agent-context";
@@ -1438,15 +1439,7 @@ export class Orchestrator {
     sourceAgentId: string,
     targetAgentId: string,
   ): string[] {
-    const sourceRuntimeNode = state.runtimeNodes.find((node) => node.id === sourceAgentId);
-    if (!sourceRuntimeNode?.groupId) {
-      return [...new Set([sourceAgentId, targetAgentId].map((value) => value.trim()).filter(Boolean))];
-    }
-
-    const activeGroupAgentIds = state.runtimeNodes
-      .filter((node) => node.groupId === sourceRuntimeNode.groupId)
-      .map((node) => node.id);
-    return activeGroupAgentIds.length > 0 ? activeGroupAgentIds : [sourceAgentId];
+    return resolveForwardingActiveAgentIdsFromState(state, sourceAgentId, targetAgentId);
   }
 
   protected async createLangGraphBatchRunners(
