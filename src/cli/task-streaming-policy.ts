@@ -1,7 +1,7 @@
 import type { ParsedCliCommand } from "./cli-command";
 
 interface ResolveCliTaskStreamingPlanInput {
-  commandKind: Extract<ParsedCliCommand, { kind: "task.headless" | "task.ui" }>["kind"];
+  command: Extract<ParsedCliCommand, { kind: "task.headless" | "task.ui" }>;
   isResume: boolean;
 }
 
@@ -9,16 +9,18 @@ interface CliTaskStreamingPlan {
   enabled: boolean;
   includeHistory: boolean;
   printAttach: boolean;
+  printMessages: boolean;
 }
 
 export function resolveCliTaskStreamingPlan(
   input: ResolveCliTaskStreamingPlanInput,
 ): CliTaskStreamingPlan {
-  if (input.commandKind === "task.headless") {
+  if (input.command.kind === "task.headless") {
     return {
       enabled: true,
-      includeHistory: true,
+      includeHistory: input.command.showMessage,
       printAttach: true,
+      printMessages: input.command.showMessage,
     };
   }
 
@@ -27,6 +29,7 @@ export function resolveCliTaskStreamingPlan(
       enabled: true,
       includeHistory: false,
       printAttach: false,
+      printMessages: true,
     };
   }
 
@@ -34,5 +37,6 @@ export function resolveCliTaskStreamingPlan(
     enabled: true,
     includeHistory: true,
     printAttach: true,
+    printMessages: true,
   };
 }

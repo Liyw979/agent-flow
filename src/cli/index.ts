@@ -189,12 +189,14 @@ async function renderTaskMessages(
   options?: {
     includeHistory?: boolean;
     printAttach?: boolean;
+    printMessages?: boolean;
   },
 ) {
   let lastMessages = previousMessages;
   let attachPrinted = options?.printAttach !== true;
   let lastAttachEntries: TaskAttachCommandEntry[] = [];
   let includeHistory = options?.includeHistory === true;
+  const printMessages = options?.printMessages !== false;
 
   while (true) {
     const snapshot = await context.orchestrator.getTaskSnapshot(taskId);
@@ -212,15 +214,17 @@ async function renderTaskMessages(
       lastAttachEntries = attachEntries;
     }
 
-    const entries = includeHistory
-      ? collectIncrementalChatTranscript([], snapshot.messages)
-      : collectIncrementalChatTranscript(lastMessages, snapshot.messages);
+    if (printMessages) {
+      const entries = includeHistory
+        ? collectIncrementalChatTranscript([], snapshot.messages)
+        : collectIncrementalChatTranscript(lastMessages, snapshot.messages);
 
-    if (entries.length > 0) {
-      process.stdout.write(renderChatStreamEntries(entries));
-      lastMessages = snapshot.messages;
-      includeHistory = false;
+      if (entries.length > 0) {
+        process.stdout.write(renderChatStreamEntries(entries));
+      }
     }
+    lastMessages = snapshot.messages;
+    includeHistory = false;
 
     if (isSettledTaskStatus(snapshot.task.status)) {
       return {
@@ -331,7 +335,7 @@ async function handleTaskHeadlessCommand(
   printTaskRunDiagnostics(diagnostics);
 
   const streamingPlan = resolveCliTaskStreamingPlan({
-    commandKind: command.kind,
+    command,
     isResume: false,
   });
   if (!streamingPlan.enabled) {
@@ -341,6 +345,7 @@ async function handleTaskHeadlessCommand(
   await renderTaskMessages(context, snapshot.task.id, [], {
     includeHistory: streamingPlan.includeHistory,
     printAttach: streamingPlan.printAttach,
+    printMessages: streamingPlan.printMessages,
   });
 }
 
@@ -350,7 +355,7 @@ async function handleTaskUiCommand(
   diagnostics: TaskRunDiagnostics,
 ): Promise<ActiveUiHost> {
   const streamingPlan = resolveCliTaskStreamingPlan({
-    commandKind: command.kind,
+    command,
     isResume: false,
   });
 
@@ -380,6 +385,7 @@ async function handleTaskUiCommand(
     await renderTaskMessages(context, snapshot.task.id, [], {
       includeHistory: streamingPlan.includeHistory,
       printAttach: streamingPlan.printAttach,
+      printMessages: streamingPlan.printMessages,
     });
   }
   return host;
@@ -390,11 +396,11 @@ function buildHelp() {
   const appendix = [
     "",
     "补充命令示例：",
-    "  task headless --file <topology-json> --message <message> [--cwd <path>]",
+    "  task headless --file <topology-json> --message <message> [--cwd <path>] [--show-message]",
     "  task ui --file <topology-json> --message <message> [--cwd <path>]",
     "",
     "说明：",
-    "  - `task headless` 只负责新建任务，运行到本轮任务结束后退出 CLI。",
+    "  - `task headless` 默认只打印诊断信息与 attach 调试命令；传 `--show-message` 后才展示完整消息记录。",
     "  - `task ui` 会在当前 CLI 进程里启动本地 Web Host，并打开浏览器；命令本身会保持驻留，按 Ctrl+C 后才清理并退出。",
     "  - 新建任务时必须传 `--file` 和 `--message`。",
   ].join("\n");

@@ -7,6 +7,7 @@ export type ParsedCliCommand =
       cwd?: string;
       file?: string;
       message?: string;
+      showMessage: boolean;
     }
   | {
       kind: "task.ui";
@@ -39,12 +40,14 @@ export function buildCliProgram(onCommand?: (command: ParsedCliCommand) => void)
     .option("--cwd <path>", "指定工作目录")
     .option("--file <topology-json>", "团队拓扑 JSON 文件路径")
     .option("--message <message>", "首条消息")
+    .option("--show-message", "展示完整消息记录")
     .action((options) => {
       emit({
         kind: "task.headless",
         cwd: options.cwd,
         file: options.file,
         message: options.message,
+        showMessage: options.showMessage === true,
       });
     });
 

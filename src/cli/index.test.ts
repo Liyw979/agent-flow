@@ -31,7 +31,7 @@ test("CLI no longer accepts the removed review shortcut", () => {
 });
 
 test("CLI help only includes task headless and task ui commands", () => {
-  assert.match(CLI_SOURCE, /task headless --file <topology-json> --message <message>/);
+  assert.match(CLI_SOURCE, /task headless --file <topology-json> --message <message> \[--cwd <path>\] \[--show-message\]/);
   assert.match(CLI_SOURCE, /task ui --file <topology-json> --message <message> \[--cwd <path>\]/);
   assert.doesNotMatch(CLI_SOURCE, /task ui <taskId> \[--cwd <path>\]/);
   assert.doesNotMatch(CLI_SOURCE, /task attach <taskId> <agentId>/);
@@ -68,6 +68,12 @@ test("task headless prints the log file path through renderTaskSessionSummary", 
   assert.match(CLI_SOURCE, /buildTaskLogFilePath\(userDataPath, taskId\)/);
   assert.doesNotMatch(CLI_SOURCE, /agent-team\.log/);
   assert.doesNotMatch(CLI_SOURCE, /task show/);
+});
+
+test("task headless 默认隐藏消息记录，但仍然传递 attach 与消息输出开关", () => {
+  assert.match(CLI_SOURCE, /printAttach: streamingPlan\.printAttach,/);
+  assert.match(CLI_SOURCE, /printMessages: streamingPlan\.printMessages,/);
+  assert.match(CLI_SOURCE, /const printMessages = options\?\.printMessages !== false;/);
 });
 
 test("CLI no longer depends on ProjectSnapshot or ensureProjectForPath", () => {
