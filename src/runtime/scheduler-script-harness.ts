@@ -75,11 +75,8 @@ type SchedulerScriptDecision =
       targets: string[];
     }
   | {
-      type: "waiting";
-      waitingReason: string;
-    }
-  | {
       type: "finished";
+      finishReason?: string;
     };
 
 interface DynamicSpawnAgentRef {
@@ -190,8 +187,8 @@ export async function assertSchedulerScript(
   const buildNextDecision = (lastResponder: string): SchedulerScriptDecision => {
     if (activeBatches.length > 0) {
       return {
-        type: "waiting",
-        waitingReason: "wait_pending_reviewers",
+        type: "finished",
+        finishReason: "wait_pending_reviewers",
       };
     }
 
@@ -224,8 +221,8 @@ export async function assertSchedulerScript(
     }
 
     return {
-      type: "waiting",
-      waitingReason: "no_runnable_agents",
+      type: "finished",
+      finishReason: "no_runnable_agents",
     };
   };
 
