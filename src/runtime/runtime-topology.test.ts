@@ -16,7 +16,7 @@ function createVulnTopology(): TopologyRecord {
       { id: "疑点辩论工厂", kind: "spawn", templateName: "漏洞论证模板", spawnRuleId: "finding-debate" },
     ],
     edges: [
-      { source: "线索发现", target: "疑点辩论工厂", triggerOn: "transfer", messageMode: "all" },
+      { source: "线索发现", target: "疑点辩论工厂", triggerOn: "transfer", messageMode: "last-all" },
       { source: "疑点辩论工厂", target: "线索发现", triggerOn: "transfer", messageMode: "none" },
     ],
     spawnRules: [
@@ -80,7 +80,7 @@ test("instantiateSpawnBundle 会为一个 finding 生成论证、挑战、summar
   );
   assert.deepEqual(bundle.edges, [
     {
-      messageMode: "all",
+      messageMode: "last-all",
       source: "线索发现",
       target: "漏洞论证模板-1",
       triggerOn: "transfer",
@@ -135,7 +135,7 @@ test("instantiateSpawnBundle 会继承 source -> spawn 的 messageMode 到 entry
     source: "线索发现",
     target: "漏洞论证模板-1",
     triggerOn: "transfer",
-    messageMode: "all",
+    messageMode: "last-all",
   });
 });
 
@@ -211,7 +211,7 @@ test("instantiateSpawnBundle 识别 source 节点时不会误把 spawn 节点当
     source: "线索发现",
     target: "漏洞论证模板-1",
     triggerOn: "transfer",
-    messageMode: "all",
+    messageMode: "last-all",
   });
 });
 

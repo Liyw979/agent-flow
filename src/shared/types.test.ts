@@ -170,7 +170,7 @@ test("getSpawnRules 保留显式声明的 messageMode，不再依赖默认补值
             sourceRole: "pro",
             targetRole: "con",
             triggerOn: "continue",
-            messageMode: "all",
+            messageMode: "last-all",
           },
         ],
         exitWhen: "all_completed",
@@ -183,7 +183,7 @@ test("getSpawnRules 保留显式声明的 messageMode，不再依赖默认补值
       sourceRole: "pro",
       targetRole: "con",
       triggerOn: "continue",
-      messageMode: "all",
+      messageMode: "last-all",
     },
   ]);
 });

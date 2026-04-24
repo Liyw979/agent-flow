@@ -151,7 +151,7 @@
     "from": "上游节点",
     "to": "另一个下游节点",
     "trigger_type": "transfer",
-    "message_type": "all"
+    "message_type": "last-all"
   }
 ]
 ```
@@ -226,8 +226,8 @@
   只传递上游最后一条正文。
 - `none`
   不传递上游最后一条正文。
-- `all`
-  传递当前 Task 的完整消息记录。运行时会过滤掉纯展示用的派发消息，只保留真正的历史正文。
+- `last-all`
+  只传递当前激活链路里各个 Agent 最后一条历史正文，不再把整个 Task 的历史都塞给下游。
 
 示例：
 
@@ -279,7 +279,7 @@
 `vulnerability-team.topology.json` 展示了递归 `spawn` 的写法：
 
 - 根图入口是 `线索发现`
-- `线索发现 -> 疑点辩论` 不是无条件流转：有新的 finding 时，`线索发现` 的回复开头先输出 `<continue>`，再输出 finding 正文，并命中 `{ "from": "线索发现", "to": "疑点辩论", "trigger_type": "continue", "message_type": "all" }`
+- `线索发现 -> 疑点辩论` 不是无条件流转：有新的 finding 时，`线索发现` 的回复开头先输出 `<continue>`，再输出 finding 正文，并命中 `{ "from": "线索发现", "to": "疑点辩论", "trigger_type": "continue", "message_type": "last-all" }`
 - 没有新的 finding 时，`线索发现` 的回复开头先输出 `<complete>`，再输出简短说明，并命中 `{ "from": "线索发现", "to": "__end__", "trigger_type": "complete", "message_type": "none" }`，直接结束到 `END`
 - `线索发现` 的默认 prompt 要求每轮只返回一个可疑漏洞点，并且回复开头先输出 `<complete>` / `<continue>` 审查标签，再输出正文
 - `疑点辩论` 是 `spawn` 节点

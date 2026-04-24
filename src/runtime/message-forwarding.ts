@@ -79,13 +79,19 @@ export function buildDownstreamForwardedContextFromMessages(
   options: {
     includeInitialTask?: boolean;
     messageMode: TopologyEdgeMessageMode;
+    activeAgentIds?: string[];
   },
 ): { userMessage?: string; agentMessage: string } {
   const includeInitialTask = options.includeInitialTask ?? true;
   const messageMode = options.messageMode;
   const initialUserContent = getInitialUserMessageContent(messages);
   const latestSourceContent = sourceContent.trim();
-  const agentMessage = resolveForwardedAgentMessage(messages, latestSourceContent, messageMode);
+  const agentMessage = resolveForwardedAgentMessage(
+    messages,
+    latestSourceContent,
+    messageMode,
+    options.activeAgentIds ?? [],
+  );
   return withOptionalString({
     agentMessage,
   }, "userMessage",
@@ -101,22 +107,44 @@ function resolveForwardedAgentMessage(
   messages: MinimalMessage[],
   latestSourceContent: string,
   messageMode: TopologyEdgeMessageMode,
+  activeAgentIds: string[],
 ): string {
   if (messageMode === "none") {
     return NONE_MODE_CONTINUATION_MESSAGE;
   }
 
-  if (messageMode === "all") {
-    const transcript = buildForwardableTranscript(messages);
+  if (messageMode === "last-all") {
+    const transcript = buildLastForwardableTranscript(messages, activeAgentIds);
     return transcript || latestSourceContent || "（当前没有可转发的历史消息记录。）";
   }
 
   return latestSourceContent || "（该上游 Agent 未返回可继续流转的正文。）";
 }
 
-function buildForwardableTranscript(messages: MinimalMessage[]): string {
-  return mergeTaskChatMessages(messages)
-    .filter((item) => isForwardableChatMessageItem(item))
+function buildLastForwardableTranscript(messages: MinimalMessage[], activeAgentIds: string[]): string {
+  const activeAgentIdSet = new Set(
+    activeAgentIds
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  if (activeAgentIdSet.size === 0) {
+    return "";
+  }
+
+  const items = mergeTaskChatMessages(messages)
+    .filter((item) => activeAgentIdSet.has(item.sender))
+    .filter((item) => isForwardableChatMessageItem(item));
+  if (items.length === 0) {
+    return "";
+  }
+
+  const latestItemIndexBySender = new Map<string, number>();
+  for (let index = 0; index < items.length; index += 1) {
+    latestItemIndexBySender.set(items[index]!.sender, index);
+  }
+
+  return items
+    .filter((item, index) => latestItemIndexBySender.get(item.sender) === index)
     .map((item) => formatForwardableChatMessageItem(item))
     .filter(Boolean)
     .join("\n\n");

@@ -1433,6 +1433,22 @@ export class Orchestrator {
     return true;
   }
 
+  private resolveForwardingActiveAgentIds(
+    state: GraphTaskState,
+    sourceAgentId: string,
+    targetAgentId: string,
+  ): string[] {
+    const sourceRuntimeNode = state.runtimeNodes.find((node) => node.id === sourceAgentId);
+    if (!sourceRuntimeNode?.groupId) {
+      return [...new Set([sourceAgentId, targetAgentId].map((value) => value.trim()).filter(Boolean))];
+    }
+
+    const activeGroupAgentIds = state.runtimeNodes
+      .filter((node) => node.groupId === sourceRuntimeNode.groupId)
+      .map((node) => node.id);
+    return activeGroupAgentIds.length > 0 ? activeGroupAgentIds : [sourceAgentId];
+  }
+
   protected async createLangGraphBatchRunners(
     cwd: string,
     taskId: string,
@@ -1497,6 +1513,7 @@ export class Orchestrator {
           {
             includeInitialTask,
             messageMode,
+            activeAgentIds: this.resolveForwardingActiveAgentIds(state, batch.sourceAgentId, job.agentId),
           },
         )
         : null;
@@ -1560,7 +1577,7 @@ export class Orchestrator {
             withOptionalValue({
               mode: "structured",
               from: batch.sourceAgentId ?? "System",
-            }, "omitSourceAgentSectionLabel", messageMode === "all" ? true : undefined),
+            }, "omitSourceAgentSectionLabel", messageMode === "last-all" ? true : undefined),
             "userMessage",
             forwardedContext?.userMessage,
           ),

@@ -108,7 +108,7 @@ export interface TaskAgentRecord {
 }
 
 export type TopologyEdgeTrigger = | "transfer" | "complete" | "continue";
-export type TopologyEdgeMessageMode = "none" | "last" | "all";
+export type TopologyEdgeMessageMode = "none" | "last" | "last-all";
 
 export const DEFAULT_ACTION_REQUIRED_MAX_ROUNDS = 4;
 export const DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE: TopologyEdgeMessageMode = "last";

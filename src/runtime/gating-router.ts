@@ -291,8 +291,7 @@ function handleActionRequired(
   result: GraphAgentResult,
   continuation: GatingBatchContinuation | null,
 ): GraphRoutingDecision {
-  const topologyIndex = compileTopology(buildEffectiveTopology(state));
-  const actionRequiredTargets = topologyIndex.actionRequiredTargetsBySource[result.agentId] ?? [];
+  const actionRequiredTargets = getActionRequiredTargetsForSource(state, result.agentId);
   const continuationAction = resolveActionRequiredRequestContinuationAction({
     continuation,
     fallbackActionWhenNoBatch:
@@ -361,7 +360,6 @@ function handleActionRequired(
   }
 
   if (continuationAction === "trigger_fallback_review") {
-    const actionRequiredTargets = topologyIndex.actionRequiredTargetsBySource[result.agentId] ?? [];
     const fallbackTarget = actionRequiredTargets[0];
     if (!fallbackTarget) {
       state.taskStatus = "failed";
@@ -496,8 +494,7 @@ function triggerActionRequiredRequestDownstream(
   sourceAgentId: string,
   revisionContent?: string,
 ): GraphRoutingDecision {
-  const topologyIndex = compileTopology(buildEffectiveTopology(state));
-  const targets = (topologyIndex.actionRequiredTargetsBySource[sourceAgentId] ?? []).filter(
+  const targets = getActionRequiredTargetsForSource(state, sourceAgentId).filter(
     (targetName) => targetName !== sourceAgentId,
   );
   if (targets.length === 0) {
@@ -544,8 +541,7 @@ function resolveRepairTargetAgentId(
   reviewerAgentId: string,
   fallbackRepairTargetAgentId: string,
 ): string {
-  const topologyIndex = compileTopology(buildEffectiveTopology(state));
-  const actionRequiredTargets = topologyIndex.actionRequiredTargetsBySource[reviewerAgentId] ?? [];
+  const actionRequiredTargets = getActionRequiredTargetsForSource(state, reviewerAgentId);
   if (actionRequiredTargets.includes(fallbackRepairTargetAgentId)) {
     return fallbackRepairTargetAgentId;
   }
@@ -834,6 +830,31 @@ function tryExtractSpawnItemsFromContent(
   }
 }
 
+function getActionRequiredTargetsForSource(
+  state: GraphTaskState,
+  sourceAgentId: string,
+): string[] {
+  const topologyIndex = compileTopology(buildEffectiveTopology(state));
+  return (topologyIndex.actionRequiredTargetsBySource[sourceAgentId] ?? []).filter((targetName) =>
+    !isRuntimeNodeFromDispatchedSpawnActivation(state, targetName)
+  );
+}
+
+function isRuntimeNodeFromDispatchedSpawnActivation(
+  state: GraphTaskState,
+  targetName: string,
+): boolean {
+  const runtimeNode = state.runtimeNodes.find((node) => node.id === targetName);
+  if (!runtimeNode?.groupId) {
+    return false;
+  }
+
+  return state.spawnActivations.some((activation) =>
+    activation.dispatched
+    && activation.bundleGroupIds.includes(runtimeNode.groupId ?? "")
+  );
+}
+
 function continueCompletedSpawnActivations(
   state: GraphTaskState,
   completedAgentId: string,
@@ -879,7 +900,7 @@ function continueCompletedSpawnActivations(
   const aggregatedContent = buildSpawnActivationContent(state, activation.id, activation.sourceContent);
   state.agentStatusesByName[activation.spawnNodeName] = "completed";
   state.agentContextByName[activation.spawnNodeName] = aggregatedContent;
-  return triggerHandoffDownstream(state, completedAgentId, aggregatedContent);
+  return triggerHandoffDownstream(state, activation.spawnNodeName, aggregatedContent);
 }
 
 function buildSpawnActivationContent(
@@ -911,22 +932,28 @@ function markCompletedSpawnActivationAsDispatchedIfReady(
     return;
   }
 
-  const bundleCompleted = bundle.nodes.every((node) => state.agentStatusesByName[node.id] === "completed");
-  if (!bundleCompleted) {
-    return;
-  }
-
   const activation = state.spawnActivations.find((candidate) => candidate.id === bundle.activationId);
   if (!activation) {
     return;
   }
 
-  if (!activation.completedBundleGroupIds.includes(bundle.groupId)) {
-    activation.completedBundleGroupIds.push(bundle.groupId);
+  if (activation.dispatched) {
+    return;
   }
 
-  if (activation.dispatched || activation.completedBundleGroupIds.length < activation.bundleGroupIds.length) {
-    return;
+  const reportsBackToOuterTopology = bundle.edges.some((edge) =>
+    edge.source === completedAgentId
+    && !bundle.nodes.some((node) => node.id === edge.target)
+  );
+  if (!reportsBackToOuterTopology) {
+    const bundleCompleted = bundle.nodes.every((node) => state.agentStatusesByName[node.id] === "completed");
+    if (!bundleCompleted) {
+      return;
+    }
+  }
+
+  if (!activation.completedBundleGroupIds.includes(bundle.groupId)) {
+    activation.completedBundleGroupIds.push(bundle.groupId);
   }
 
   activation.dispatched = true;

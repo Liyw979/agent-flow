@@ -35,7 +35,7 @@ function link(
   from: string,
   to: string,
   trigger_type: "transfer" | "complete" | "continue",
-  message_type: "none" | "last" | "all",
+  message_type: "none" | "last" | "last-all" | "all",
 ) {
   return {
     from,
@@ -48,7 +48,7 @@ function link(
 function endLink(
   from: string,
   trigger_type: "transfer" | "complete" | "continue",
-  message_type: "none" | "last" | "all",
+  message_type: "none" | "last" | "last-all" | "all",
 ) {
   return {
     from,
@@ -269,7 +269,7 @@ test("compileTeamDsl 支持在拓扑文件里直接连接 __end__", () => {
       ),
     ],
     links: [
-      link("线索发现", "疑点辩论", "continue", "all"),
+      link("线索发现", "疑点辩论", "continue", "last-all"),
       link("疑点辩论", "线索发现", "transfer", "none"),
       endLink("线索发现", "complete", "none"),
     ],
@@ -434,7 +434,7 @@ test("compileTeamDsl 会拒绝在 spawn 子图里直接连接 __end__", () => {
           ),
         ],
         links: [
-          link("线索发现", "疑点辩论", "transfer", "all"),
+          link("线索发现", "疑点辩论", "transfer", "last-all"),
         ],
       }),
     /只有根图可以直接连接 __end__/u,
@@ -449,7 +449,7 @@ test("__end__ 边支持复用 complete / continue 作为条件分支", () => {
       agentNode("疑点辩论", "你负责辩论。", false),
     ],
     links: [
-      link("线索发现", "疑点辩论", "continue", "all"),
+      link("线索发现", "疑点辩论", "continue", "last-all"),
       endLink("线索发现", "complete", "none"),
     ],
   });
@@ -511,16 +511,33 @@ test("compileTeamDsl 支持在 links 上显式声明边级消息传递策略", (
       agentNode("讨论总结", "你负责裁决。", false),
     ],
     links: [
-      link("线索发现", "疑点辩论", "transfer", "all"),
+      link("线索发现", "疑点辩论", "transfer", "last-all"),
       link("疑点辩论", "讨论总结", "transfer", "last"),
       link("讨论总结", "线索发现", "transfer", "none"),
     ],
   });
 
   assert.deepEqual(compiled.topology.edges, [
-    { source: "线索发现", target: "疑点辩论", triggerOn: "transfer", messageMode: "all" },
+    { source: "线索发现", target: "疑点辩论", triggerOn: "transfer", messageMode: "last-all" },
     { source: "疑点辩论", target: "讨论总结", triggerOn: "transfer", messageMode: "last" },
     { source: "讨论总结", target: "线索发现", triggerOn: "transfer", messageMode: "none" },
+  ]);
+});
+
+test("compileTeamDsl 仍兼容旧的 all，并在编译时归一化为 last-all", () => {
+  const compiled = compileTeamDsl({
+    entry: "线索发现",
+    nodes: [
+      agentNode("线索发现", "你负责线索发现。", false),
+      agentNode("疑点辩论", "你负责辩论。", false),
+    ],
+    links: [
+      link("线索发现", "疑点辩论", "transfer", "all"),
+    ],
+  });
+
+  assert.deepEqual(compiled.topology.edges, [
+    { source: "线索发现", target: "疑点辩论", triggerOn: "transfer", messageMode: "last-all" },
   ]);
 });
 

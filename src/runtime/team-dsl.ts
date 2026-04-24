@@ -38,7 +38,7 @@ interface GraphDslLink {
   from: string;
   to: string;
   trigger_type: TopologyEdgeTrigger;
-  message_type: TopologyEdgeMessageMode;
+  message_type: TopologyEdgeMessageMode | "all";
 }
 
 export interface GraphDslGraph {
@@ -65,7 +65,12 @@ const GraphDslLinkSchema: z.ZodType<GraphDslLink> = z.object({
   from: z.string(),
   to: z.string(),
   trigger_type: z.enum(["transfer", "complete", "continue"]),
-  message_type: z.enum(["none", "last", "all"]),
+  message_type: z.union([
+    z.literal("none"),
+    z.literal("last"),
+    z.literal("last-all"),
+    z.literal("all").transform(() => "last-all" as const),
+  ]),
 }).strict();
 
 const GraphDslAgentNodeSchema: z.ZodType<GraphDslAgentNode> = z.object({
@@ -351,6 +356,10 @@ function parseGraphDsl(input: unknown): GraphDslGraph {
   return parsed.data;
 }
 
+function normalizeGraphDslMessageMode(messageMode: GraphDslLink["message_type"]): TopologyEdgeMessageMode {
+  return messageMode === "all" ? "last-all" : messageMode;
+}
+
 function resolveSpawnReportTo(
   graph: GraphDslGraph,
   spawnNodeName: string,
@@ -364,7 +373,7 @@ function resolveSpawnReportTo(
     ? {
         target: outgoingLinks[0]!.to,
         triggerOn: outgoingLinks[0]!.trigger_type,
-        messageMode: outgoingLinks[0]!.message_type,
+        messageMode: normalizeGraphDslMessageMode(outgoingLinks[0]!.message_type),
       }
     : undefined;
 }
@@ -401,7 +410,7 @@ function resolveGraphExternalReport(
     source: externalLink.from,
     target: externalLink.to,
     triggerOn: externalLink.trigger_type,
-    messageMode: externalLink.message_type,
+    messageMode: normalizeGraphDslMessageMode(externalLink.message_type),
   };
 }
 
@@ -496,7 +505,7 @@ function collectGraphDslNodeDefinitions(
           sourceRole: link.from,
           targetRole: link.to,
           triggerOn: link.trigger_type,
-          messageMode: link.message_type,
+          messageMode: normalizeGraphDslMessageMode(link.message_type),
         })),
       exitWhen: "all_completed",
       ...(reportToTemplateName ? { reportToTemplateName } : {}),
@@ -555,7 +564,7 @@ function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
       source: link.from,
       target: link.to,
       triggerOn: link.trigger_type,
-      messageMode: link.message_type,
+      messageMode: normalizeGraphDslMessageMode(link.message_type),
     })),
     langgraph: createTopologyLangGraphRecord({
       nodes: input.nodes.map((node) => node.id),
@@ -563,7 +572,7 @@ function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
         source: link.from,
         target: link.to,
         triggerOn: link.trigger_type,
-        messageMode: link.message_type,
+        messageMode: normalizeGraphDslMessageMode(link.message_type),
       })),
       startTargets: [input.entry],
       endIncoming: endLinks.map((link) => ({

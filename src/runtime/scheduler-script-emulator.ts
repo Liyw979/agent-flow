@@ -847,7 +847,12 @@ function describeDecisionWithVisibleTargets(
   decision: GraphRoutingDecision,
 ): string {
   if (decision.type === "execute_batch") {
-    return `execute_batch -> [${getScriptVisibleDecisionTargets(state, decision).join(", ")}]`;
+    const visibleTargets = getScriptVisibleDecisionTargets(state, decision);
+    const hiddenTargets = getStrictHiddenDecisionTargets(state, decision);
+    if (hiddenTargets.length > 0) {
+      return `execute_batch -> visible [${visibleTargets.join(", ")}], hidden [${hiddenTargets.join(", ")}]`;
+    }
+    return `execute_batch -> [${visibleTargets.join(", ")}]`;
   }
   return describeDecision(decision);
 }
@@ -1145,12 +1150,17 @@ export function matchesExpectedTransition(input: {
     input.senderId,
     input.reviewDecision,
   );
+  const hasHiddenDecisionTargets = input.decision.type === "execute_batch"
+    && getStrictHiddenDecisionTargets(input.state, input.decision).length > 0;
 
   if (input.line.targets.length > 0) {
     const expectedTargets = input.line.targets.map((target) =>
       resolveScriptTargetNameForComparison(input.state, target)
     );
     if (input.decision.type === "execute_batch") {
+      if (hasHiddenDecisionTargets) {
+        return false;
+      }
       if (input.decision.batch.sourceAgentId !== input.senderId) {
         return false;
       }
@@ -1167,6 +1177,9 @@ export function matchesExpectedTransition(input: {
       if (input.decision.type !== "execute_batch") {
         return false;
       }
+      if (hasHiddenDecisionTargets) {
+        return false;
+      }
       const expectedTargets = input.nextLine.targets.map((target) =>
         resolveScriptTargetNameForComparison(input.state, target)
       );
@@ -1176,6 +1189,9 @@ export function matchesExpectedTransition(input: {
       );
     }
     if (input.reviewAgent && input.decision.type === "execute_batch") {
+      if (hasHiddenDecisionTargets) {
+        return false;
+      }
       const nextSenderId = resolveScriptAgentId(input.state, input.nextLine.sender);
       if (shouldRequireSourceDispatchAssertion({
         currentSenderId: input.senderId,
@@ -1209,6 +1225,9 @@ export function matchesExpectedTransition(input: {
       input.decision.type === "execute_batch"
       && (input.decision.batch.sourceAgentId !== input.senderId || input.reviewAgent)
     ) {
+      if (hasHiddenDecisionTargets) {
+        return false;
+      }
       return getScriptVisibleDecisionTargets(input.state, input.decision).includes(nextSenderId);
     }
     return false;
@@ -1278,6 +1297,15 @@ function getScriptVisibleDecisionTargets(
   return decision.batch.jobs
     .map((job) => job.agentId)
     .filter((agentId) => !isCompletedSpawnRuntimeTarget(state, agentId));
+}
+
+function getStrictHiddenDecisionTargets(
+  state: ReturnType<typeof createGraphTaskState>,
+  decision: Extract<GraphRoutingDecision, { type: "execute_batch" }>,
+): string[] {
+  return decision.batch.jobs
+    .map((job) => job.agentId)
+    .filter((agentId) => isCompletedSpawnRuntimeTarget(state, agentId));
 }
 
 function isCompletedSpawnRuntimeTarget(
