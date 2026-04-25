@@ -963,56 +963,24 @@ export class Orchestrator {
     return formatAgentDispatchContent(content, targetAgentIds);
   }
 
-  private extractAgentDisplayContent(content: string, options?: { preferTrailingDeliverySection?: boolean }): string {
+  private extractAgentDisplayContent(content: string): string {
     const trimmed = content.trim();
     if (!trimmed) {
       return "";
     }
 
-    const trailingSection = options?.preferTrailingDeliverySection
-      ? this.extractTrailingTopLevelSection(trimmed)
-      : trimmed;
-    return trailingSection
+    return trimmed
       .replace(/\n(?:---|\*\*\*)(?:\s*\n?)*$/u, "")
       .trim();
   }
 
-  private extractTrailingTopLevelSection(content: string): string {
-    const headingPattern = /(^|\n)(#{1,2}\s+[^\n]+)\n/g;
-    let lastHeadingIndex = -1;
-    let match: RegExpExecArray | null = headingPattern.exec(content);
-    while (match) {
-      const prefix = match[1] ?? "";
-      lastHeadingIndex = match.index + prefix.length;
-      match = headingPattern.exec(content);
-    }
-
-    if (lastHeadingIndex < 0) {
-      return content;
-    }
-
-    const trailingSection = content.slice(lastHeadingIndex).trim();
-    return trailingSection || content;
-  }
-
   protected createDisplayContent(parsedReview: ParsedReview, fallbackMessage?: string | null): string {
-    const preferTrailingDeliverySection = parsedReview.decision === "invalid";
-    const cleanContent = this.extractAgentDisplayContent(parsedReview.cleanContent, {
-      preferTrailingDeliverySection,
-    });
-    if (parsedReview.decision === "invalid" && parsedReview.validationError) {
-      return [cleanContent, parsedReview.validationError].filter(Boolean).join("\n\n");
-    }
+    const cleanContent = this.extractAgentDisplayContent(parsedReview.cleanContent);
     if (cleanContent) {
       return cleanContent;
     }
 
-    const fallbackContent = this.extractAgentDisplayContent(fallbackMessage?.trim() ?? "", {
-      preferTrailingDeliverySection,
-    });
-    if (parsedReview.decision === "invalid" && parsedReview.validationError) {
-      return [fallbackContent, parsedReview.validationError].filter(Boolean).join("\n\n");
-    }
+    const fallbackContent = this.extractAgentDisplayContent(fallbackMessage?.trim() ?? "");
     if (fallbackContent) {
       return fallbackContent;
     }
@@ -1024,9 +992,6 @@ export class Orchestrator {
 
     if (parsedReview.decision === "continue") {
       return "（该 Agent 已给出需要响应的结论，但未返回可展示的结果正文。）";
-    }
-    if (parsedReview.decision === "invalid") {
-      return parsedReview.validationError ?? "（该 Agent 返回了无效的审查结果。）";
     }
     if (parsedReview.decision === "complete") {
       return "通过";
@@ -1620,7 +1585,6 @@ export class Orchestrator {
         agentId: runtimeAgentId,
         status: "failed",
         reviewAgent: false,
-        reviewDecision: "invalid",
         agentStatus: "failed",
         agentContextContent: "",
         opinion: null,
@@ -1798,7 +1762,6 @@ export class Orchestrator {
         agentId: runtimeAgentId,
         status: "failed",
         reviewAgent,
-        reviewDecision: "invalid",
         agentStatus: "failed",
         agentContextContent: "",
         opinion: null,
