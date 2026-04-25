@@ -134,6 +134,17 @@ test("task commands preallocate a task id before creating the CLI context", () =
   );
 });
 
+test("task commands verify opencode help output before creating the CLI context", () => {
+  assert.equal(
+    appearsInOrder(
+      NORMALIZED_CLI_SOURCE,
+      "await ensureOpencodePreflightPassed();",
+      "const context = await createCliContext(",
+    ),
+    true,
+  );
+});
+
 test("task ui checks static UI assets before submitting the task", () => {
   const taskUiSection = getTaskUiSection(NORMALIZED_CLI_SOURCE);
 
