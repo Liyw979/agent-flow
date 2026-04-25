@@ -11,6 +11,12 @@ const AGENT_HISTORY_MARKDOWN_STYLE = {
   "--chat-markdown-pre-padding": "0.18rem 0.42rem",
 } as CSSProperties;
 
+export function compactAgentHistoryMarkdownContent(content: string): string {
+  return content
+    .replace(/\r\n?/gu, "\n")
+    .replace(/\n[ \t]*\n+/gu, "\n");
+}
+
 export function AgentHistoryMarkdown({
   content,
   className,
@@ -18,10 +24,12 @@ export function AgentHistoryMarkdown({
   content: string;
   className?: string;
 }) {
+  const normalizedContent = compactAgentHistoryMarkdownContent(content);
+
   if (className) {
     return (
       <MarkdownMessage
-        content={content}
+        content={normalizedContent}
         className={className}
         inheritTypography
         style={AGENT_HISTORY_MARKDOWN_STYLE}
@@ -31,7 +39,7 @@ export function AgentHistoryMarkdown({
 
   return (
     <MarkdownMessage
-      content={content}
+      content={normalizedContent}
       inheritTypography
       style={AGENT_HISTORY_MARKDOWN_STYLE}
     />

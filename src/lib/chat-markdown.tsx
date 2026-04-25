@@ -10,6 +10,32 @@ import { getChatMarkdownTypographyStyle } from "./chat-markdown-typography";
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 
+function trimParagraphTextAfterLineBreak(nodes: React.ReactNode[]) {
+  const normalizedNodes: React.ReactNode[] = [];
+  let previousWasLineBreak = false;
+
+  for (const node of nodes) {
+    if (typeof node === "string") {
+      if (!previousWasLineBreak) {
+        normalizedNodes.push(node);
+        continue;
+      }
+
+      const trimmedNode = node.replace(/^[\t ]*\n+/u, "");
+      if (trimmedNode.length > 0) {
+        normalizedNodes.push(trimmedNode);
+      }
+      previousWasLineBreak = false;
+      continue;
+    }
+
+    normalizedNodes.push(node);
+    previousWasLineBreak = React.isValidElement(node) && node.type === "br";
+  }
+
+  return normalizedNodes;
+}
+
 function MarkdownContent({
   content,
 }: {
@@ -26,6 +52,9 @@ function MarkdownContent({
         h4: ({ node: _node, ...props }) => <p data-chat-markdown-role="heading" {...props} />,
         h5: ({ node: _node, ...props }) => <p data-chat-markdown-role="heading" {...props} />,
         h6: ({ node: _node, ...props }) => <p data-chat-markdown-role="heading" {...props} />,
+        p: ({ node: _node, children, ...props }) => (
+          <p {...props}>{trimParagraphTextAfterLineBreak(React.Children.toArray(children))}</p>
+        ),
         strong: ({ node: _node, ...props }) => <strong data-chat-markdown-role="strong" {...props} />,
         em: ({ node: _node, ...props }) => <span data-chat-markdown-role="em" {...props} />,
       }}
