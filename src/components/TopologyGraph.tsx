@@ -690,11 +690,7 @@ export function TopologyGraph({
                           </article>
                         ))}
                       </div>
-                    ) : (
-                      <div className="flex h-full items-center justify-center rounded-[10px] border border-dashed border-border/70 bg-background/45 text-sm text-muted-foreground">
-                        待启动
-                      </div>
-                    )}
+                    ) : null}
                   </div>
                 </div>
               );
@@ -819,11 +815,7 @@ export function TopologyGraph({
                     </article>
                   ))}
                 </div>
-              ) : (
-                <div className="flex h-full items-center justify-center rounded-[14px] border border-dashed border-border/70 bg-background/45 text-sm text-muted-foreground">
-                  待启动
-                </div>
-              )}
+              ) : null}
             </div>
           </div>
         </div>

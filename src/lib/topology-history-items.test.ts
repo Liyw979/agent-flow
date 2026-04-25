@@ -24,3 +24,23 @@ test("selectTopologyHistoryItemsForDisplay 不会丢掉早期 OpenCode thinking"
     true,
   );
 });
+
+test("selectTopologyHistoryItemsForDisplay 会过滤掉空消息生成的占位记录", () => {
+  const items: AgentHistoryItem[] = [
+    {
+      id: "history-empty",
+      label: "已完成",
+      detailSnippet: "暂无详细记录",
+      detail: "暂无详细记录",
+      timestamp: "2026-04-24T00:00:10.000Z",
+      sortTimestamp: "2026-04-24T00:00:10.000Z",
+      tone: "success",
+    },
+    createHistoryItem(1),
+  ];
+
+  assert.deepEqual(
+    selectTopologyHistoryItemsForDisplay(items).map((item) => item.id),
+    ["history-1"],
+  );
+});

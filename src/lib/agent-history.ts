@@ -24,19 +24,21 @@ export interface AgentHistoryItem {
     | "runtime-message";
 }
 
+export const EMPTY_AGENT_HISTORY_DETAIL = "暂无详细记录";
+
 function normalizeHistoryDetail(content: string | null | undefined) {
   const normalized = stripDecisionResponseMarkup(content ?? "")
     .replace(/\r\n?/gu, "\n")
     .replace(/[ \t]+\n/gu, "\n")
     .trim();
-  return normalized || "暂无详细记录";
+  return normalized || EMPTY_AGENT_HISTORY_DETAIL;
 }
 
 function buildHistoryDetailSnippet(detail: string) {
   const normalized = detail
     .replace(/\n\s*\n+/gu, "\n")
     .trim();
-  return normalized || "暂无详细记录";
+  return normalized || EMPTY_AGENT_HISTORY_DETAIL;
 }
 
 function normalizeToolHistory(toolName: string, detail: string) {
