@@ -833,7 +833,7 @@ export function ChatWindow({
       </div>
 
       <form
-        className={`border-t border-border/60 ${PANEL_SECTION_BODY_CLASS}`}
+        className="border-t border-border/60 px-3 py-1.5"
         onSubmit={async (event) => {
           event.preventDefault();
           await handleSubmit();
@@ -843,6 +843,7 @@ export function ChatWindow({
           <div ref={composerRef} className="relative">
             <textarea
               ref={textareaRef}
+              rows={1}
               value={draft}
               onChange={(event) => {
                 const nextDraft = event.target.value;
@@ -928,16 +929,18 @@ export function ChatWindow({
               placeholder={
                 hasAvailableAgents
                   ? defaultAgentId
-                    ? `默认从 ${defaultAgentId} 开始，使用@指定Agent`
+                    ? `默认向${defaultAgentId}发送，可以使用@指定Agent`
                     : "当前拓扑缺少 start node，请使用@指定Agent发送消息"
                   : "当前还没有可用 Agent，请先配置团队成员"
               }
-              className="no-drag block min-h-[68px] w-full resize-none rounded-[8px] border border-border bg-card px-4 py-2.5 text-sm leading-6 outline-none transition focus:border-primary"
+              className="no-drag block h-10 min-h-10 w-full resize-none rounded-[8px] border border-border bg-card px-3 py-2 text-sm leading-5 outline-none transition focus:border-primary"
             />
 
-            <div className="mt-2 flex items-center justify-end gap-3 px-1 text-xs">
-              {submitError ? <span className="text-primary">{submitError}</span> : null}
-            </div>
+            {submitError ? (
+              <div className="mt-1 flex items-center justify-end px-1 text-xs">
+                <span className="text-primary">{submitError}</span>
+              </div>
+            ) : null}
 
             {mentionContext && mentionOptions.length > 0 && (
               <div
