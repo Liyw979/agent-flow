@@ -9,7 +9,7 @@ function createAgentFinalMessage(input: {
   sender: string;
   timestamp: string;
   content: string;
-  reviewDecision?: "complete" | "continue" | "invalid";
+  reviewDecision?: "complete" | "continue";
   status?: "completed" | "error";
 }): MessageRecord {
   return {

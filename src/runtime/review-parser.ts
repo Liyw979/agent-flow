@@ -1,13 +1,10 @@
 import { extractTrailingReviewSignalBlock } from "@shared/review-response";
-
-export type ReviewDecision = "complete" | "continue" | "invalid";
+import type { ReviewDecision } from "@shared/types";
 
 export interface ParsedReview {
   cleanContent: string;
   decision: ReviewDecision;
   opinion: string | null;
-  rawDecisionBlock: string | null;
-  validationError: string | null;
 }
 
 export function stripStructuredSignals(content: string): string {
@@ -25,8 +22,6 @@ export function parseReview(content: string, reviewAgent: boolean): ParsedReview
       cleanContent: stripStructuredSignals(signalMatch.body),
       decision: signalMatch.kind === "complete" ? "complete" : "continue",
       opinion: signalMatch.response,
-      rawDecisionBlock: signalMatch.rawBlock,
-      validationError: null,
     };
   }
 
@@ -36,16 +31,12 @@ export function parseReview(content: string, reviewAgent: boolean): ParsedReview
       cleanContent,
       decision: "complete",
       opinion: null,
-      rawDecisionBlock: null,
-      validationError: null,
     };
   }
 
   return {
     cleanContent,
-    decision: "invalid",
+    decision: "continue",
     opinion: null,
-    rawDecisionBlock: null,
-    validationError: "审查 Agent 必须用 <complete> 或 <continue> 标签明确给出结论。",
   };
 }

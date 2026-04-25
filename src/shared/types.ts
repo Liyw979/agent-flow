@@ -12,6 +12,8 @@ export type TaskStatus =
   | "failed"
   | "continue";
 
+export type ReviewDecision = "complete" | "continue";
+
 export type PermissionMode = "allow" | "ask" | "deny";
 
 export const BUILD_AGENT_ID = "Build";
@@ -247,7 +249,7 @@ export interface TaskCreatedMessageRecord extends BaseMessageRecord {
 
 export interface AgentFinalMessageRecord extends BaseMessageRecord {
   kind: "agent-final";
-  reviewDecision: "complete" | "continue" | "invalid";
+  reviewDecision: ReviewDecision;
   reviewOpinion: string;
   rawResponse: string;
   status: "completed" | "error";

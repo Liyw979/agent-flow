@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 
-import type { TopologyRecord } from "@shared/types";
+import type { ReviewDecision, TopologyRecord } from "@shared/types";
 
 import {
   applyAgentResultToGraphState,
   createGraphTaskState,
   createUserDispatchDecision,
-  type GraphAgentResult,
+  type GraphCompletedAgentResult,
   type GraphRoutingDecision,
 } from "./gating-router";
 import { buildEffectiveTopology } from "./runtime-topology-graph";
@@ -190,7 +190,7 @@ export function shouldRequireSourceDispatchAssertion(input: {
 
 function collectActualTransitionTargets(input: {
   transitions: Array<{
-    reviewDecision: GraphAgentResult["reviewDecision"];
+    reviewDecision: ReviewDecision;
     state: ReturnType<typeof createGraphTaskState>;
     decision: GraphRoutingDecision;
   }>;
@@ -229,7 +229,7 @@ export function getAllowedPendingSendersFromFinishedDecision(
 }
 
 export function preferCompleteReviewCandidatesForPendingNextSender<T extends {
-  result: GraphAgentResult;
+  result: GraphCompletedAgentResult;
   state: ReturnType<typeof createGraphTaskState>;
   decision: GraphRoutingDecision;
 }>(input: {
@@ -866,7 +866,7 @@ function applyMessageLineAndMatchDecision(input: {
 }): {
   state: ReturnType<typeof createGraphTaskState>;
   decision: GraphRoutingDecision;
-  reviewDecision: GraphAgentResult["reviewDecision"];
+  reviewDecision: ReviewDecision;
 } {
   const executableAgentId = input.senderId;
   const reviewAgent = resolveExecutionReviewAgent({
@@ -878,19 +878,19 @@ function applyMessageLineAndMatchDecision(input: {
 
   const candidateDecisions = reviewAgent ? (["continue", "complete"] as const) : (["complete"] as const);
   const matchedCandidates: Array<{
-    result: GraphAgentResult;
+    result: GraphCompletedAgentResult;
     state: ReturnType<typeof createGraphTaskState>;
     decision: GraphRoutingDecision;
   }> = [];
   const attemptedTransitions: Array<{
-    reviewDecision: GraphAgentResult["reviewDecision"];
+    reviewDecision: ReviewDecision;
     state: ReturnType<typeof createGraphTaskState>;
     decision: GraphRoutingDecision;
   }> = [];
   const attemptedDecisions: string[] = [];
 
   for (const reviewDecision of candidateDecisions) {
-    const result: GraphAgentResult = {
+    const result: GraphCompletedAgentResult = {
       agentId: input.senderId,
       status: "completed",
       reviewAgent,
@@ -1066,7 +1066,7 @@ function applyMessageLineAndMatchDecision(input: {
 }
 
 function disambiguateReviewCandidates<T extends {
-  result: GraphAgentResult;
+  result: GraphCompletedAgentResult;
   state: ReturnType<typeof createGraphTaskState>;
   decision: GraphRoutingDecision;
 }>(input: {
@@ -1142,7 +1142,7 @@ export function matchesExpectedTransition(input: {
   state: ReturnType<typeof createGraphTaskState>;
   decision: GraphRoutingDecision;
   senderId: string;
-  reviewDecision: GraphAgentResult["reviewDecision"];
+  reviewDecision: ReviewDecision;
   reviewAgent: boolean;
 }): boolean {
   const deferredReviewTargets = resolveDeferredReviewTargets(
@@ -1250,16 +1250,11 @@ function arraysEqual(left: string[], right: string[]): boolean {
 function resolveDeferredReviewTargets(
   state: ReturnType<typeof createGraphTaskState>,
   senderId: string,
-  reviewDecision: GraphAgentResult["reviewDecision"],
+  reviewDecision: ReviewDecision,
 ): string[] {
   const triggerOn = reviewDecision === "continue"
     ? "continue"
-    : reviewDecision === "complete"
-      ? "complete"
-      : null;
-  if (!triggerOn) {
-    return [];
-  }
+    : "complete";
 
   const effectiveTopology = buildEffectiveTopology(state);
   return [...new Set(
@@ -1273,7 +1268,7 @@ function resolveActualTransitionTargets(
   state: ReturnType<typeof createGraphTaskState>,
   decision: GraphRoutingDecision,
   senderId: string,
-  reviewDecision: GraphAgentResult["reviewDecision"],
+  reviewDecision: ReviewDecision,
 ): string[] {
   if (decision.type === "execute_batch") {
     return getScriptVisibleDecisionTargets(state, decision);

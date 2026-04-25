@@ -1,4 +1,4 @@
-import type { AgentStatus } from "@shared/types";
+import type { AgentStatus, ReviewDecision } from "@shared/types";
 
 type ActionRequiredRequestContinuationInput = {
   continuation: {
@@ -31,13 +31,9 @@ export function shouldStopTaskForUnhandledActionRequiredRequest(input: {
 }
 
 export function resolveAgentStatusFromReview(input: {
-  reviewDecision: "complete" | "continue" | "invalid";
+  reviewDecision: ReviewDecision;
   reviewAgent: boolean;
 }): AgentStatus {
-  if (input.reviewDecision === "invalid") {
-    return "failed";
-  }
-
   if (input.reviewDecision === "continue") {
     return input.reviewAgent ? "continue" : "failed";
   }

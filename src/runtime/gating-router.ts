@@ -3,6 +3,7 @@ import {
   getActionRequiredEdgeLoopLimit,
   getSpawnRules,
   type AgentStatus,
+  type ReviewDecision,
   type TopologyRecord,
   type TopologyEdgeTrigger,
 } from "@shared/types";
@@ -62,18 +63,28 @@ export type GraphRoutingDecision =
       errorMessage: string;
     };
 
-export interface GraphAgentResult {
+interface GraphAgentResultBase {
   agentId: string;
-  status: "completed" | "failed";
   reviewAgent: boolean;
-  reviewDecision: "complete" | "continue" | "invalid";
   agentStatus: AgentStatus;
   agentContextContent: string;
-  opinion: string | null;
   allowDirectFallbackWhenNoBatch: boolean;
   signalDone: boolean;
-  errorMessage?: string;
 }
+
+export type GraphCompletedAgentResult = GraphAgentResultBase & {
+  status: "completed";
+  reviewDecision: ReviewDecision;
+  opinion: string | null;
+};
+
+export type GraphFailedAgentResult = GraphAgentResultBase & {
+  status: "failed";
+  opinion: null;
+  errorMessage?: string;
+};
+
+export type GraphAgentResult = GraphCompletedAgentResult | GraphFailedAgentResult;
 
 interface ActionRequiredLoopLimitDecision {
   errorMessage: string;
@@ -208,17 +219,6 @@ export function applyAgentResultToGraphState(
 
   clearActionRequiredLoopCountsForReviewer(nextState, result.agentId);
 
-  if (result.reviewDecision === "invalid") {
-    nextState.taskStatus = "failed";
-    return {
-      state: nextState,
-      decision: {
-        type: "failed",
-        errorMessage: `${result.agentId} 返回了无效审查结果`,
-      },
-    };
-  }
-
   const primaryDecision = result.reviewAgent
     ? triggerApprovedDownstream(nextState, result.agentId, result.agentContextContent)
     : triggerHandoffDownstream(nextState, result.agentId, result.agentContextContent);
@@ -288,7 +288,7 @@ export function resolveRestrictedRepairTargetsForSource(
 
 function handleActionRequired(
   state: GraphTaskState,
-  result: GraphAgentResult,
+  result: GraphCompletedAgentResult,
   continuation: GatingBatchContinuation | null,
 ): GraphRoutingDecision {
   const actionRequiredTargets = getActionRequiredTargetsForSource(state, result.agentId);
@@ -1166,7 +1166,7 @@ function shouldFinishGraphTask(state: GraphTaskState): boolean {
 
 function shouldFinishGraphTaskFromEndEdge(
   state: GraphTaskState,
-  result: Pick<GraphAgentResult, "agentId" | "signalDone" | "reviewAgent" | "reviewDecision">,
+  result: Pick<GraphCompletedAgentResult, "agentId" | "signalDone" | "reviewAgent" | "reviewDecision">,
 ): boolean {
   const endNode = state.topology.langgraph?.end;
   const endSources = endNode?.sources ?? [];
@@ -1199,7 +1199,7 @@ function shouldFinishGraphTaskFromEndEdge(
 
 function endTriggerMatchesResult(
   triggerOn: TopologyEdgeTrigger | undefined,
-  result: Pick<GraphAgentResult, "reviewAgent" | "reviewDecision">,
+  result: Pick<GraphCompletedAgentResult, "reviewAgent" | "reviewDecision">,
 ): boolean {
   if (!triggerOn) {
     return true;
