@@ -725,6 +725,7 @@ export function TopologyGraph({
                               <AgentHistoryMarkdown
                                 content={item.detailSnippet}
                                 className="mt-1 text-[11px] leading-[1.35] opacity-90 select-text"
+                                style={{ marginTop: "0.125rem" }}
                               />
                             </div>
                           </article>
@@ -844,6 +845,7 @@ export function TopologyGraph({
                         <AgentHistoryMarkdown
                           content={item.detail}
                           className="mt-1 text-[13px] leading-[1.5] text-inherit opacity-95 select-text"
+                          style={{ marginTop: "0.125rem" }}
                         />
                       </div>
                     </article>

@@ -424,6 +424,7 @@ function RunningExecutionBubble({
                   <AgentHistoryMarkdown
                     content={historyItem.detailSnippet}
                     className="mt-1 text-[11px] leading-[1.35] opacity-90 select-text"
+                    style={{ marginTop: "0.125rem" }}
                   />
                 </div>
               </article>

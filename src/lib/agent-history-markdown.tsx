@@ -20,9 +20,11 @@ export function compactAgentHistoryMarkdownContent(content: string): string {
 export function AgentHistoryMarkdown({
   content,
   className,
+  style,
 }: {
   content: string;
   className?: string;
+  style?: CSSProperties;
 }) {
   const normalizedContent = compactAgentHistoryMarkdownContent(content);
 
@@ -32,7 +34,7 @@ export function AgentHistoryMarkdown({
         content={normalizedContent}
         className={className}
         inheritTypography
-        style={AGENT_HISTORY_MARKDOWN_STYLE}
+        style={{ ...AGENT_HISTORY_MARKDOWN_STYLE, ...style }}
       />
     );
   }
@@ -41,7 +43,7 @@ export function AgentHistoryMarkdown({
     <MarkdownMessage
       content={normalizedContent}
       inheritTypography
-      style={AGENT_HISTORY_MARKDOWN_STYLE}
+      style={{ ...AGENT_HISTORY_MARKDOWN_STYLE, ...style }}
     />
   );
 }
