@@ -29,6 +29,7 @@ import {
   type TaskAttachCommandEntry,
 } from "./task-attach-display";
 import { renderOpenCodeCleanupReport } from "./opencode-cleanup-report";
+import { ensureOpencodePreflightPassed } from "./opencode-preflight";
 import { buildUiUrl, UI_LOOPBACK_HOST } from "./ui-host-launch";
 import { startWebHost } from "./web-host";
 import { resolveWorkspaceCwdFromFilesystem } from "./workspace-cwd";
@@ -430,6 +431,10 @@ async function run() {
   }
   activeTaskDiagnosticsForCrash = activeTaskDiagnostics;
   didPrintTaskDiagnosticsForCrash = false;
+
+  if (command.kind === "task.headless" || command.kind === "task.ui") {
+    await ensureOpencodePreflightPassed();
+  }
 
   const context = await createCliContext(
     userDataPath ? { userDataPath } : undefined,
