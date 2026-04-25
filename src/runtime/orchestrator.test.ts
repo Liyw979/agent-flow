@@ -3220,8 +3220,13 @@ test("判定 Agent 未返回合法标签时会沿 continue 边继续回流", asy
     (message) => message.sender === "TaskReview" && message.kind === "continue-request",
   );
   assert.notEqual(continueRequest, undefined);
+  assert.equal(continueRequest?.kind, "continue-request");
+  if (!continueRequest || continueRequest.kind !== "continue-request") {
+    assert.fail("缺少 TaskReview 的 continue-request 消息");
+  }
+  assert.equal(continueRequest.followUpMessageId, taskReviewFinal.id);
   assert.equal(
-    continueRequest?.content,
+    continueRequest.content,
     "当前证据链还不完整，请继续补充实现依据。\n\n<chalenge>请继续补充实现依据。</chalenge>\n\n@Build",
   );
 });

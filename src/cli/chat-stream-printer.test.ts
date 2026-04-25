@@ -64,6 +64,7 @@ function createMessage(input: {
       timestamp: input.timestamp,
       content: input.content,
       kind: "continue-request",
+      followUpMessageId: input.id,
       targetAgentIds: input.targetAgentIds ?? [],
     };
   }

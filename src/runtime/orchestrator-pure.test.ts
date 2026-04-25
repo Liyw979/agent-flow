@@ -22,6 +22,7 @@ type TestMessageInput = {
   finishReason?: string;
   decision?: "complete" | "continue" | "invalid";
   senderDisplayName?: string;
+  followUpMessageId?: string;
 };
 
 import {
@@ -123,6 +124,7 @@ function createMessage(input: TestMessageInput): MessageRecord {
         content: input.content,
         timestamp,
         kind: "continue-request",
+        followUpMessageId: input.followUpMessageId ?? "follow-up-message-id",
         targetAgentIds: input.targetAgentIds ?? [],
         ...(input.senderDisplayName ? { senderDisplayName: input.senderDisplayName } : {}),
       };

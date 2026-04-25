@@ -21,6 +21,7 @@ test("用户派发决策使用 agentId 字段表达来源和目标", () => {
   assert.equal(decision.type, "execute_batch");
   assert.deepEqual(decision.batch, {
     sourceAgentId: null,
+    sourceMessageId: "",
     sourceContent: "实现加法",
     triggerTargets: ["Build"],
     jobs: [

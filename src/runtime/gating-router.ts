@@ -43,6 +43,7 @@ export interface GraphDispatchJob {
 
 export interface GraphDispatchBatch {
   sourceAgentId: string | null;
+  sourceMessageId: string;
   sourceContent?: string;
   displayContent?: string;
   jobs: GraphDispatchJob[];
@@ -65,6 +66,7 @@ export type GraphRoutingDecision =
 
 export interface GraphAgentResult {
   agentId: string;
+  messageId?: string;
   status: "completed" | "failed";
   decisionAgent: boolean;
   decision: Decision;
@@ -108,6 +110,7 @@ export function createUserDispatchDecision(
         type: "execute_batch",
         batch: {
           sourceAgentId: input.targetAgentId,
+          sourceMessageId: "",
           sourceContent: input.content,
           triggerTargets: [...entryTargets],
           jobs: entryTargets.map((agentId) => ({
@@ -129,6 +132,7 @@ export function createUserDispatchDecision(
     type: "execute_batch",
     batch: {
       sourceAgentId: null,
+      sourceMessageId: "",
       sourceContent: input.content,
       triggerTargets: [input.targetAgentId],
       jobs: [
@@ -150,6 +154,7 @@ export function applyAgentResultToGraphState(
   decision: GraphRoutingDecision;
 } {
   const nextState = cloneGraphTaskState(state);
+  const resultMessageId = result.messageId ?? "";
   ensureRuntimeAgentStatuses(nextState);
   nextState.agentStatusesByName[result.agentId] = result.agentStatus;
   nextState.agentContextByName[result.agentId] = result.agentContextContent;
@@ -220,8 +225,8 @@ export function applyAgentResultToGraphState(
   }
 
   const primaryDecision = result.decisionAgent
-    ? triggerApprovedDownstream(nextState, result.agentId, result.agentContextContent)
-    : triggerHandoffDownstream(nextState, result.agentId, result.agentContextContent);
+    ? triggerApprovedDownstream(nextState, result.agentId, resultMessageId, result.agentContextContent)
+    : triggerHandoffDownstream(nextState, result.agentId, resultMessageId, result.agentContextContent);
   if (primaryDecision.type === "execute_batch") {
     markCompletedSpawnActivationAsDispatchedIfReady(nextState, result.agentId);
     return { state: nextState, decision: primaryDecision };
@@ -299,6 +304,7 @@ function handleActionRequired(
   continuation: GatingBatchContinuation | null,
 ): GraphRoutingDecision {
   const actionRequiredTargets = getActionRequiredTargetsForSource(state, result.agentId);
+  const sourceMessageId = result.messageId ?? "";
   const continuationAction = resolveActionRequiredRequestContinuationAction({
     continuation,
     fallbackActionWhenNoBatch:
@@ -308,6 +314,7 @@ function handleActionRequired(
   });
   if (actionRequiredTargets.length > 0 && continuationAction !== "ignore") {
     state.pendingActionRequiredRequestsByAgent[result.agentId] = {
+      sourceMessageId,
       opinion: result.opinion,
       agentContextContent: result.agentContextContent,
     } satisfies GraphActionRequiredRequest;
@@ -362,6 +369,7 @@ function handleActionRequired(
     return triggerActionRequiredRequestDownstream(
       state,
       continuation.repairDecisionAgentId,
+      storedDecision.sourceMessageId,
       revisionContent,
     );
   }
@@ -392,6 +400,7 @@ function handleActionRequired(
     return triggerActionRequiredRequestDownstream(
       state,
       result.agentId,
+      storedDecision?.sourceMessageId ?? sourceMessageId,
       storedDecision?.opinion?.trim()
       || storedDecision?.agentContextContent
       || result.opinion?.trim()
@@ -405,6 +414,7 @@ function handleActionRequired(
       return triggerActionRequiredRequestDownstream(
         state,
         result.agentId,
+        sourceMessageId,
         result.opinion?.trim()
         || result.agentContextContent
         || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。",
@@ -469,6 +479,7 @@ function continueAfterHandoffBatchResponse(
     return triggerActionRequiredRequestDownstream(
       state,
       continuation.repairDecisionAgentId,
+      storedDecision.sourceMessageId,
       revisionContent,
     );
   }
@@ -477,6 +488,7 @@ function continueAfterHandoffBatchResponse(
     return triggerHandoffDownstream(
       state,
       continuation.sourceAgentId,
+      "",
       continuation.sourceContent,
       new Set(continuation.redispatchTargets),
       false,
@@ -499,6 +511,7 @@ function continueAfterHandoffBatchResponse(
 function triggerActionRequiredRequestDownstream(
   state: GraphTaskState,
   sourceAgentId: string,
+  sourceMessageId: string,
   revisionContent?: string,
   restrictTargets?: Set<string>,
 ): GraphRoutingDecision {
@@ -535,6 +548,7 @@ function triggerActionRequiredRequestDownstream(
     type: "execute_batch",
     batch: {
       sourceAgentId,
+      sourceMessageId,
       sourceContent,
       triggerTargets: [...dispatchTargets],
       jobs: dispatchTargets.map((targetName) => ({
@@ -561,6 +575,7 @@ function resolveRepairTargetAgentId(
 function triggerHandoffDownstream(
   state: GraphTaskState,
   sourceAgentId: string,
+  sourceMessageId: string,
   sourceContent: string,
   restrictTargets?: Set<string>,
   advanceSourceRevision = true,
@@ -594,14 +609,15 @@ function triggerHandoffDownstream(
     };
   }
   if (nextPlan) {
-    return planToDecision(nextPlan, "transfer");
+    return planToDecision(nextPlan, "transfer", sourceMessageId);
   }
-  return planToDecision(plan, "transfer");
+  return planToDecision(plan, "transfer", sourceMessageId);
 }
 
 function triggerApprovedDownstream(
   state: GraphTaskState,
   sourceAgentId: string,
+  sourceMessageId: string,
   sourceContent: string,
   displayContent?: string,
 ): GraphRoutingDecision {
@@ -623,14 +639,15 @@ function triggerApprovedDownstream(
     };
   }
   if (nextPlan) {
-    return planToDecision(nextPlan, "complete", displayContent);
+    return planToDecision(nextPlan, "complete", sourceMessageId, displayContent);
   }
-  return planToDecision(plan, "complete", displayContent);
+  return planToDecision(plan, "complete", sourceMessageId, displayContent);
 }
 
 function planToDecision(
   plan: GatingDispatchPlan | null,
   kind: GraphDispatchJob["kind"],
+  sourceMessageId: string,
   displayContent?: string,
 ): GraphRoutingDecision {
   if (!plan || plan.triggerTargets.length === 0) {
@@ -645,6 +662,7 @@ function planToDecision(
     type: "execute_batch",
     batch: {
       sourceAgentId: plan.sourceAgentId,
+      sourceMessageId,
       sourceContent: plan.sourceContent,
       ...(displayContent ? { displayContent } : {}),
       triggerTargets: [...plan.triggerTargets],
@@ -867,7 +885,7 @@ function isRuntimeNodeFromDispatchedSpawnActivation(
 
 function continueBlockedAllCompletedDebateIfNeeded(
   state: GraphTaskState,
-  result: Pick<GraphAgentResult, "agentId" | "agentContextContent" | "opinion">,
+  result: Pick<GraphAgentResult, "agentId" | "messageId" | "agentContextContent" | "opinion">,
 ): GraphRoutingDecision | null {
   const pendingDebateTargets = resolvePendingAllCompletedDebateTargets(state, result.agentId);
   if (pendingDebateTargets.length === 0) {
@@ -877,6 +895,7 @@ function continueBlockedAllCompletedDebateIfNeeded(
   return triggerActionRequiredRequestDownstream(
     state,
     result.agentId,
+    result.messageId ?? "",
     result.opinion?.trim()
     || result.agentContextContent
     || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。",
@@ -1015,7 +1034,7 @@ function continueCompletedSpawnActivations(
   const aggregatedContent = buildSpawnActivationContent(state, activation.id, activation.sourceContent);
   state.agentStatusesByName[activation.spawnNodeName] = "completed";
   state.agentContextByName[activation.spawnNodeName] = aggregatedContent;
-  return triggerHandoffDownstream(state, activation.spawnNodeName, aggregatedContent);
+  return triggerHandoffDownstream(state, activation.spawnNodeName, "", aggregatedContent);
 }
 
 function buildSpawnActivationContent(
@@ -1167,6 +1186,7 @@ function continueAfterDecisionLoopLimit(
     return triggerActionRequiredRequestDownstream(
       state,
       nextDecisionAgentId,
+      storedDecision.sourceMessageId,
       storedDecision.opinion?.trim()
       || storedDecision.agentContextContent
       || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。",
@@ -1176,6 +1196,7 @@ function continueAfterDecisionLoopLimit(
   const loopLimitEscalationDecision = triggerApprovedDownstream(
     state,
     decisionAgentId,
+    "",
     buildActionRequiredLoopLimitEscalationForwardContent({
       decisionAgentId,
       repairTargetAgentId,

@@ -261,11 +261,11 @@ function shouldMergeAgentFinalWithDispatch(previous: ChatMessageItem, current: M
 function shouldMergeActionRequiredRequest(previous: ChatMessageItem, current: MessageRecord) {
   const previousLastMessage = previous.messageChain.at(-1);
   return (
+    current.kind === "continue-request" &&
     previous.kinds.at(-1) === "agent-final" &&
     !!previousLastMessage &&
     isAgentFinalMessageRecord(previousLastMessage) &&
-    previousLastMessage.decision === "continue" &&
-    current.kind === "continue-request"
+    current.followUpMessageId === previousLastMessage.id
   );
 }
 
@@ -290,7 +290,7 @@ function findActionRequiredRequestMergeTargetIndex(
       candidate.kinds.at(-1) === "agent-final" &&
       !!candidateLastMessage &&
       isAgentFinalMessageRecord(candidateLastMessage) &&
-      candidateLastMessage.decision === "continue"
+      current.followUpMessageId === candidateLastMessage.id
     ) {
       return index;
     }
