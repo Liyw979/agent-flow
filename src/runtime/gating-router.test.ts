@@ -854,6 +854,50 @@ test("线索发现存在 finding 且未发出 TASK_DONE 时，会按条件分支
   assert.deepEqual(afterTriage.decision.batch.jobs.map((job) => job.agentId), ["漏洞挑战-1"]);
 });
 
+test("漏洞团队里漏洞挑战首轮直接 complete 时，会继续派发到漏洞论证而不是结束任务", () => {
+  const topology = createBuiltinVulnerabilityTopology();
+  const state = createGraphTaskState({
+    taskId: "task-vulnerability-challenge-complete-needs-argument",
+    topology,
+  });
+
+  const afterTriage = applyAgentResultToGraphState(state, {
+    agentId: "线索发现",
+    status: "completed",
+    decisionAgent: true,
+    decision: "continue",
+    agentStatus: "continue",
+    agentContextContent: "发现一个新的可疑点。",
+    opinion: null,
+    allowDirectFallbackWhenNoBatch: false,
+    signalDone: false,
+  });
+  assert.equal(afterTriage.decision.type, "execute_batch");
+  assert.deepEqual(afterTriage.decision.batch.jobs.map((job) => job.agentId), ["漏洞挑战-1"]);
+
+  const afterChallenge = applyAgentResultToGraphState(afterTriage.state, {
+    agentId: "漏洞挑战-1",
+    status: "completed",
+    decisionAgent: true,
+    decision: "complete",
+    agentStatus: "completed",
+    agentContextContent: "当前材料已经足够，可以进入总结。",
+    opinion: null,
+    allowDirectFallbackWhenNoBatch: false,
+    signalDone: false,
+  });
+
+  assert.equal(afterChallenge.decision.type, "execute_batch");
+  assert.equal(afterChallenge.decision.batch.sourceAgentId, "漏洞挑战-1");
+  assert.deepEqual(afterChallenge.decision.batch.jobs, [
+    {
+      agentId: "漏洞论证-1",
+      sourceAgentId: "漏洞挑战-1",
+      kind: "continue_request",
+    },
+  ]);
+});
+
 test("__end__ 带 trigger 时，不匹配的判定结论不能直接结束", () => {
   const topology = createBuiltinVulnerabilityTopology();
   const state = createGraphTaskState({

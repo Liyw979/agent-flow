@@ -372,7 +372,7 @@ export class GatingScheduler {
     if (
       triggerKind === "complete"
       && incomingApprovedEdges.length > 0
-      && !incomingApprovedEdges.some((edge) => this.isIncomingEdgeSatisfied(edge, completedEdges))
+      && !this.hasSatisfiedApprovedEdgesForTarget(targetName, incomingApprovedEdges, completedEdges, agentStates)
     ) {
       return false;
     }
@@ -387,6 +387,96 @@ export class GatingScheduler {
     }
 
     return true;
+  }
+
+  private hasSatisfiedApprovedEdgesForTarget(
+    targetName: string,
+    incomingApprovedEdges: TopologyEdge[],
+    completedEdges: Set<string>,
+    agentStates: GatingAgentState[],
+  ): boolean {
+    if (incomingApprovedEdges.length === 0) {
+      return true;
+    }
+
+    if (this.requiresAllApprovedIncomingEdges(targetName, incomingApprovedEdges)) {
+      return incomingApprovedEdges.some((edge) => this.isIncomingEdgeSatisfied(edge, completedEdges))
+        && incomingApprovedEdges.every((edge) => this.hasSettledAgentState(edge.source, agentStates));
+    }
+
+    return incomingApprovedEdges.some((edge) => this.isIncomingEdgeSatisfied(edge, completedEdges));
+  }
+
+  private requiresAllApprovedIncomingEdges(
+    targetName: string,
+    incomingApprovedEdges: TopologyEdge[],
+  ): boolean {
+    if (incomingApprovedEdges.length <= 1) {
+      return false;
+    }
+
+    const targetTemplateName = this.getTemplateName(targetName);
+    if (!targetTemplateName) {
+      return false;
+    }
+    const actualSourceTemplateNames = this.uniqueValues(
+      incomingApprovedEdges.map((edge) => this.getTemplateName(edge.source)).filter((value): value is string => Boolean(value)),
+    );
+    if (actualSourceTemplateNames.length !== incomingApprovedEdges.length) {
+      return false;
+    }
+
+    return (this.topology.spawnRules ?? []).some((rule) => {
+      if (rule.exitWhen !== "all_completed") {
+        return false;
+      }
+
+      const targetRoles = rule.spawnedAgents
+        .filter((agent) => agent.templateName === targetTemplateName)
+        .map((agent) => agent.role);
+      if (targetRoles.length === 0) {
+        return false;
+      }
+
+      return targetRoles.some((targetRole) => {
+        const requiredEdges = rule.edges.filter(
+          (edge) => edge.triggerOn === "complete" && edge.targetRole === targetRole,
+        );
+        if (requiredEdges.length <= 1) {
+          return false;
+        }
+
+        const requiredSourceTemplateNames = this.uniqueValues(
+          requiredEdges.map((edge) => this.getSpawnedTemplateName(rule, edge.sourceRole)).filter((value): value is string => Boolean(value)),
+        );
+        return requiredSourceTemplateNames.length === actualSourceTemplateNames.length
+          && requiredSourceTemplateNames.every((templateName) => actualSourceTemplateNames.includes(templateName));
+      });
+    });
+  }
+
+  private getTemplateName(nodeId: string): string | null {
+    const nodeRecord = this.topology.nodeRecords?.find((node) => node.id === nodeId);
+    return nodeRecord?.templateName ?? nodeId;
+  }
+
+  private getSpawnedTemplateName(
+    rule: NonNullable<TopologyRecord["spawnRules"]>[number],
+    role: string,
+  ): string | null {
+    return rule.spawnedAgents.find((agent) => agent.role === role)?.templateName ?? null;
+  }
+
+  private uniqueValues(values: string[]): string[] {
+    return [...new Set(values)];
+  }
+
+  private hasSettledAgentState(agentId: string, agentStates: GatingAgentState[]): boolean {
+    const agentState = agentStates.find((agent) => agent.id === agentId);
+    if (!agentState) {
+      return false;
+    }
+    return agentState.status !== "idle" && agentState.status !== "running";
   }
 
   private isIncomingEdgeSatisfied(edge: TopologyEdge, completedEdges: Set<string>): boolean {

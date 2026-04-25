@@ -227,6 +227,13 @@ export function applyAgentResultToGraphState(
     return { state: nextState, decision: primaryDecision };
   }
 
+  if (result.decisionAgent && result.decision === "complete") {
+    const continuedDebateDecision = continueBlockedAllCompletedDebateIfNeeded(nextState, result);
+    if (continuedDebateDecision) {
+      return { state: nextState, decision: continuedDebateDecision };
+    }
+  }
+
   const continuationDecision = continueAfterHandoffBatchResponse(
     nextState,
     batchContinuation,
@@ -493,9 +500,12 @@ function triggerActionRequiredRequestDownstream(
   state: GraphTaskState,
   sourceAgentId: string,
   revisionContent?: string,
+  restrictTargets?: Set<string>,
 ): GraphRoutingDecision {
   const targets = getActionRequiredTargetsForSource(state, sourceAgentId).filter(
-    (targetName) => targetName !== sourceAgentId,
+    (targetName) =>
+      targetName !== sourceAgentId
+      && (!restrictTargets || restrictTargets.has(targetName)),
   );
   if (targets.length === 0) {
     return {
@@ -853,6 +863,111 @@ function isRuntimeNodeFromDispatchedSpawnActivation(
     activation.dispatched
     && activation.bundleGroupIds.includes(runtimeNode.groupId ?? "")
   );
+}
+
+function continueBlockedAllCompletedDebateIfNeeded(
+  state: GraphTaskState,
+  result: Pick<GraphAgentResult, "agentId" | "agentContextContent" | "opinion">,
+): GraphRoutingDecision | null {
+  const pendingDebateTargets = resolvePendingAllCompletedDebateTargets(state, result.agentId);
+  if (pendingDebateTargets.length === 0) {
+    return null;
+  }
+
+  return triggerActionRequiredRequestDownstream(
+    state,
+    result.agentId,
+    result.opinion?.trim()
+    || result.agentContextContent
+    || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。",
+    new Set(pendingDebateTargets),
+  );
+}
+
+function resolvePendingAllCompletedDebateTargets(
+  state: GraphTaskState,
+  sourceAgentId: string,
+): string[] {
+  const topology = buildEffectiveTopology(state);
+  const continueTargets = getActionRequiredTargetsForSource(state, sourceAgentId).filter(
+    (targetName) =>
+      targetName !== sourceAgentId
+      && getAgentStatusById(state, targetName) === "idle",
+  );
+  if (continueTargets.length === 0) {
+    return [];
+  }
+
+  const sourceTemplateName = getTemplateNameForNode(topology, sourceAgentId);
+  if (!sourceTemplateName) {
+    return [];
+  }
+
+  const pendingTargetIds = new Set<string>();
+  for (const edge of topology.edges.filter((candidate) =>
+    candidate.source === sourceAgentId && candidate.triggerOn === "complete"
+  )) {
+    const summaryTemplateName = getTemplateNameForNode(topology, edge.target);
+    if (!summaryTemplateName) {
+      continue;
+    }
+
+    for (const rule of topology.spawnRules ?? []) {
+      if (rule.exitWhen !== "all_completed") {
+        continue;
+      }
+
+      const matchingSummaryRoles = rule.spawnedAgents
+        .filter((agent) => agent.templateName === summaryTemplateName)
+        .map((agent) => agent.role);
+      if (matchingSummaryRoles.length === 0) {
+        continue;
+      }
+
+      for (const summaryRole of matchingSummaryRoles) {
+        const requiredSourceTemplateNames = uniqueStringValues(
+          rule.edges
+            .filter((ruleEdge) => ruleEdge.triggerOn === "complete" && ruleEdge.targetRole === summaryRole)
+            .map((ruleEdge) => getSpawnRuleTemplateNameForRole(rule, ruleEdge.sourceRole))
+            .filter((value): value is string => Boolean(value)),
+        );
+        if (
+          requiredSourceTemplateNames.length <= 1
+          || !requiredSourceTemplateNames.includes(sourceTemplateName)
+        ) {
+          continue;
+        }
+
+        for (const continueTarget of continueTargets) {
+          const continueTargetTemplateName = getTemplateNameForNode(topology, continueTarget);
+          if (continueTargetTemplateName && requiredSourceTemplateNames.includes(continueTargetTemplateName)) {
+            pendingTargetIds.add(continueTarget);
+          }
+        }
+      }
+    }
+  }
+
+  return [...pendingTargetIds];
+}
+
+function getTemplateNameForNode(topology: TopologyRecord, nodeId: string): string | null {
+  return topology.nodeRecords?.find((node) => node.id === nodeId)?.templateName ?? nodeId;
+}
+
+function getSpawnRuleTemplateNameForRole(
+  rule: NonNullable<TopologyRecord["spawnRules"]>[number],
+  role: string,
+): string | null {
+  return rule.spawnedAgents.find((agent) => agent.role === role)?.templateName ?? null;
+}
+
+function uniqueStringValues(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function getAgentStatusById(state: GraphTaskState, agentId: string): AgentStatus | undefined {
+  return state.agentStatusesByName[agentId];
 }
 
 function continueCompletedSpawnActivations(
