@@ -1515,6 +1515,9 @@ export class Orchestrator {
             this.getOutgoingEdges(topology, job.agentId, "continue").length > 0,
         };
       } else if (job.kind === "continue_request") {
+        if (!batch.sourceMessageId.trim()) {
+          throw new Error(`${batch.sourceAgentId ?? "DecisionAgent"} 的 continue-request 缺少 followUpMessageId`);
+        }
         const revisionContent =
           batch.sourceContent?.trim()
           || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
@@ -1539,6 +1542,7 @@ export class Orchestrator {
             [job.agentId],
           ),
           kind: "continue-request",
+          followUpMessageId: batch.sourceMessageId,
           targetAgentIds: [job.agentId],
           ...withOptionalString(
             {},
@@ -1741,6 +1745,7 @@ export class Orchestrator {
       const signal = this.parseSignal(response.finalMessage);
       return {
         agentId: runtimeAgentId,
+        messageId: taskMessage.id,
         status: "completed",
         decisionAgent,
         decision: parsedDecision.decision,
@@ -1792,6 +1797,7 @@ export class Orchestrator {
 
       return {
         agentId: runtimeAgentId,
+        messageId: "",
         status: "failed",
         decisionAgent,
         decision: "invalid",

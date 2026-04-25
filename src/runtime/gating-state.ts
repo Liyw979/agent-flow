@@ -9,6 +9,7 @@ import type {
 } from "@shared/types";
 
 export interface GraphActionRequiredRequest {
+  sourceMessageId: string;
   opinion: string | null;
   agentContextContent: string;
 }
@@ -201,6 +202,7 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
       Object.entries(state.pendingActionRequiredRequestsByAgent).map(([agentId, request]) => [
         agentId,
         {
+          sourceMessageId: request.sourceMessageId,
           opinion: request.opinion,
           agentContextContent: request.agentContextContent,
         },

@@ -258,6 +258,7 @@ export interface AgentDispatchMessageRecord extends BaseMessageRecord {
 
 export interface ActionRequiredRequestMessageRecord extends BaseMessageRecord {
   kind: "continue-request";
+  followUpMessageId: string;
   targetAgentIds: string[];
   senderDisplayName?: string;
 }
