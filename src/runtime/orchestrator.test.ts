@@ -3030,10 +3030,10 @@ test("审查 Agent 未返回合法标签时应标记为 invalid", () => {
         validationError: string | null;
       };
     }
-  ).parseReview("这是普通审查正文，标签写错了。\n\n<chalenge>请继续补充实现依据。</chalenge>", true);
+  ).parseReview("这是普通审查正文，标签写错了。\n\n<invalid>请继续补充实现依据。</invalid>", true);
 
   assert.deepEqual(parsedReview, {
-    cleanContent: "这是普通审查正文，标签写错了。\n\n<chalenge>请继续补充实现依据。</chalenge>",
+    cleanContent: "这是普通审查正文，标签写错了。\n\n<invalid>请继续补充实现依据。</invalid>",
     decision: "invalid",
     opinion: null,
     rawDecisionBlock: null,
