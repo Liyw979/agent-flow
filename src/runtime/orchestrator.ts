@@ -947,13 +947,11 @@ export class Orchestrator {
   private resolveAgentContextContent(
     parsedDecision: ParsedDecision,
     rawFinalMessage: string,
-    fallbackMessage?: string | null,
   ): string {
     const candidates = [
       parsedDecision.cleanContent.trim(),
       parsedDecision.opinion?.trim() ?? "",
       this.stripStructuredSignals(stripDecisionResponseMarkup(rawFinalMessage)).trim(),
-      fallbackMessage?.trim() ?? "",
     ];
 
     return candidates.find((item) => item.length > 0) ?? "";
@@ -995,7 +993,7 @@ export class Orchestrator {
     return trailingSection || content;
   }
 
-  protected createDisplayContent(parsedDecision: ParsedDecision, fallbackMessage?: string | null): string {
+  protected createDisplayContent(parsedDecision: ParsedDecision): string {
     const preferTrailingDeliverySection = parsedDecision.decision === "invalid";
     const cleanContent = this.extractAgentDisplayContent(parsedDecision.cleanContent, {
       preferTrailingDeliverySection,
@@ -1005,16 +1003,6 @@ export class Orchestrator {
     }
     if (cleanContent) {
       return cleanContent;
-    }
-
-    const fallbackContent = this.extractAgentDisplayContent(fallbackMessage?.trim() ?? "", {
-      preferTrailingDeliverySection,
-    });
-    if (parsedDecision.decision === "invalid" && parsedDecision.validationError) {
-      return [fallbackContent, parsedDecision.validationError].filter(Boolean).join("\n\n");
-    }
-    if (fallbackContent) {
-      return fallbackContent;
     }
 
     const opinion = parsedDecision.opinion?.trim();
@@ -1029,7 +1017,7 @@ export class Orchestrator {
       return parsedDecision.validationError ?? "（该 Agent 返回了无效的判定结果。）";
     }
     if (parsedDecision.decision === "complete") {
-      return "通过";
+      return "";
     }
     return "（该 Agent 未返回可展示的结果正文。）";
   }
@@ -1680,12 +1668,15 @@ export class Orchestrator {
       const agentContextContent = this.resolveAgentContextContent(
         parsedDecision,
         response.finalMessage,
-        response.fallbackMessage,
       );
+      const displayContent = this.createDisplayContent(parsedDecision);
+      if (!displayContent) {
+        throw new Error(`${runtimeAgentId} 未返回可展示的结果正文`);
+      }
       const taskMessage: MessageRecord = {
         id: response.messageId,
         taskId: task.id,
-        content: this.createDisplayContent(parsedDecision, response.fallbackMessage),
+        content: displayContent,
         sender: runtimeAgentId,
         timestamp: response.timestamp,
         kind: "agent-final",
