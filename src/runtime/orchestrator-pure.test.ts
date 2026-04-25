@@ -20,7 +20,7 @@ type TestMessageInput = {
   agentFinalStatus?: "completed" | "error";
   taskCompletedStatus?: "failed";
   finishReason?: string;
-  reviewDecision?: "complete" | "continue" | "invalid";
+  reviewDecision?: "complete" | "continue";
   senderDisplayName?: string;
 };
 
@@ -765,13 +765,13 @@ test("reviewer 给出需要修复时应标记为 action_required 而不是 faile
   assert.equal(status, "continue");
 });
 
-test("reviewer 缺少强制标签时应标记为 failed", () => {
+test("reviewer 给出完成结论时应标记为 completed", () => {
   const status = resolveAgentStatusFromReview({
-    reviewDecision: "invalid",
+    reviewDecision: "complete",
     reviewAgent: true,
   });
 
-  assert.equal(status, "failed");
+  assert.equal(status, "completed");
 });
 
 test("非拓扑驱动的单次执行后，仍有未完成 Agent 时任务进入 finished", () => {

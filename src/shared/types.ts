@@ -12,6 +12,8 @@ export type TaskStatus =
   | "failed"
   | "continue";
 
+export type ReviewDecision = "complete" | "continue";
+
 export type PermissionMode = "allow" | "ask" | "deny";
 
 export const BUILD_AGENT_ID = "Build";
@@ -19,15 +21,6 @@ export const BUILD_AGENT_ID = "Build";
 export function usesOpenCodeBuiltinPrompt(agentId: string): boolean {
   return agentId.trim().toLowerCase() === BUILD_AGENT_ID.toLowerCase();
 }
-
-export type AgentRole =
-  | "business_analyst"
-  | "implementation"
-  | "task_review"
-  | "code_review"
-  | "unit_test"
-  | "integration_test"
-  | string;
 
 export function getWorkspaceNameFromPath(workspacePath: string): string {
   const normalized = workspacePath.trim().replace(/[\\/]+$/, "");
@@ -247,7 +240,7 @@ export interface TaskCreatedMessageRecord extends BaseMessageRecord {
 
 export interface AgentFinalMessageRecord extends BaseMessageRecord {
   kind: "agent-final";
-  reviewDecision: "complete" | "continue" | "invalid";
+  reviewDecision: ReviewDecision;
   reviewOpinion: string;
   rawResponse: string;
   status: "completed" | "error";
