@@ -80,7 +80,7 @@ export interface GraphAgentResult {
 
 interface ActionRequiredLoopLimitDecision {
   errorMessage: string;
-  maxRevisionRounds: number;
+  maxContinueRounds: number;
 }
 
 export function createGraphTaskState(input: {
@@ -361,7 +361,7 @@ function handleActionRequired(
     if (restrictedRepairTargets.length > 0) {
       state.pendingHandoffRepairTargetsBySource[repairTargetAgentId] = restrictedRepairTargets;
     }
-    const revisionContent =
+    const continueContent =
       storedDecision.opinion?.trim()
       || storedDecision.agentContextContent
       || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
@@ -370,7 +370,7 @@ function handleActionRequired(
       state,
       continuation.repairDecisionAgentId,
       storedDecision.sourceMessageId,
-      revisionContent,
+      continueContent,
     );
   }
 
@@ -471,7 +471,7 @@ function continueAfterHandoffBatchResponse(
     if (restrictedRepairTargets.length > 0) {
       state.pendingHandoffRepairTargetsBySource[continuation.sourceAgentId] = restrictedRepairTargets;
     }
-    const revisionContent =
+    const continueContent =
       storedDecision.opinion?.trim()
       || storedDecision.agentContextContent
       || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
@@ -480,7 +480,7 @@ function continueAfterHandoffBatchResponse(
       state,
       continuation.repairDecisionAgentId,
       storedDecision.sourceMessageId,
-      revisionContent,
+      continueContent,
     );
   }
 
@@ -512,7 +512,7 @@ function triggerActionRequiredRequestDownstream(
   state: GraphTaskState,
   sourceAgentId: string,
   sourceMessageId: string,
-  revisionContent?: string,
+  continueContent?: string,
   restrictTargets?: Set<string>,
 ): GraphRoutingDecision {
   const targets = getActionRequiredTargetsForSource(state, sourceAgentId).filter(
@@ -527,7 +527,7 @@ function triggerActionRequiredRequestDownstream(
     };
   }
   const sourceContent =
-    revisionContent
+    continueContent
     || state.pendingActionRequiredRequestsByAgent[sourceAgentId]?.opinion?.trim()
     || state.pendingActionRequiredRequestsByAgent[sourceAgentId]?.agentContextContent
     || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
@@ -578,7 +578,7 @@ function triggerHandoffDownstream(
   sourceMessageId: string,
   sourceContent: string,
   restrictTargets?: Set<string>,
-  advanceSourceRevision = true,
+  advanceSourceRound = true,
 ): GraphRoutingDecision {
   const runtime = graphStateToSchedulerRuntime(state);
   const scheduler = new GatingScheduler(buildEffectiveTopology(state), runtime);
@@ -592,7 +592,7 @@ function triggerHandoffDownstream(
     buildGatingAgentStates(state),
     {
       ...(effectiveRestrictTargets ? { restrictTargets: effectiveRestrictTargets } : {}),
-      advanceSourceRevision,
+      advanceSourceRound,
     },
   );
   applySchedulerRuntimeToGraphState(state, runtime);
@@ -1118,7 +1118,7 @@ function enforceActionRequiredLoopLimit(
   sourceAgentId: string,
   targetAgentId: string,
 ): ActionRequiredLoopLimitDecision | null {
-  const maxRevisionRounds = getActionRequiredEdgeLoopLimit(
+  const maxContinueRounds = getActionRequiredEdgeLoopLimit(
     buildEffectiveTopology(state),
     sourceAgentId,
     targetAgentId,
@@ -1126,14 +1126,14 @@ function enforceActionRequiredLoopLimit(
   const edgeKey = buildActionRequiredLoopEdgeKey(sourceAgentId, targetAgentId);
   const nextCount = (state.actionRequiredLoopCountByEdge[edgeKey] ?? 0) + 1;
   state.actionRequiredLoopCountByEdge[edgeKey] = nextCount;
-  if (nextCount <= maxRevisionRounds) {
+  if (nextCount <= maxContinueRounds) {
     return null;
   }
 
-  const normalizedMaxRevisionRounds = maxRevisionRounds || DEFAULT_ACTION_REQUIRED_MAX_ROUNDS;
+  const normalizedMaxContinueRounds = maxContinueRounds || DEFAULT_ACTION_REQUIRED_MAX_ROUNDS;
   return {
-    errorMessage: `${sourceAgentId} -> ${targetAgentId} 已连续交流 ${normalizedMaxRevisionRounds} 次，任务已结束`,
-    maxRevisionRounds: normalizedMaxRevisionRounds,
+    errorMessage: `${sourceAgentId} -> ${targetAgentId} 已连续交流 ${normalizedMaxContinueRounds} 次，任务已结束`,
+    maxContinueRounds: normalizedMaxContinueRounds,
   };
 }
 
@@ -1205,7 +1205,7 @@ function continueAfterDecisionLoopLimit(
     buildActionRequiredLoopLimitEscalationDisplayContent({
       decisionAgentId,
       repairTargetAgentId,
-      maxRevisionRounds: loopLimitDecision.maxRevisionRounds,
+      maxContinueRounds: loopLimitDecision.maxContinueRounds,
     }),
   );
   if (loopLimitEscalationDecision.type === "execute_batch") {
@@ -1234,9 +1234,9 @@ function buildActionRequiredLoopLimitEscalationForwardContent(input: {
 function buildActionRequiredLoopLimitEscalationDisplayContent(input: {
   decisionAgentId: string;
   repairTargetAgentId: string;
-  maxRevisionRounds: number;
+  maxContinueRounds: number;
 }): string {
-  return `${input.decisionAgentId} -> ${input.repairTargetAgentId} 已连续交流 ${input.maxRevisionRounds} 次`;
+  return `${input.decisionAgentId} -> ${input.repairTargetAgentId} 已连续交流 ${input.maxContinueRounds} 次`;
 }
 
 function findNextPendingRepairDecisionAgent(

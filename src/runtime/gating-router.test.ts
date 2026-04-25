@@ -408,7 +408,7 @@ test("并发 decisionAgent 中单条回流链路超限时，不应提前打断�
       { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
       { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
       { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "UnitTest", target: "Build", triggerOn: "continue", maxRevisionRounds: 1, messageMode: "last" },
+      { source: "UnitTest", target: "Build", triggerOn: "continue", maxContinueRounds: 1, messageMode: "last" },
       { source: "UnitTest", target: "Judge", triggerOn: "complete", messageMode: "last" },
       { source: "TaskReview", target: "Build", triggerOn: "continue", messageMode: "last" },
       { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
@@ -527,7 +527,7 @@ test("回流超限时，如果 decisionAgent 正文已包含最终结论提示�
     nodes: ["Build", "漏洞挑战-1", "讨论总结-1"],
     edges: [
       { source: "Build", target: "漏洞挑战-1", triggerOn: "transfer", messageMode: "last" },
-      { source: "漏洞挑战-1", target: "Build", triggerOn: "continue", messageMode: "last", maxRevisionRounds: 1 },
+      { source: "漏洞挑战-1", target: "Build", triggerOn: "continue", messageMode: "last", maxContinueRounds: 1 },
       { source: "漏洞挑战-1", target: "讨论总结-1", triggerOn: "complete", messageMode: "last" },
     ],
   };
@@ -608,7 +608,7 @@ test("回流超限转给 approved 下游时，不应把系统超限提示注入�
     nodes: ["Build", "漏洞挑战-1", "讨论总结-1"],
     edges: [
       { source: "Build", target: "漏洞挑战-1", triggerOn: "transfer", messageMode: "last" },
-      { source: "漏洞挑战-1", target: "Build", triggerOn: "continue", messageMode: "last", maxRevisionRounds: 1 },
+      { source: "漏洞挑战-1", target: "Build", triggerOn: "continue", messageMode: "last", maxContinueRounds: 1 },
       { source: "漏洞挑战-1", target: "讨论总结-1", triggerOn: "complete", messageMode: "last" },
     ],
   };

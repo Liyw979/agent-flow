@@ -40,7 +40,7 @@ interface GraphDslLink {
   to: string;
   trigger_type: TopologyEdgeTrigger;
   message_type: TopologyEdgeMessageMode;
-  maxRevisionRounds?: number | undefined;
+  maxContinueRounds?: number | undefined;
 }
 
 export interface GraphDslGraph {
@@ -68,7 +68,7 @@ const GraphDslLinkSchema: z.ZodType<GraphDslLink> = z.object({
   to: z.string(),
   trigger_type: z.enum(["transfer", "complete", "continue"]),
   message_type: z.enum(["none", "last", "last-all"]),
-  maxRevisionRounds: z.number().finite().optional(),
+  maxContinueRounds: z.number().finite().optional(),
 }).strict();
 
 const GraphDslAgentNodeSchema: z.ZodType<GraphDslAgentNode> = z.object({
@@ -122,16 +122,16 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
         messageMode: edge.messageMode,
         ...(edge.triggerOn === "continue"
           ? {
-              maxRevisionRounds:
-                edge.maxRevisionRounds === undefined
+              maxContinueRounds:
+                edge.maxContinueRounds === undefined
                   ? DEFAULT_ACTION_REQUIRED_MAX_ROUNDS
-                  : normalizeActionRequiredMaxRounds(edge.maxRevisionRounds),
+                  : normalizeActionRequiredMaxRounds(edge.maxContinueRounds),
             }
           : {}),
       }))
       .sort((left, right) => {
-        const leftKey = `${left.source}__${left.target}__${left.triggerOn}__${left.messageMode ?? ""}__${left.maxRevisionRounds ?? ""}`;
-        const rightKey = `${right.source}__${right.target}__${right.triggerOn}__${right.messageMode ?? ""}__${right.maxRevisionRounds ?? ""}`;
+        const leftKey = `${left.source}__${left.target}__${left.triggerOn}__${left.messageMode ?? ""}__${left.maxContinueRounds ?? ""}`;
+        const rightKey = `${right.source}__${right.target}__${right.triggerOn}__${right.messageMode ?? ""}__${right.maxContinueRounds ?? ""}`;
         return leftKey.localeCompare(rightKey);
       }),
     ...(topology.langgraph
@@ -338,7 +338,7 @@ function formatGraphDslParseError(error: z.ZodError): string {
     issue.code === z.ZodIssueCode.unrecognized_keys
     && issue.path[0] === "links"
   ) {
-    return `${formatZodIssuePath(issue.path)} 只允许显式写出 from、to、trigger_type、message_type、maxRevisionRounds。`;
+    return `${formatZodIssuePath(issue.path)} 只允许显式写出 from、to、trigger_type、message_type、maxContinueRounds。`;
   }
   if (issue.code === z.ZodIssueCode.invalid_type) {
     if (issue.received === "undefined") {
@@ -367,9 +367,9 @@ function mapGraphDslLinkToTopologyEdge(link: GraphDslLink) {
     target: link.to,
     triggerOn: link.trigger_type,
     messageMode: normalizeGraphDslMessageMode(link.message_type),
-    ...(link.trigger_type === "continue" && typeof link.maxRevisionRounds === "number"
+    ...(link.trigger_type === "continue" && typeof link.maxContinueRounds === "number"
       ? {
-          maxRevisionRounds: normalizeActionRequiredMaxRounds(link.maxRevisionRounds),
+          maxContinueRounds: normalizeActionRequiredMaxRounds(link.maxContinueRounds),
         }
       : {}),
   };
@@ -382,7 +382,7 @@ function resolveSpawnReportTo(
   target: string;
   triggerOn: TopologyEdgeTrigger;
   messageMode: TopologyEdgeMessageMode;
-  maxRevisionRounds?: number;
+  maxContinueRounds?: number;
 } | undefined {
   const outgoingLinks = graph.links.filter((link) => link.from === spawnNodeName);
   return outgoingLinks.length === 1
@@ -390,9 +390,9 @@ function resolveSpawnReportTo(
         target: outgoingLinks[0]!.to,
         triggerOn: outgoingLinks[0]!.trigger_type,
         messageMode: normalizeGraphDslMessageMode(outgoingLinks[0]!.message_type),
-        ...(outgoingLinks[0]!.trigger_type === "continue" && typeof outgoingLinks[0]!.maxRevisionRounds === "number"
+        ...(outgoingLinks[0]!.trigger_type === "continue" && typeof outgoingLinks[0]!.maxContinueRounds === "number"
           ? {
-              maxRevisionRounds: normalizeActionRequiredMaxRounds(outgoingLinks[0]!.maxRevisionRounds),
+              maxContinueRounds: normalizeActionRequiredMaxRounds(outgoingLinks[0]!.maxContinueRounds),
             }
           : {}),
       }
@@ -415,7 +415,7 @@ function resolveGraphExternalReport(
   target: string;
   triggerOn: TopologyEdgeTrigger;
   messageMode: TopologyEdgeMessageMode;
-  maxRevisionRounds?: number;
+  maxContinueRounds?: number;
 } | undefined {
   const localNames = new Set(graph.nodes.map((node) => node.id));
   const externalLinks = graph.links.filter((link) =>
@@ -433,9 +433,9 @@ function resolveGraphExternalReport(
     target: externalLink.to,
     triggerOn: externalLink.trigger_type,
     messageMode: normalizeGraphDslMessageMode(externalLink.message_type),
-    ...(externalLink.trigger_type === "continue" && typeof externalLink.maxRevisionRounds === "number"
+    ...(externalLink.trigger_type === "continue" && typeof externalLink.maxContinueRounds === "number"
       ? {
-          maxRevisionRounds: normalizeActionRequiredMaxRounds(externalLink.maxRevisionRounds),
+          maxContinueRounds: normalizeActionRequiredMaxRounds(externalLink.maxContinueRounds),
         }
       : {}),
   };
@@ -505,7 +505,7 @@ function collectGraphDslNodeDefinitions(
     const reportToTemplateName = externalReportTarget?.target ?? reportTarget?.target;
     const reportToTriggerOn = externalReportTarget?.triggerOn ?? reportTarget?.triggerOn;
     const reportToMessageMode = externalReportTarget?.messageMode ?? reportTarget?.messageMode;
-    const reportToMaxRevisionRounds = externalReportTarget?.maxRevisionRounds ?? reportTarget?.maxRevisionRounds;
+    const reportToMaxContinueRounds = externalReportTarget?.maxContinueRounds ?? reportTarget?.maxContinueRounds;
     context.nodeRecords.set(node.id, {
       id: node.id,
       kind: "spawn",
@@ -534,9 +534,9 @@ function collectGraphDslNodeDefinitions(
           targetRole: link.to,
           triggerOn: link.trigger_type,
           messageMode: normalizeGraphDslMessageMode(link.message_type),
-          ...(link.trigger_type === "continue" && typeof link.maxRevisionRounds === "number"
+          ...(link.trigger_type === "continue" && typeof link.maxContinueRounds === "number"
             ? {
-                maxRevisionRounds: normalizeActionRequiredMaxRounds(link.maxRevisionRounds),
+                maxContinueRounds: normalizeActionRequiredMaxRounds(link.maxContinueRounds),
               }
             : {}),
         })),
@@ -544,8 +544,8 @@ function collectGraphDslNodeDefinitions(
       ...(reportToTemplateName ? { reportToTemplateName } : {}),
       ...(reportToTriggerOn ? { reportToTriggerOn } : {}),
       ...(reportToMessageMode ? { reportToMessageMode } : {}),
-      ...(reportToTriggerOn === "continue" && typeof reportToMaxRevisionRounds === "number"
-        ? { reportToMaxRevisionRounds }
+      ...(reportToTriggerOn === "continue" && typeof reportToMaxContinueRounds === "number"
+        ? { reportToMaxContinueRounds }
         : {}),
     });
   }

@@ -11,9 +11,9 @@ test("gating-scheduler 不再声明运行时 state 类型", () => {
   const source = readMainModuleSource("gating-scheduler.ts");
 
   assert.equal(
-    source.includes("export interface GatingSourceRevisionState"),
+    source.includes("export interface GatingSourceRoundState"),
     false,
-    "gating-scheduler.ts 不应该再声明 GatingSourceRevisionState",
+    "gating-scheduler.ts 不应该再声明 GatingSourceRoundState",
   );
   assert.equal(
     source.includes("export interface GatingHandoffDispatchBatchState"),

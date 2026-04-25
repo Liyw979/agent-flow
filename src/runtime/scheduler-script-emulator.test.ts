@@ -464,7 +464,7 @@ test("scheduler script emulator 纯函数会从 finished 原因里读取允许�
       targets: ["CodeReview", "UnitTest", "TaskReview"],
       pendingTargets: ["UnitTest", "TaskReview"],
       respondedTargets: ["CodeReview"],
-      sourceRevision: 1,
+      sourceRound: 1,
       failedTargets: ["CodeReview"],
     },
   };
@@ -494,7 +494,7 @@ test("scheduler script emulator 纯函数会在核心 finished 但仍待 decisio
       targets: ["TaskReview", "CodeReview"],
       pendingTargets: ["CodeReview"],
       respondedTargets: ["TaskReview"],
-      sourceRevision: 1,
+      sourceRound: 1,
       failedTargets: [],
     },
   };
@@ -510,7 +510,7 @@ test("scheduler script emulator 纯函数会在核心 finished 但仍待 decisio
       targets: ["TaskReview", "CodeReview"],
       pendingTargets: ["CodeReview"],
       respondedTargets: ["TaskReview"],
-      sourceRevision: 1,
+      sourceRound: 1,
       failedTargets: ["TaskReview"],
     },
   };
@@ -932,7 +932,7 @@ test("scheduler script emulator 纯函数不允许最后一条显式 dispatch �
             targets: ["UnitTest", "TaskReview"],
             pendingTargets: ["UnitTest"],
             respondedTargets: ["TaskReview"],
-            sourceRevision: 1,
+            sourceRound: 1,
             failedTargets: [],
           },
         };
@@ -965,7 +965,7 @@ test("scheduler script emulator 纯函数会在脚本提前结束时带出核心
       targets: ["UnitTest", "TaskReview"],
       pendingTargets: ["UnitTest"],
       respondedTargets: ["TaskReview"],
-      sourceRevision: 1,
+      sourceRound: 1,
       failedTargets: [],
     },
   };

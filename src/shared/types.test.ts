@@ -99,7 +99,7 @@ test("continue 边默认回流上限为 4，且支持按边单独覆盖", () => 
         target: "Build",
         triggerOn: "continue",
         messageMode: "last",
-        maxRevisionRounds: 7,
+        maxContinueRounds: 7,
       },
     ],
   };
@@ -122,10 +122,10 @@ test("未知 trigger 必须直接报错，canonical trigger 保持新命名", ()
   assert.equal(normalizeTopologyEdgeTrigger("continue"), "continue");
 });
 
-test("非法 maxRevisionRounds 必须直接报错，不能偷偷修正", () => {
-  assert.throws(() => normalizeActionRequiredMaxRounds(0), /maxRevisionRounds 必须是大于等于 1 的整数/u);
-  assert.throws(() => normalizeActionRequiredMaxRounds(1.5), /maxRevisionRounds 必须是大于等于 1 的整数/u);
-  assert.throws(() => normalizeActionRequiredMaxRounds("4"), /maxRevisionRounds 必须是大于等于 1 的整数/u);
+test("非法 maxContinueRounds 必须直接报错，不能偷偷修正", () => {
+  assert.throws(() => normalizeActionRequiredMaxRounds(0), /maxContinueRounds 必须是大于等于 1 的整数/u);
+  assert.throws(() => normalizeActionRequiredMaxRounds(1.5), /maxContinueRounds 必须是大于等于 1 的整数/u);
+  assert.throws(() => normalizeActionRequiredMaxRounds("4"), /maxContinueRounds 必须是大于等于 1 的整数/u);
   assert.equal(normalizeActionRequiredMaxRounds(4), 4);
 });
 

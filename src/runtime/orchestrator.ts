@@ -1316,10 +1316,10 @@ export class Orchestrator {
         messageMode: edge.messageMode,
         ...(edge.triggerOn === "continue"
           ? {
-              maxRevisionRounds:
-                edge.maxRevisionRounds === undefined
+              maxContinueRounds:
+                edge.maxContinueRounds === undefined
                   ? DEFAULT_ACTION_REQUIRED_MAX_ROUNDS
-                  : normalizeActionRequiredMaxRounds(edge.maxRevisionRounds),
+                  : normalizeActionRequiredMaxRounds(edge.maxContinueRounds),
             }
           : {}),
       }));
@@ -1518,17 +1518,17 @@ export class Orchestrator {
         if (!batch.sourceMessageId.trim()) {
           throw new Error(`${batch.sourceAgentId ?? "DecisionAgent"} 的 continue-request 缺少 followUpMessageId`);
         }
-        const revisionContent =
+        const continueContent =
           batch.sourceContent?.trim()
           || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
         prompt = withOptionalString(withOptionalString({
           mode: "structured",
           from: batch.sourceAgentId ?? "DecisionAgent",
-          agentMessage: revisionContent,
+          agentMessage: continueContent,
           allowDirectFallbackWhenNoBatch: true,
         }, "userMessage",
           initialUserContent
-          && !contentContainsNormalizedPure(revisionContent, initialUserContent)
+          && !contentContainsNormalizedPure(continueContent, initialUserContent)
             ? initialUserContent
             : undefined,
         ), "gitDiffSummary", this.shouldAttachGitDiffSummary(topology, executableAgentId) ? gitDiffSummary : undefined);
@@ -1538,7 +1538,7 @@ export class Orchestrator {
           sender: batch.sourceAgentId ?? "DecisionAgent",
           timestamp: new Date().toISOString(),
           content: formatActionRequiredRequestContent(
-            revisionContent,
+            continueContent,
             [job.agentId],
           ),
           kind: "continue-request",

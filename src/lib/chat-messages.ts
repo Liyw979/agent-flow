@@ -105,7 +105,7 @@ export function stripTrailingFollowUpOffer(content: string): string {
   return trimmed.slice(0, match.index).trimEnd();
 }
 
-function stripRevisionFeedbackLabel(content: string): string {
+function stripActionRequiredFeedbackLabel(content: string): string {
   return stripLeadingDecisionResponseLabel(stripDecisionResponseMarkup(content));
 }
 
@@ -178,7 +178,7 @@ function buildMergedActionRequiredRequestContent(previous: ChatMessageItem, curr
 
   const normalizedSummary = summary.replace(/\s+/g, " ").trim();
   const normalizedFeedback = feedback.replace(/\s+/g, " ").trim();
-  const normalizedSummaryFeedback = stripRevisionFeedbackLabel(summary)
+  const normalizedSummaryFeedback = stripActionRequiredFeedbackLabel(summary)
     .replace(/\s+/g, " ")
     .trim();
   const normalizedPreviousFinalResponse =
@@ -347,9 +347,9 @@ export function mergeTaskChatMessages(messages: MessageRecord[]): ChatMessageIte
       continue;
     }
 
-    const revisionRequestMergeTargetIndex = findActionRequiredRequestMergeTargetIndex(merged, message);
-    if (revisionRequestMergeTargetIndex >= 0) {
-      const target = merged[revisionRequestMergeTargetIndex];
+    const continueRequestMergeTargetIndex = findActionRequiredRequestMergeTargetIndex(merged, message);
+    if (continueRequestMergeTargetIndex >= 0) {
+      const target = merged[continueRequestMergeTargetIndex];
       if (target) {
         target.id = `${target.id}:${message.id}`;
         target.timestamp = message.timestamp;

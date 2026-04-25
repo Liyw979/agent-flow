@@ -73,13 +73,13 @@ export interface SpawnRule {
     targetRole: SpawnedAgentRole;
     triggerOn: TopologyEdgeTrigger;
     messageMode: TopologyEdgeMessageMode;
-    maxRevisionRounds?: number;
+    maxContinueRounds?: number;
   }>;
   exitWhen: "one_side_agrees" | "all_completed";
   reportToTemplateName?: string;
   reportToTriggerOn?: TopologyEdgeTrigger;
   reportToMessageMode?: TopologyEdgeMessageMode;
-  reportToMaxRevisionRounds?: number;
+  reportToMaxContinueRounds?: number;
 }
 
 export interface TopologyNodeRecord {
@@ -114,7 +114,7 @@ export interface TopologyEdge {
   target: string;
   triggerOn: TopologyEdgeTrigger;
   messageMode: TopologyEdgeMessageMode;
-  maxRevisionRounds?: number;
+  maxContinueRounds?: number;
 }
 
 export interface TopologyLangGraphStartNode {
@@ -162,7 +162,7 @@ export interface RuntimeTopologyEdge {
   target: string;
   triggerOn: TopologyEdgeTrigger;
   messageMode: TopologyEdgeMessageMode;
-  maxRevisionRounds?: number;
+  maxContinueRounds?: number;
 }
 
 export interface SpawnItemPayload {
@@ -193,7 +193,7 @@ export interface SpawnActivationRecord {
 
 export function normalizeActionRequiredMaxRounds(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw new Error("maxRevisionRounds 必须是大于等于 1 的整数");
+    throw new Error("maxContinueRounds 必须是大于等于 1 的整数");
   }
   return value;
 }
@@ -209,9 +209,9 @@ export function getActionRequiredEdgeLoopLimit(
       && item.target === targetAgentId
       && normalizeTopologyEdgeTrigger(item.triggerOn) === "continue",
   );
-  return edge?.maxRevisionRounds === undefined
+  return edge?.maxContinueRounds === undefined
     ? DEFAULT_ACTION_REQUIRED_MAX_ROUNDS
-    : normalizeActionRequiredMaxRounds(edge.maxRevisionRounds);
+    : normalizeActionRequiredMaxRounds(edge.maxContinueRounds);
 }
 
 interface BaseMessageRecord {
@@ -561,7 +561,7 @@ export function createDefaultTopology(
       messageMode: DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE,
       ...(triggerOn === "continue"
         ? {
-            maxRevisionRounds: DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
+            maxContinueRounds: DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
           }
         : {}),
     });
@@ -626,8 +626,8 @@ export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
         return {
           ...edge,
           triggerOn,
-          ...(triggerOn === "continue" && typeof edge.maxRevisionRounds === "number"
-            ? { maxRevisionRounds: normalizeActionRequiredMaxRounds(edge.maxRevisionRounds) }
+          ...(triggerOn === "continue" && typeof edge.maxContinueRounds === "number"
+            ? { maxContinueRounds: normalizeActionRequiredMaxRounds(edge.maxContinueRounds) }
             : {}),
         };
       }),
@@ -635,8 +635,8 @@ export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
       ...(rule.reportToMessageMode
         ? { reportToMessageMode: rule.reportToMessageMode }
         : {}),
-      ...(reportToTriggerOn === "continue" && typeof rule.reportToMaxRevisionRounds === "number"
-        ? { reportToMaxRevisionRounds: normalizeActionRequiredMaxRounds(rule.reportToMaxRevisionRounds) }
+      ...(reportToTriggerOn === "continue" && typeof rule.reportToMaxContinueRounds === "number"
+        ? { reportToMaxContinueRounds: normalizeActionRequiredMaxRounds(rule.reportToMaxContinueRounds) }
         : {}),
     };
   });

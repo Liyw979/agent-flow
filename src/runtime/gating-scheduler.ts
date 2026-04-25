@@ -3,7 +3,7 @@ import { getTopologyEdgeId, type TopologyEdge, type TopologyRecord } from "@shar
 import type {
   GatingHandoffDispatchBatchState,
   GatingSchedulerRuntimeState,
-  GatingSourceRevisionState,
+  GatingSourceRoundState,
 } from "./gating-state";
 
 export interface GatingAgentState {
@@ -36,7 +36,7 @@ export function createGatingSchedulerRuntimeState(): GatingSchedulerRuntimeState
     lastSignatureByAgent: new Map(),
     runningAgents: new Set(),
     queuedAgents: new Set(),
-    sourceRevisionStateByAgent: new Map(),
+    sourceRoundStateByAgent: new Map(),
     activeHandoffBatchBySource: new Map(),
   };
 }
@@ -73,13 +73,13 @@ export class GatingScheduler {
     options: {
       excludeTargets?: Set<string>;
       restrictTargets?: Set<string>;
-      advanceSourceRevision?: boolean;
+      advanceSourceRound?: boolean;
     } = {},
   ): GatingDispatchPlan | null {
     const outgoing = this.getOutgoingEdges(sourceAgentId, "transfer");
     const excludeTargets = options.excludeTargets ?? new Set<string>();
     const restrictTargets = options.restrictTargets;
-    const advanceSourceRevision = options.advanceSourceRevision ?? true;
+    const advanceSourceRound = options.advanceSourceRound ?? true;
 
     const selectedOutgoing = outgoing.filter(
       (edge) =>
@@ -99,9 +99,9 @@ export class GatingScheduler {
     }
 
     const targetNames = this.uniqueTargetNames(selectedOutgoing);
-    const sourceState = this.getOrCreateSourceRevisionState(sourceAgentId);
-    if (advanceSourceRevision) {
-      sourceState.currentRevision += 1;
+    const sourceState = this.getOrCreateSourceRoundState(sourceAgentId);
+    if (advanceSourceRound) {
+      sourceState.currentRound += 1;
     }
 
     const batch: GatingHandoffDispatchBatchState = {
@@ -111,7 +111,7 @@ export class GatingScheduler {
       targets: targetNames,
       pendingTargets: [],
       respondedTargets: [],
-      sourceRevision: sourceState.currentRevision,
+      sourceRound: sourceState.currentRound,
       failedTargets: [],
     };
 
@@ -159,7 +159,7 @@ export class GatingScheduler {
     }
 
     if (readyTargets.length > 0) {
-      const sourceState = this.getOrCreateSourceRevisionState(sourceAgentId);
+      const sourceState = this.getOrCreateSourceRoundState(sourceAgentId);
       const batch: GatingHandoffDispatchBatchState = {
         dispatchKind: "approved",
         sourceAgentId,
@@ -167,7 +167,7 @@ export class GatingScheduler {
         targets: [...readyTargets],
         pendingTargets: [...readyTargets],
         respondedTargets: [],
-        sourceRevision: sourceState.currentRevision,
+        sourceRound: sourceState.currentRound,
         failedTargets: [],
       };
       this.runtime.activeHandoffBatchBySource.set(sourceAgentId, batch);
@@ -194,9 +194,9 @@ export class GatingScheduler {
         continue;
       }
 
-      const sourceState = this.getOrCreateSourceRevisionState(sourceAgentId);
+      const sourceState = this.getOrCreateSourceRoundState(sourceAgentId);
       if (outcome === "complete") {
-        sourceState.decisionPassRevision.set(responderAgentId, batch.sourceRevision);
+        sourceState.decisionPassRound.set(responderAgentId, batch.sourceRound);
       } else if (!batch.failedTargets.includes(responderAgentId)) {
         batch.failedTargets.push(responderAgentId);
       }
@@ -230,7 +230,7 @@ export class GatingScheduler {
 
       if (batch.dispatchKind === "handoff" && batch.targets.length === 1) {
         const staleTargets = this.getHandoffTargetsForBatch(sourceAgentId, batch).filter(
-          (targetName) => sourceState.decisionPassRevision.get(targetName) !== batch.sourceRevision,
+          (targetName) => sourceState.decisionPassRound.get(targetName) !== batch.sourceRound,
         );
         return {
           matchedBatch: true,
@@ -304,14 +304,14 @@ export class GatingScheduler {
     };
   }
 
-  private getOrCreateSourceRevisionState(sourceAgentId: string): GatingSourceRevisionState {
-    let state = this.runtime.sourceRevisionStateByAgent.get(sourceAgentId);
+  private getOrCreateSourceRoundState(sourceAgentId: string): GatingSourceRoundState {
+    let state = this.runtime.sourceRoundStateByAgent.get(sourceAgentId);
     if (!state) {
       state = {
-        currentRevision: 0,
-        decisionPassRevision: new Map(),
+        currentRound: 0,
+        decisionPassRound: new Map(),
       };
-      this.runtime.sourceRevisionStateByAgent.set(sourceAgentId, state);
+      this.runtime.sourceRoundStateByAgent.set(sourceAgentId, state);
     }
     return state;
   }

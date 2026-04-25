@@ -93,8 +93,8 @@ export function instantiateSpawnBundle(input: {
       target: targetNodeInstance.id,
       triggerOn: edge.triggerOn,
       messageMode: edge.messageMode,
-      ...(edge.triggerOn === "continue" && typeof edge.maxRevisionRounds === "number"
-        ? { maxRevisionRounds: edge.maxRevisionRounds }
+      ...(edge.triggerOn === "continue" && typeof edge.maxContinueRounds === "number"
+        ? { maxContinueRounds: edge.maxContinueRounds }
         : {}),
     };
   });
@@ -110,8 +110,8 @@ export function instantiateSpawnBundle(input: {
       target: entryNode.id,
       triggerOn: sourceToSpawnEdge.triggerOn,
       messageMode: sourceToSpawnEdge.messageMode,
-      ...(sourceToSpawnEdge.triggerOn === "continue" && typeof sourceToSpawnEdge.maxRevisionRounds === "number"
-        ? { maxRevisionRounds: sourceToSpawnEdge.maxRevisionRounds }
+      ...(sourceToSpawnEdge.triggerOn === "continue" && typeof sourceToSpawnEdge.maxContinueRounds === "number"
+        ? { maxContinueRounds: sourceToSpawnEdge.maxContinueRounds }
         : {}),
     });
   }
@@ -141,8 +141,8 @@ export function instantiateSpawnBundle(input: {
       triggerOn: spawnToReportEdge?.triggerOn ?? rule.reportToTriggerOn ?? "complete",
       messageMode: spawnToReportEdge?.messageMode ?? rule.reportToMessageMode ?? "last",
       ...((spawnToReportEdge?.triggerOn ?? rule.reportToTriggerOn) === "continue"
-        && typeof (spawnToReportEdge?.maxRevisionRounds ?? rule.reportToMaxRevisionRounds) === "number"
-        ? { maxRevisionRounds: spawnToReportEdge?.maxRevisionRounds ?? rule.reportToMaxRevisionRounds }
+        && typeof (spawnToReportEdge?.maxContinueRounds ?? rule.reportToMaxContinueRounds) === "number"
+        ? { maxContinueRounds: spawnToReportEdge?.maxContinueRounds ?? rule.reportToMaxContinueRounds }
         : {}),
     });
   }

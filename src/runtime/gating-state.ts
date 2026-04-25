@@ -14,9 +14,9 @@ export interface GraphActionRequiredRequest {
   agentContextContent: string;
 }
 
-export interface GatingSourceRevisionState {
-  currentRevision: number;
-  decisionPassRevision: Map<string, number>;
+export interface GatingSourceRoundState {
+  currentRound: number;
+  decisionPassRound: Map<string, number>;
 }
 
 export interface GatingHandoffDispatchBatchState {
@@ -26,7 +26,7 @@ export interface GatingHandoffDispatchBatchState {
   targets: string[];
   pendingTargets: string[];
   respondedTargets: string[];
-  sourceRevision: number;
+  sourceRound: number;
   failedTargets: string[];
 }
 
@@ -36,13 +36,13 @@ export interface GatingSchedulerRuntimeState {
   lastSignatureByAgent: Map<string, string>;
   runningAgents: Set<string>;
   queuedAgents: Set<string>;
-  sourceRevisionStateByAgent: Map<string, GatingSourceRevisionState>;
+  sourceRoundStateByAgent: Map<string, GatingSourceRoundState>;
   activeHandoffBatchBySource: Map<string, GatingHandoffDispatchBatchState>;
 }
 
-export interface GraphSourceRevisionState {
-  currentRevision: number;
-  decisionPassRevision: Record<string, number>;
+export interface GraphSourceRoundState {
+  currentRound: number;
+  decisionPassRound: Record<string, number>;
 }
 
 export interface GraphHandoffBatchState {
@@ -52,7 +52,7 @@ export interface GraphHandoffBatchState {
   targets: string[];
   pendingTargets: string[];
   respondedTargets: string[];
-  sourceRevision: number;
+  sourceRound: number;
   failedTargets: string[];
 }
 
@@ -72,7 +72,7 @@ export interface GraphTaskState {
   lastSignatureByAgent: Record<string, string>;
   runningAgents: string[];
   queuedAgents: string[];
-  sourceRevisionStateByAgent: Record<string, GraphSourceRevisionState>;
+  sourceRoundStateByAgent: Record<string, GraphSourceRoundState>;
   activeHandoffBatchBySource: Record<string, GraphHandoffBatchState>;
   pendingActionRequiredRequestsByAgent: Record<string, GraphActionRequiredRequest>;
   pendingHandoffRepairTargetsBySource: Record<string, string[]>;
@@ -101,7 +101,7 @@ export function createEmptyGraphTaskState(input: {
     lastSignatureByAgent: {},
     runningAgents: [],
     queuedAgents: [],
-    sourceRevisionStateByAgent: {},
+    sourceRoundStateByAgent: {},
     activeHandoffBatchBySource: {},
     pendingActionRequiredRequestsByAgent: {},
     pendingHandoffRepairTargetsBySource: {},
@@ -174,12 +174,12 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
     lastSignatureByAgent: { ...state.lastSignatureByAgent },
     runningAgents: [...state.runningAgents],
     queuedAgents: [...state.queuedAgents],
-    sourceRevisionStateByAgent: Object.fromEntries(
-      Object.entries(state.sourceRevisionStateByAgent).map(([agentId, revisionState]) => [
+    sourceRoundStateByAgent: Object.fromEntries(
+      Object.entries(state.sourceRoundStateByAgent).map(([agentId, roundState]) => [
         agentId,
         {
-          currentRevision: revisionState.currentRevision,
-          decisionPassRevision: { ...revisionState.decisionPassRevision },
+          currentRound: roundState.currentRound,
+          decisionPassRound: { ...roundState.decisionPassRound },
         },
       ]),
     ),
@@ -193,7 +193,7 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
           targets: [...batch.targets],
           pendingTargets: [...batch.pendingTargets],
           respondedTargets: [...batch.respondedTargets],
-          sourceRevision: batch.sourceRevision,
+          sourceRound: batch.sourceRound,
           failedTargets: [...batch.failedTargets],
         },
       ]),
@@ -226,13 +226,13 @@ export function graphStateToSchedulerRuntime(state: GraphTaskState): GatingSched
     lastSignatureByAgent: new Map(Object.entries(state.lastSignatureByAgent)),
     runningAgents: new Set(state.runningAgents),
     queuedAgents: new Set(state.queuedAgents),
-    sourceRevisionStateByAgent: new Map(
-      Object.entries(state.sourceRevisionStateByAgent).map(([agentId, revisionState]) => [
+    sourceRoundStateByAgent: new Map(
+      Object.entries(state.sourceRoundStateByAgent).map(([agentId, roundState]) => [
         agentId,
         {
-          currentRevision: revisionState.currentRevision,
-          decisionPassRevision: new Map(Object.entries(revisionState.decisionPassRevision)),
-        } satisfies GatingSourceRevisionState,
+          currentRound: roundState.currentRound,
+          decisionPassRound: new Map(Object.entries(roundState.decisionPassRound)),
+        } satisfies GatingSourceRoundState,
       ]),
     ),
     activeHandoffBatchBySource: new Map(
@@ -245,7 +245,7 @@ export function graphStateToSchedulerRuntime(state: GraphTaskState): GatingSched
           targets: [...batch.targets],
           pendingTargets: [...batch.pendingTargets],
           respondedTargets: [...batch.respondedTargets],
-          sourceRevision: batch.sourceRevision,
+          sourceRound: batch.sourceRound,
           failedTargets: [...batch.failedTargets],
         } satisfies GatingHandoffDispatchBatchState,
       ]),
@@ -262,12 +262,12 @@ export function applySchedulerRuntimeToGraphState(
   state.lastSignatureByAgent = Object.fromEntries(runtime.lastSignatureByAgent.entries());
   state.runningAgents = [...runtime.runningAgents];
   state.queuedAgents = [...runtime.queuedAgents];
-  state.sourceRevisionStateByAgent = Object.fromEntries(
-    [...runtime.sourceRevisionStateByAgent.entries()].map(([agentId, revisionState]) => [
+  state.sourceRoundStateByAgent = Object.fromEntries(
+    [...runtime.sourceRoundStateByAgent.entries()].map(([agentId, roundState]) => [
       agentId,
       {
-        currentRevision: revisionState.currentRevision,
-        decisionPassRevision: Object.fromEntries(revisionState.decisionPassRevision.entries()),
+        currentRound: roundState.currentRound,
+        decisionPassRound: Object.fromEntries(roundState.decisionPassRound.entries()),
       },
     ]),
   );
@@ -281,7 +281,7 @@ export function applySchedulerRuntimeToGraphState(
         targets: [...batch.targets],
         pendingTargets: [...batch.pendingTargets],
         respondedTargets: [...batch.respondedTargets],
-        sourceRevision: batch.sourceRevision,
+        sourceRound: batch.sourceRound,
         failedTargets: [...batch.failedTargets],
       },
     ]),
