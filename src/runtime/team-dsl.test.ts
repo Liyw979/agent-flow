@@ -361,7 +361,7 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出论证挑战多轮 spaw
 
   assert.deepEqual(
     compiled.agents.map((agent) => agent.id),
-    ["线索发现", "漏洞挑战", "漏洞论证", "讨论总结"],
+    ["线索发现", "漏洞挑战", "漏洞论证", "讨论总结", "线索完备性评估"],
   );
   assert.deepEqual(compiled.topology.edges, [
     {
@@ -370,6 +370,18 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出论证挑战多轮 spaw
       triggerOn: "continue",
       messageMode: "last-all",
       maxRevisionRounds: 999,
+    },
+    {
+      source: "线索发现",
+      target: "线索完备性评估",
+      triggerOn: "complete",
+      messageMode: "last",
+    },
+    {
+      source: "线索完备性评估",
+      target: "线索发现",
+      triggerOn: "continue",
+      messageMode: "last",
     },
   ]);
   assert.deepEqual(compiled.topology.spawnRules?.[0]?.spawnedAgents, [
@@ -383,9 +395,9 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出论证挑战多轮 spaw
   assert.equal(compiled.topology.spawnRules?.[0]?.reportToMessageMode, "none");
   assert.deepEqual(compiled.topology.langgraph?.end, {
     id: "__end__",
-    sources: ["线索发现"],
+    sources: ["线索完备性评估"],
     incoming: [
-      { source: "线索发现", triggerOn: "complete" },
+      { source: "线索完备性评估", triggerOn: "complete" },
     ],
   });
   assert.deepEqual(compiled.topology.spawnRules?.[0]?.edges, [
