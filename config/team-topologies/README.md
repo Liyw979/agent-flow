@@ -280,8 +280,9 @@
 
 - 根图入口是 `线索发现`
 - `线索发现 -> 疑点辩论` 不是无条件流转：有新的 finding 时，`线索发现` 的回复开头先输出 `<continue>`，再输出 finding 正文，并命中 `{ "from": "线索发现", "to": "疑点辩论", "trigger_type": "continue", "message_type": "last-all" }`
-- 没有新的 finding 时，`线索发现` 的回复开头先输出 `<complete>`，再输出简短说明，并命中 `{ "from": "线索发现", "to": "__end__", "trigger_type": "complete", "message_type": "none" }`，直接结束到 `END`
-- `线索发现` 的默认 prompt 要求每轮只返回一个可疑漏洞点，并且回复开头先输出 `<complete>` / `<continue>` 判定标签，再输出正文
+- 没有新的 finding 时，`线索发现` 的回复开头先输出 `<complete>`，并补充本轮已检查范围、当前判断依据、仍未排除但暂缺证据的方向，然后命中 `{ "from": "线索发现", "to": "线索完备性评估", "trigger_type": "complete", "message_type": "last" }`
+- `线索完备性评估` 会判断是否还存在明显遗漏：给出 `<continue>` 时，命中 `{ "from": "线索完备性评估", "to": "线索发现", "trigger_type": "continue", "message_type": "last" }`，把具体补查方向回给 `线索发现`；给出 `<complete>` 时，命中 `{ "from": "线索完备性评估", "to": "__end__", "trigger_type": "complete", "message_type": "none" }`，真正结束到 `END`
+- `线索发现` 的默认 prompt 要求每轮只返回一个可疑漏洞点，并且回复开头先输出 `<complete>` / `<continue>` 判定标签，再输出正文；当准备结束时，必须额外说明本轮已检查范围与仍未排除的方向
 - `疑点辩论` 是 `spawn` 节点
 - `spawn.graph` 里定义漏洞论证、漏洞挑战、讨论总结的子图
 - 这类 `spawn` 子图当前按 `exitWhen = "all_completed"` 运行：当 `讨论总结` 同时存在来自 `漏洞挑战`、`漏洞论证` 的 `complete` 入边时，运行时会先确认这两个来源角色都已经给出本轮回应，再允许把流程推进到 `讨论总结`；因此单边首轮直接 `complete` 不会再触发总结
