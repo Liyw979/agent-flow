@@ -15,6 +15,7 @@ function createTempDir() {
 function createClient(projectPath = createTempDir()) {
   const client = new OpenCodeClient() as OpenCodeClient & {
     servers: Map<string, {
+      runtimeKey: string;
       projectPath: string;
       serverHandle: Promise<{ process: null; port: number }> | null;
       eventPump: Promise<void> | null;
@@ -26,13 +27,14 @@ function createClient(projectPath = createTempDir()) {
   };
   const normalizedProjectPath = path.resolve(projectPath);
   client.servers.set(normalizedProjectPath, {
-      projectPath: normalizedProjectPath,
-      serverHandle: Promise.resolve({
-        process: null,
-        port: 43127,
-      }),
-      eventPump: null,
-      injectedConfigContent: null,
+    runtimeKey: normalizedProjectPath,
+    projectPath: normalizedProjectPath,
+    serverHandle: Promise.resolve({
+      process: null,
+      port: 43127,
+    }),
+    eventPump: null,
+    injectedConfigContent: null,
   });
   return {
     client,
@@ -44,6 +46,7 @@ test("request 会跟随当前 serverHandle 的实际端口", async () => {
   const { client, projectPath } = createClient();
   const typed = client as OpenCodeClient & {
     servers: Map<string, {
+      runtimeKey: string;
       projectPath: string;
       serverHandle: Promise<{ process: null; port: number }> | null;
       eventPump: Promise<void> | null;
@@ -336,10 +339,9 @@ test("不同 runtimeKey 会使用各自独立的 serve 端口，即使 cwd 相�
   ]);
 
   client.startServer = async (target) => {
-    const runtimeKey = typeof target === "string" ? target : target.runtimeKey;
     return {
-    process: null,
-    port: portByRuntime.get(runtimeKey) ?? 43129,
+      process: null,
+      port: portByRuntime.get(target.runtimeKey) ?? 43129,
     };
   };
 
@@ -368,91 +370,7 @@ test("不同 runtimeKey 会使用各自独立的 serve 端口，即使 cwd 相�
     "http://127.0.0.1:43128/session",
   ]);
 });
-
-test("registerExternalServer 可以把现有 runtime 端口注册进当前进程内存", async () => {
-  const projectPath = createTempDir();
-  const client = new OpenCodeClient() as OpenCodeClient & {
-    startServer: (target: { runtimeKey: string; projectPath: string }) => Promise<{ process: null; port: number }>;
-  };
-  const target = {
-    runtimeKey: "task-1",
-    projectPath,
-  };
-
-  let startServerCalled = false;
-  client.startServer = async () => {
-    startServerCalled = true;
-    return {
-      process: null,
-      port: 43128,
-    };
-  };
-  client.registerExternalServer(target, "http://127.0.0.1:43127");
-
-  const baseUrl = await client.getAttachBaseUrl(target);
-
-  assert.equal(baseUrl, "http://127.0.0.1:43127");
-  assert.equal(startServerCalled, false);
-});
-
-test("external runtime 端口失效后，request 不会重拉当前进程自己的 serve", async () => {
-  const projectPath = createTempDir();
-  const client = new OpenCodeClient() as OpenCodeClient & {
-    startServer: (target: { runtimeKey: string; projectPath: string }) => Promise<{ process: null; port: number }>;
-    request: (
-      pathname: string,
-      options: {
-        method: "GET" | "POST";
-        target?: { runtimeKey: string; projectPath: string };
-        body?: string;
-      },
-    ) => Promise<Response>;
-  };
-  const target = {
-    runtimeKey: "task-1",
-    projectPath,
-  };
-
-  let startServerCalled = false;
-  client.startServer = async () => {
-    startServerCalled = true;
-    return {
-      process: null,
-      port: 43128,
-    };
-  };
-  client.registerExternalServer(target, "http://127.0.0.1:43127");
-
-  const originalFetch = globalThis.fetch;
-  const requestedUrls: string[] = [];
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = String(input);
-    requestedUrls.push(url);
-    if (url === "http://127.0.0.1:43127/session") {
-      throw new TypeError("fetch failed");
-    }
-    return new Response("", { status: 200 });
-  }) as typeof fetch;
-
-  try {
-    await assert.rejects(
-      client.request("/session", {
-        method: "GET",
-        target,
-      }),
-      /fetch failed/,
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-
-  assert.equal(startServerCalled, false);
-  assert.deepEqual(requestedUrls, [
-    "http://127.0.0.1:43127/session",
-  ]);
-});
-
-test("getAttachBaseUrl 在未注册外部 runtime 时会启动当前 task 自己的 serve", async () => {
+test("getAttachBaseUrl 会启动当前 task 自己的 serve", async () => {
   const projectPath = createTempDir();
   const client = new OpenCodeClient() as OpenCodeClient & {
     startServer: (target: { runtimeKey: string; projectPath: string }) => Promise<{ process: null; port: number }>;

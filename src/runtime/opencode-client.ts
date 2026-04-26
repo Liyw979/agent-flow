@@ -12,7 +12,6 @@ import { resolveWindowsCmdPath } from "./windows-shell";
 interface ServeHandle {
   process: ChildProcessWithoutNullStreams | null;
   port: number;
-  source?: "owned" | "external";
 }
 
 interface OpenCodeEvent {
@@ -119,12 +118,6 @@ export class OpenCodeClient {
     const key = normalized.runtimeKey;
     const existing = this.servers.get(key);
     if (existing) {
-      if (!existing.runtimeKey) {
-        existing.runtimeKey = key;
-      }
-      if (!existing.projectPath) {
-        existing.projectPath = normalized.projectPath;
-      }
       return existing;
     }
 
@@ -165,9 +158,6 @@ export class OpenCodeClient {
   }
 
   protected async resolveServerHandle(state: ProjectServerState): Promise<ServeHandle> {
-    if (state.runtimeKey === state.projectPath) {
-      return this.startServer(state.projectPath);
-    }
     return this.startServer({
       runtimeKey: state.runtimeKey,
       projectPath: state.projectPath,
@@ -182,18 +172,6 @@ export class OpenCodeClient {
       return;
     }
     state.injectedConfigContent = nextContent;
-  }
-
-  registerExternalServer(target: OpenCodeRuntimeTargetInput, attachBaseUrl: string) {
-    const normalized = this.normalizeTarget(target);
-    const port = this.parsePortFromBaseUrl(attachBaseUrl);
-    const state = this.getProjectServerState(normalized);
-    state.serverHandle = Promise.resolve({
-      process: null,
-      port,
-      source: "external",
-    });
-    state.eventPump = null;
   }
 
   async createSession(target: OpenCodeRuntimeTargetInput, title: string): Promise<string> {
@@ -435,12 +413,6 @@ export class OpenCodeClient {
   }
 
   private async terminateServeHandle(server: ServeHandle): Promise<OpenCodeShutdownReport> {
-    if (server.source === "external") {
-      return {
-        killedPids: [],
-      };
-    }
-
     const killedPids = this.findListeningPids(server.port)
       .filter((pid) => this.isOpenCodeServeProcess(pid));
 
@@ -585,7 +557,7 @@ export class OpenCodeClient {
     });
   }
 
-  protected async startServer(target: OpenCodeRuntimeTargetInput): Promise<ServeHandle> {
+  protected async startServer(target: OpenCodeRuntimeTarget): Promise<ServeHandle> {
     const state = this.getProjectServerState(target);
 
     const serverEnv = { ...process.env };
@@ -693,7 +665,6 @@ export class OpenCodeClient {
     return {
       process: childProcess,
       port,
-      source: "owned",
     };
   }
 

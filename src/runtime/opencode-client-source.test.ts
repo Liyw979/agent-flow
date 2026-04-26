@@ -28,6 +28,11 @@ test("配置变化时不再触发 scheduleShutdown 重启链路", () => {
   assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /scheduleShutdown\s*\(/);
 });
 
+test("OpenCodeClient 不再保留 owned 或 external runtime 来源字段", () => {
+  assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /source\?:\s*"owned"\s*\|\s*"external"/);
+  assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /registerExternalServer\s*\(/);
+});
+
 test("createSession 超时后不再 shutdown 后自动重试", () => {
   assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /create_session_timed_out/);
   assert.doesNotMatch(OPENCODE_CLIENT_SOURCE, /await this\.shutdown\(normalized\.runtimeKey\)/);
