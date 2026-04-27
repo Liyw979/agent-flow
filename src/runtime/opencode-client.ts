@@ -83,6 +83,7 @@ interface RelatedTransportReplySnapshot {
   messageId: string;
   timestamp: string;
   finish: string;
+  parentMessageId: string;
 }
 
 type TransportRecoveryInspection =
@@ -101,6 +102,7 @@ type TransportRecoveryInspection =
   | {
     kind: "waiting-with-related-reply";
     messageCount: number;
+    relatedReplyCount: number;
     latestRelatedReply: RelatedTransportReplySnapshot;
   }
   | {
@@ -1106,8 +1108,7 @@ export class OpenCodeClient {
       };
     }
 
-    const relatedReplies = normalizedRecords
-      .filter((record) => this.extractParentMessageId(record.info) === submittedMessage.normalized.id)
+    const relatedReplies = this.collectRelatedTransportReplies(normalizedRecords, submittedMessage.normalized.id)
       .sort((left, right) => {
         const leftCompleted = Date.parse(left.normalized.completedAt ?? left.normalized.timestamp) || 0;
         const rightCompleted = Date.parse(right.normalized.completedAt ?? right.normalized.timestamp) || 0;
@@ -1129,6 +1130,7 @@ export class OpenCodeClient {
       return {
         kind: "waiting-with-related-reply",
         messageCount: messages.length,
+        relatedReplyCount: relatedReplies.length,
         latestRelatedReply: this.buildRelatedTransportReplySnapshot(latestRelatedReply),
       };
     }
@@ -1155,7 +1157,9 @@ export class OpenCodeClient {
     if (inspection.kind === "waiting-with-related-reply") {
       return {
         ...baseDetails,
+        relatedReplyCount: inspection.relatedReplyCount,
         latestRelatedMessageId: inspection.latestRelatedReply.messageId,
+        latestRelatedParentMessageId: inspection.latestRelatedReply.parentMessageId,
         latestRelatedTimestamp: inspection.latestRelatedReply.timestamp,
         latestRelatedFinish: inspection.latestRelatedReply.finish,
       };
@@ -1168,11 +1172,65 @@ export class OpenCodeClient {
     info: Record<string, unknown>;
     normalized: OpenCodeNormalizedMessage;
   }): RelatedTransportReplySnapshot {
+    const parentMessageId = this.extractParentMessageId(record.info);
+    if (!parentMessageId) {
+      throw new Error(`Transport recovery related reply 缺少 parentID: messageId=${record.normalized.id}`);
+    }
+
     return {
       messageId: record.normalized.id,
       timestamp: record.normalized.completedAt ?? record.normalized.timestamp,
       finish: this.resolveTransportReplyFinish(record.info),
+      parentMessageId,
     };
+  }
+
+  private collectRelatedTransportReplies(
+    records: Array<{
+      raw: unknown;
+      info: Record<string, unknown>;
+      normalized: OpenCodeNormalizedMessage;
+      createdAtMs: number;
+    }>,
+    rootMessageId: string,
+  ) {
+    const childrenByParent = new Map<string, typeof records>();
+    for (const record of records) {
+      const parentMessageId = this.extractParentMessageId(record.info);
+      if (!parentMessageId) {
+        continue;
+      }
+      const siblings = childrenByParent.get(parentMessageId) ?? [];
+      siblings.push(record);
+      childrenByParent.set(parentMessageId, siblings);
+    }
+
+    const relatedReplies: typeof records = [];
+    const pending = [...(childrenByParent.get(rootMessageId) ?? [])];
+    const seenMessageIds = new Set<string>();
+
+    while (pending.length > 0) {
+      const current = pending.shift();
+      if (!current) {
+        continue;
+      }
+      const currentMessageId = current.normalized.id;
+      if (seenMessageIds.has(currentMessageId)) {
+        continue;
+      }
+      seenMessageIds.add(currentMessageId);
+      if (
+        current.normalized.sender !== "assistant"
+        && current.normalized.sender !== "system"
+        && current.normalized.sender !== "unknown"
+      ) {
+        continue;
+      }
+      relatedReplies.push(current);
+      pending.push(...(childrenByParent.get(currentMessageId) ?? []));
+    }
+
+    return relatedReplies;
   }
 
   private resolveTransportReplyFinish(info: Record<string, unknown>): string {

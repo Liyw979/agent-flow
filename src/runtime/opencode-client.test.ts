@@ -373,6 +373,173 @@ test("recoverExecutionResultAfterTransportError 在 fetch failed 后会从 sessi
   assert.ok(listCount >= 2);
 });
 
+test("recoverExecutionResultAfterTransportError 会沿 parent 链恢复多级 assistant 回复", async () => {
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
+    listSessionMessages: (target: string, sessionId: string, limit?: number) => Promise<unknown[]>;
+  };
+
+  typed.listSessionMessages = async () => [
+    {
+      info: {
+        id: "msg-user",
+        role: "user",
+        time: {
+          created: Date.parse("2026-04-27T07:33:41.201Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "请继续挑战" },
+      ],
+    },
+    {
+      info: {
+        id: "msg-placeholder",
+        parentID: "msg-user",
+        role: "assistant",
+        time: {
+          created: Date.parse("2026-04-27T07:33:41.214Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "我先继续核对现有论证。" },
+      ],
+    },
+    {
+      info: {
+        id: "msg-tool-calls",
+        parentID: "msg-placeholder",
+        role: "assistant",
+        finish: "tool-calls",
+        time: {
+          created: Date.parse("2026-04-27T07:38:10.000Z"),
+          completed: Date.parse("2026-04-27T07:38:22.000Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "我继续读取代码和 RFC。" },
+      ],
+    },
+    {
+      info: {
+        id: "msg-final",
+        parentID: "msg-tool-calls",
+        role: "assistant",
+        finish: "stop",
+        time: {
+          created: Date.parse("2026-04-27T07:38:24.000Z"),
+          completed: Date.parse("2026-04-27T07:38:40.000Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "最终挑战结论已补齐。" },
+      ],
+    },
+  ];
+
+  const recovered = await client.recoverExecutionResultAfterTransportError(
+    projectPath,
+    "session-1",
+    "2026-04-27T07:33:41.201Z",
+    "fetch failed",
+    100,
+  );
+
+  assert.notEqual(recovered, null);
+  assert.equal(recovered?.status, "completed");
+  assert.equal(recovered?.messageId, "msg-final");
+  assert.equal(recovered?.finalMessage, "最终挑战结论已补齐。");
+});
+
+test("recoverExecutionResultAfterTransportError 不会跨到后续 user 子树恢复结果", async () => {
+  const userDataPath = createTempDir();
+  initAppFileLogger(userDataPath);
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
+    listSessionMessages: (target: string, sessionId: string, limit?: number) => Promise<unknown[]>;
+  };
+  const runtimeTarget = {
+    runtimeKey: "task-transport-recovery-nested-user",
+    projectPath,
+  };
+
+  typed.listSessionMessages = async () => [
+    {
+      info: {
+        id: "msg-user",
+        role: "user",
+        time: {
+          created: Date.parse("2026-04-27T07:33:41.201Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "请继续挑战" },
+      ],
+    },
+    {
+      info: {
+        id: "msg-placeholder",
+        parentID: "msg-user",
+        role: "assistant",
+        time: {
+          created: Date.parse("2026-04-27T07:33:41.214Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "我先继续核对现有论证。" },
+      ],
+    },
+    {
+      info: {
+        id: "msg-followup-user",
+        parentID: "msg-placeholder",
+        role: "user",
+        time: {
+          created: Date.parse("2026-04-27T07:35:10.000Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "补充一个新问题" },
+      ],
+    },
+    {
+      info: {
+        id: "msg-followup-final",
+        parentID: "msg-followup-user",
+        role: "assistant",
+        finish: "stop",
+        time: {
+          created: Date.parse("2026-04-27T07:35:15.000Z"),
+          completed: Date.parse("2026-04-27T07:35:20.000Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "这是后续 user 回合的结果。" },
+      ],
+    },
+  ];
+
+  const recovered = await client.recoverExecutionResultAfterTransportError(
+    runtimeTarget,
+    "session-1",
+    "2026-04-27T07:33:41.201Z",
+    "fetch failed",
+    1,
+  );
+
+  assert.equal(recovered, null);
+  const logFilePath = buildTaskLogFilePath(userDataPath, runtimeTarget.runtimeKey);
+  const records = fs.readFileSync(logFilePath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(records.map((record) => record.event), [
+    "opencode.transport_recovery_started",
+    "opencode.transport_recovery_timed_out",
+  ]);
+  assert.equal(records[1]?.recoveryState, "waiting-with-related-reply");
+  assert.equal(records[1]?.relatedReplyCount, 1);
+  assert.equal(records[1]?.latestRelatedMessageId, "msg-placeholder");
+  assert.equal(records[1]?.latestRelatedParentMessageId, "msg-user");
+});
+
 test("recoverExecutionResultAfterTransportError 默认会等待超过 45 秒的晚到正式回复", async () => {
   const userDataPath = createTempDir();
   initAppFileLogger(userDataPath);
@@ -535,7 +702,9 @@ test("recoverExecutionResultAfterTransportError 没有正式回复时不能把 t
     "opencode.transport_recovery_timed_out",
   ]);
   assert.equal(records[1]?.recoveryState, "waiting-with-related-reply");
+  assert.equal(records[1]?.relatedReplyCount, 1);
   assert.equal(records[1]?.latestRelatedMessageId, "msg-tool-calls");
+  assert.equal(records[1]?.latestRelatedParentMessageId, "msg-user");
   assert.equal(records[1]?.latestRelatedFinish, "tool-calls");
 });
 
