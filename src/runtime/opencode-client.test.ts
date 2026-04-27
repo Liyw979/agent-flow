@@ -373,6 +373,172 @@ test("recoverExecutionResultAfterTransportError 在 fetch failed 后会从 sessi
   assert.ok(listCount >= 2);
 });
 
+test("recoverExecutionResultAfterTransportError 默认会等待超过 45 秒的晚到正式回复", async () => {
+  const userDataPath = createTempDir();
+  initAppFileLogger(userDataPath);
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
+    listSessionMessages: (target: string, sessionId: string, limit?: number) => Promise<unknown[]>;
+  };
+  const runtimeTarget = {
+    runtimeKey: "task-transport-recovery",
+    projectPath,
+  };
+
+  const originalDateNow = Date.now;
+  const originalSetTimeout = globalThis.setTimeout;
+  let nowMs = Date.parse("2026-04-27T04:39:11.321Z");
+  const submittedAt = "2026-04-27T04:34:10.422Z";
+  const finalAtMs = Date.parse("2026-04-27T04:41:09.388Z");
+
+  Date.now = () => nowMs;
+  globalThis.setTimeout = (((handler: (...args: unknown[]) => void, _timeout?: number, ...args: unknown[]) => {
+    nowMs += 15_000;
+    handler(...args);
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout);
+
+  typed.listSessionMessages = async () => {
+    const messages: unknown[] = [
+      {
+        info: {
+          id: "msg-user",
+          role: "user",
+          time: {
+            created: Date.parse(submittedAt),
+          },
+        },
+        parts: [
+          { type: "text", text: "请给出讨论总结" },
+        ],
+      },
+      {
+        info: {
+          id: "msg-tool-calls",
+          parentID: "msg-user",
+          role: "assistant",
+          finish: "tool-calls",
+          time: {
+            created: Date.parse("2026-04-27T04:39:40.178Z"),
+            completed: Date.parse("2026-04-27T04:39:48.072Z"),
+          },
+        },
+        parts: [
+          { type: "tool", tool: "read" },
+        ],
+      },
+    ];
+
+    if (nowMs >= finalAtMs) {
+      messages.push({
+        info: {
+          id: "msg-final",
+          parentID: "msg-user",
+          role: "assistant",
+          finish: "stop",
+          time: {
+            created: Date.parse("2026-04-27T04:41:08.077Z"),
+            completed: finalAtMs,
+          },
+        },
+        parts: [
+          { type: "text", text: "最终总结已生成" },
+        ],
+      });
+    }
+
+    return messages;
+  };
+
+  try {
+    const recovered = await client.recoverExecutionResultAfterTransportError(
+      runtimeTarget,
+      "session-1",
+      submittedAt,
+      "fetch failed",
+    );
+
+    assert.notEqual(recovered, null);
+    assert.equal(recovered?.status, "completed");
+    assert.equal(recovered?.messageId, "msg-final");
+    assert.equal(recovered?.finalMessage, "最终总结已生成");
+
+    const logFilePath = buildTaskLogFilePath(userDataPath, runtimeTarget.runtimeKey);
+    const records = fs.readFileSync(logFilePath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.deepEqual(records.map((record) => record.event), [
+      "opencode.transport_recovery_started",
+      "opencode.transport_recovery_succeeded",
+    ]);
+    assert.equal(records[0]?.timeoutMs, 180000);
+    assert.equal(records[1]?.recoveredMessageId, "msg-final");
+  } finally {
+    Date.now = originalDateNow;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
+test("recoverExecutionResultAfterTransportError 没有正式回复时不能把 tool-calls 文本当成恢复结果", async () => {
+  const userDataPath = createTempDir();
+  initAppFileLogger(userDataPath);
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
+    listSessionMessages: (target: string, sessionId: string, limit?: number) => Promise<unknown[]>;
+  };
+  const runtimeTarget = {
+    runtimeKey: "task-transport-recovery-timeout",
+    projectPath,
+  };
+
+  typed.listSessionMessages = async () => [
+    {
+      info: {
+        id: "msg-user",
+        role: "user",
+        time: {
+          created: Date.parse("2026-04-27T04:34:10.422Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "请给出讨论总结" },
+      ],
+    },
+    {
+      info: {
+        id: "msg-tool-calls",
+        parentID: "msg-user",
+        role: "assistant",
+        finish: "tool-calls",
+        time: {
+          created: Date.parse("2026-04-27T04:39:40.178Z"),
+          completed: Date.parse("2026-04-27T04:39:48.072Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "我先继续读取证据。" },
+      ],
+    },
+  ];
+
+  const recovered = await client.recoverExecutionResultAfterTransportError(
+    runtimeTarget,
+    "session-1",
+    "2026-04-27T04:34:10.422Z",
+    "fetch failed",
+    1,
+  );
+
+  assert.equal(recovered, null);
+  const logFilePath = buildTaskLogFilePath(userDataPath, runtimeTarget.runtimeKey);
+  const records = fs.readFileSync(logFilePath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(records.map((record) => record.event), [
+    "opencode.transport_recovery_started",
+    "opencode.transport_recovery_timed_out",
+  ]);
+  assert.equal(records[1]?.recoveryState, "waiting-with-related-reply");
+  assert.equal(records[1]?.latestRelatedMessageId, "msg-tool-calls");
+  assert.equal(records[1]?.latestRelatedFinish, "tool-calls");
+});
+
 test("配置变更时不应触发 shutdown", async () => {
   const { client, projectPath } = createClient();
   const typed = client as OpenCodeClient & {

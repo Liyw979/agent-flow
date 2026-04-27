@@ -63,6 +63,7 @@ export interface OpenCodeSessionRuntime {
 
 const MAX_RUNTIME_MESSAGES = 100;
 const SERVE_BASE_URL_TIMEOUT_MS = 10_000;
+const TRANSPORT_ERROR_RECOVERY_TIMEOUT_MS = 180_000;
 interface SessionWaiter {
   sessionId: string;
   after: number;
@@ -77,6 +78,36 @@ interface ProjectServerState {
   eventPump: Promise<void> | null;
   injectedConfigContent: string | null;
 }
+
+interface RelatedTransportReplySnapshot {
+  messageId: string;
+  timestamp: string;
+  finish: string;
+}
+
+type TransportRecoveryInspection =
+  | {
+    kind: "empty";
+    messageCount: 0;
+  }
+  | {
+    kind: "submitted-message-missing";
+    messageCount: number;
+  }
+  | {
+    kind: "waiting-without-related-reply";
+    messageCount: number;
+  }
+  | {
+    kind: "waiting-with-related-reply";
+    messageCount: number;
+    latestRelatedReply: RelatedTransportReplySnapshot;
+  }
+  | {
+    kind: "recovered";
+    messageCount: number;
+    result: OpenCodeExecutionResult;
+  };
 
 export interface OpenCodeRuntimeTarget {
   runtimeKey: string;
@@ -314,7 +345,7 @@ export class OpenCodeClient {
     sessionId: string,
     startedAt: string,
     errorMessage: string,
-    timeoutMs = 45_000,
+    timeoutMs = TRANSPORT_ERROR_RECOVERY_TIMEOUT_MS,
   ): Promise<OpenCodeExecutionResult | null> {
     const normalized = this.normalizeTarget(target);
     if (!this.isRecoverableTransportError(errorMessage)) {
@@ -324,15 +355,55 @@ export class OpenCodeClient {
     const startedAtMs = Date.parse(startedAt);
     const lowerBound = Number.isFinite(startedAtMs) ? startedAtMs - 2_000 : Date.now() - 2_000;
     const deadline = Date.now() + timeoutMs;
+    appendAppLog("info", "opencode.transport_recovery_started", {
+      projectPath: normalized.projectPath,
+      sessionId,
+      startedAt,
+      errorMessage,
+      timeoutMs,
+    }, {
+      runtimeKey: normalized.runtimeKey,
+    });
 
     while (Date.now() < deadline) {
-      const recovered = await this.findRecoveredAssistantReply(normalized, sessionId, lowerBound);
-      if (recovered) {
-        return recovered;
+      const inspection = await this.inspectTransportRecovery(normalized, sessionId, lowerBound);
+      if (inspection.kind === "recovered") {
+        appendAppLog("info", "opencode.transport_recovery_succeeded", {
+          projectPath: normalized.projectPath,
+          sessionId,
+          recoveredMessageId: inspection.result.messageId,
+          recoveredAt: inspection.result.timestamp,
+        }, {
+          runtimeKey: normalized.runtimeKey,
+        });
+        return inspection.result;
       }
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
 
+    const finalInspection = await this.inspectTransportRecovery(normalized, sessionId, lowerBound);
+    if (finalInspection.kind === "recovered") {
+      appendAppLog("info", "opencode.transport_recovery_succeeded", {
+        projectPath: normalized.projectPath,
+        sessionId,
+        recoveredMessageId: finalInspection.result.messageId,
+        recoveredAt: finalInspection.result.timestamp,
+      }, {
+        runtimeKey: normalized.runtimeKey,
+      });
+      return finalInspection.result;
+    }
+
+    appendAppLog("error", "opencode.transport_recovery_timed_out", {
+      projectPath: normalized.projectPath,
+      sessionId,
+      startedAt,
+      errorMessage,
+      timeoutMs,
+      ...this.buildTransportRecoveryTimeoutDetails(finalInspection),
+    }, {
+      runtimeKey: normalized.runtimeKey,
+    });
     return null;
   }
 
@@ -997,14 +1068,17 @@ export class OpenCodeClient {
     return null;
   }
 
-  private async findRecoveredAssistantReply(
+  private async inspectTransportRecovery(
     target: OpenCodeRuntimeTargetInput,
     sessionId: string,
     lowerBoundMs: number,
-  ): Promise<OpenCodeExecutionResult | null> {
+  ): Promise<TransportRecoveryInspection> {
     const messages = await this.listSessionMessages(target, sessionId);
     if (messages.length === 0) {
-      return null;
+      return {
+        kind: "empty",
+        messageCount: 0,
+      };
     }
 
     const normalizedRecords = messages.map((raw) => {
@@ -1026,30 +1100,88 @@ export class OpenCodeClient {
         && record.createdAtMs >= lowerBoundMs)
       .sort((left, right) => left.createdAtMs - right.createdAtMs)[0];
     if (!submittedMessage) {
-      return null;
+      return {
+        kind: "submitted-message-missing",
+        messageCount: messages.length,
+      };
     }
 
-    const finalReply = normalizedRecords
-      .filter((record) =>
-        this.extractParentMessageId(record.info) === submittedMessage.normalized.id
-        && this.isRecoverableReplyCandidate(record.info, record.normalized))
+    const relatedReplies = normalizedRecords
+      .filter((record) => this.extractParentMessageId(record.info) === submittedMessage.normalized.id)
       .sort((left, right) => {
         const leftCompleted = Date.parse(left.normalized.completedAt ?? left.normalized.timestamp) || 0;
         const rightCompleted = Date.parse(right.normalized.completedAt ?? right.normalized.timestamp) || 0;
         return rightCompleted - leftCompleted;
-      })[0];
+      });
+
+    const latestRelatedReply = relatedReplies[0];
+    const finalReply = relatedReplies
+      .filter((record) =>
+        this.isRecoverableReplyCandidate(record.info, record.normalized))[0];
     if (!finalReply) {
-      return null;
+      if (!latestRelatedReply) {
+        return {
+          kind: "waiting-without-related-reply",
+          messageCount: messages.length,
+        };
+      }
+
+      return {
+        kind: "waiting-with-related-reply",
+        messageCount: messages.length,
+        latestRelatedReply: this.buildRelatedTransportReplySnapshot(latestRelatedReply),
+      };
     }
 
     const message = finalReply.normalized;
     return {
-      status: message.error ? "error" : "completed",
-      finalMessage: message.content || message.error || "",
-      messageId: message.id,
-      timestamp: message.completedAt ?? message.timestamp,
-      rawMessage: message,
+      kind: "recovered",
+      result: {
+        status: message.error ? "error" : "completed",
+        finalMessage: message.content || message.error || "",
+        messageId: message.id,
+        timestamp: message.completedAt ?? message.timestamp,
+        rawMessage: message,
+      },
+      messageCount: messages.length,
     };
+  }
+
+  private buildTransportRecoveryTimeoutDetails(inspection: Exclude<TransportRecoveryInspection, { kind: "recovered" }>) {
+    const baseDetails = {
+      observedMessageCount: inspection.messageCount,
+      recoveryState: inspection.kind,
+    };
+    if (inspection.kind === "waiting-with-related-reply") {
+      return {
+        ...baseDetails,
+        latestRelatedMessageId: inspection.latestRelatedReply.messageId,
+        latestRelatedTimestamp: inspection.latestRelatedReply.timestamp,
+        latestRelatedFinish: inspection.latestRelatedReply.finish,
+      };
+    }
+
+    return baseDetails;
+  }
+
+  private buildRelatedTransportReplySnapshot(record: {
+    info: Record<string, unknown>;
+    normalized: OpenCodeNormalizedMessage;
+  }): RelatedTransportReplySnapshot {
+    return {
+      messageId: record.normalized.id,
+      timestamp: record.normalized.completedAt ?? record.normalized.timestamp,
+      finish: this.resolveTransportReplyFinish(record.info),
+    };
+  }
+
+  private resolveTransportReplyFinish(info: Record<string, unknown>): string {
+    if (typeof info["finish"] !== "string") {
+      return "unknown";
+    }
+
+    const finish = info["finish"].trim();
+    return finish || "unknown";
   }
 
   async getSessionMessage(
@@ -1185,11 +1317,16 @@ export class OpenCodeClient {
       return true;
     }
 
-    if (message.content.trim()) {
-      return true;
+    return this.isTerminalRecoverableFinish(info) && message.content.trim().length > 0;
+  }
+
+  private isTerminalRecoverableFinish(info: Record<string, unknown>): boolean {
+    if (typeof info["finish"] !== "string") {
+      return false;
     }
 
-    return typeof info["finish"] === "string" && info["finish"] === "stop";
+    const finish = info["finish"].trim();
+    return finish.length > 0 && finish !== "tool-calls";
   }
 
   private isRecoverableTransportError(errorMessage: string): boolean {
