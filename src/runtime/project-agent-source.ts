@@ -31,6 +31,8 @@ function buildReadonlyAgentPermissionConfig(): OpenCodePermissionConfig {
     bash: "deny",
     task: "deny",
     patch: "deny",
+    webfetch: "deny",
+    websearch: "deny",
   };
 }
 

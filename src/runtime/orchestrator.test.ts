@@ -1705,6 +1705,8 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
       bash: "deny",
       task: "deny",
       patch: "deny",
+      webfetch: "deny",
+      websearch: "deny",
     },
   });
 });
@@ -1789,6 +1791,8 @@ test("未写入 Build 时当前 Project 可以没有可写 Agent", async () => {
       bash: "deny",
       task: "deny",
       patch: "deny",
+      webfetch: "deny",
+      websearch: "deny",
     },
   });
 });

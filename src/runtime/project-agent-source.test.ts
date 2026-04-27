@@ -74,10 +74,12 @@ test("可写 Agent 仍会注入自定义 prompt，只是不追加只读权限", 
     bash: "deny",
     task: "deny",
     patch: "deny",
+    webfetch: "deny",
+    websearch: "deny",
   });
 });
 
-test("不可写 Agent 只拒绝写入相关 OpenCode 工具权限", () => {
+test("不可写 Agent 会拒绝写入与联网相关 OpenCode 工具权限", () => {
   const injected = buildInjectedConfigFromAgents([
     { id: "QA", prompt: "你是 QA。", isWritable: false },
   ]);
@@ -94,6 +96,8 @@ test("不可写 Agent 只拒绝写入相关 OpenCode 工具权限", () => {
     bash: "deny",
     task: "deny",
     patch: "deny",
+    webfetch: "deny",
+    websearch: "deny",
   });
 });
 

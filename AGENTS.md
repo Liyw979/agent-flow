@@ -59,7 +59,7 @@
 ### 3.1 OpenCode 注入与运行时
 
 - 每个工作区独占一个 `opencode serve`；启动时直接执行该命令、解析实际监听地址，并让 attach / 健康检查 / 请求都跟随这个地址与工作区目录。opencode-client[ensureServer, startServer, getAttachBaseUrl, request]、opencode-serve-launch[extractOpenCodeServeBaseUrl]
-- `opencode serve` 只在启动前一次性注入当前拓扑里真正需要自定义 prompt / writable 的 Agent 配置；注入内容来自 `nodeRecords`，使用内置 prompt 的 Agent 不写入 `OPENCODE_CONFIG_CONTENT`，单个 serve 运行中也不会 reload 或因配置变化自动重启。orchestrator[setInjectedConfigForTask]、project-agent-source[extractDslAgentsFromTopology, buildInjectedConfigFromAgents]、types[usesOpenCodeBuiltinPrompt]、opencode-client[setInjectedConfigContent, startServer]
+- `opencode serve` 只在启动前一次性注入当前拓扑里真正需要自定义 prompt / writable 的 Agent 配置；注入内容来自 `nodeRecords`，使用内置 prompt 的 Agent 不写入 `OPENCODE_CONFIG_CONTENT`，单个 serve 运行中也不会 reload 或因配置变化自动重启。对 `writable: false` 的 Agent，运行时会显式拒绝 `write`、`edit`、`bash`、`task`、`patch`、`webfetch`、`websearch` 权限。orchestrator[setInjectedConfigForTask]、project-agent-source[extractDslAgentsFromTopology, buildInjectedConfigFromAgents]、types[usesOpenCodeBuiltinPrompt]、opencode-client[setInjectedConfigContent, startServer]
 - Session 与消息接口分别对齐官方 `POST /session`、`POST /session/:id/message`，请求体使用 `parts`；本机未安装或无法连接 `opencode serve` 时直接报错并写日志。opencode-client[createSession, submitMessage, startServer]、app-log[appendAppLog]
 
 ### 3.2 Task 初始化与状态流转
