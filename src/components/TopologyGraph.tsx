@@ -7,8 +7,7 @@ import { AgentHistoryMarkdown } from "@/lib/agent-history-markdown";
 import { resolveFullscreenOverlayStrategy } from "@/lib/fullscreen-overlay-strategy";
 import { getTopologyHistoryItemButtonClassName } from "@/lib/topology-history-layout";
 import {
-  shouldAutoScrollTopologyHistory,
-  shouldStickTopologyHistoryToBottom,
+  createTopologyHistoryAutoScrollTracker,
 } from "@/lib/topology-history-scroll";
 import {
   PANEL_HEADER_CLASS,
@@ -237,9 +236,8 @@ export function TopologyGraph({
   const topologyPanelBodyClassName = getTopologyPanelBodyClassName();
   const fullscreenButtonCopy = getPanelFullscreenButtonCopy(isMaximized);
   const canvasViewportRef = useRef<HTMLDivElement | null>(null);
-  const historyViewportRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const historyShouldStickToBottomRef = useRef<Record<string, boolean>>({});
-  const historyLastItemIdRef = useRef<Record<string, string | null>>({});
+  const historyScrollTrackerByNodeIdRef = useRef<Record<string, ReturnType<typeof createTopologyHistoryAutoScrollTracker>>>({});
+  const maximizedHistoryScrollTrackerRef = useRef(createTopologyHistoryAutoScrollTracker());
   const [canvasViewport, setCanvasViewport] = useState<{ width: number; height: number } | null>(null);
   const [maximizedAgentId, setMaximizedAgentId] = useState<string | null>(null);
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<SelectedHistoryItemState | null>(null);
@@ -399,26 +397,14 @@ export function TopologyGraph({
 
   useEffect(() => {
     if (!topology) {
-      historyViewportRefs.current = {};
-      historyShouldStickToBottomRef.current = {};
-      historyLastItemIdRef.current = {};
+      historyScrollTrackerByNodeIdRef.current = {};
       return;
     }
 
     const activeNodeIds = new Set(visibleNodeIds);
-    for (const nodeId of Object.keys(historyViewportRefs.current)) {
+    for (const nodeId of Object.keys(historyScrollTrackerByNodeIdRef.current)) {
       if (!activeNodeIds.has(nodeId)) {
-        delete historyViewportRefs.current[nodeId];
-      }
-    }
-    for (const nodeId of Object.keys(historyShouldStickToBottomRef.current)) {
-      if (!activeNodeIds.has(nodeId)) {
-        delete historyShouldStickToBottomRef.current[nodeId];
-      }
-    }
-    for (const nodeId of Object.keys(historyLastItemIdRef.current)) {
-      if (!activeNodeIds.has(nodeId)) {
-        delete historyLastItemIdRef.current[nodeId];
+        delete historyScrollTrackerByNodeIdRef.current[nodeId];
       }
     }
   }, [topology, visibleNodeIds]);
@@ -432,29 +418,11 @@ export function TopologyGraph({
 
     for (const nodeId of visibleNodeIds) {
       const historyItems = historyByAgent.get(nodeId) ?? [];
-      const nextLastItemId = historyItems.at(-1)?.id ?? null;
-      const previousLastItemId = historyLastItemIdRef.current[nodeId] ?? null;
-      const shouldStickToBottom = historyShouldStickToBottomRef.current[nodeId] ?? true;
-
-      if (
-        shouldAutoScrollTopologyHistory({
-          previousLastItemId,
-          nextLastItemId,
-          shouldStickToBottom,
-        })
-      ) {
-        frameIds.push(
-          requestAnimationFrame(() => {
-            const viewport = historyViewportRefs.current[nodeId];
-            if (!viewport) {
-              return;
-            }
-            viewport.scrollTop = viewport.scrollHeight;
-          }),
-        );
+      const tracker = getHistoryScrollTracker(nodeId);
+      const frameId = tracker.sync(historyItems.at(-1)?.id ?? null);
+      if (frameId !== null) {
+        frameIds.push(frameId);
       }
-
-      historyLastItemIdRef.current[nodeId] = nextLastItemId;
     }
 
     return () => {
@@ -463,6 +431,15 @@ export function TopologyGraph({
       }
     };
   }, [historyByAgent, topology, visibleNodeIds]);
+
+  useEffect(() => {
+    if (!maximizedAgentId) {
+      maximizedHistoryScrollTrackerRef.current.reset();
+      return;
+    }
+
+    maximizedHistoryScrollTrackerRef.current.reinitialize();
+  }, [maximizedAgentId]);
 
   useEffect(() => {
     if (!maximizedAgentId) {
@@ -520,6 +497,33 @@ export function TopologyGraph({
     ? (canvasLayout?.nodes.find((node) => node.id === maximizedAgentId) ?? null)
     : null;
   const maximizedNodePresentation = maximizedNode ? buildNodePresentation(maximizedNode.id) : null;
+
+  function getHistoryScrollTracker(nodeId: string): ReturnType<typeof createTopologyHistoryAutoScrollTracker> {
+    const existing = historyScrollTrackerByNodeIdRef.current[nodeId];
+    if (existing) {
+      return existing;
+    }
+    const tracker = createTopologyHistoryAutoScrollTracker();
+    historyScrollTrackerByNodeIdRef.current[nodeId] = tracker;
+    return tracker;
+  }
+
+  useEffect(() => {
+    if (!maximizedNodePresentation) {
+      return;
+    }
+
+    const frameId = maximizedHistoryScrollTrackerRef.current.sync(
+      maximizedNodePresentation.historyItems.at(-1)?.id ?? null,
+    );
+    if (frameId !== null) {
+      return () => {
+        cancelAnimationFrame(frameId);
+      };
+    }
+
+    return undefined;
+  }, [maximizedNodePresentation]);
 
   if (!workspace || !task || !topology || !canvasLayout) {
     return (
@@ -689,15 +693,14 @@ export function TopologyGraph({
                     {historyItems.length > 0 ? (
                       <div
                         ref={(element) => {
-                          historyViewportRefs.current[node.id] = element;
+                          getHistoryScrollTracker(node.id).bindViewport(element);
                         }}
                         onScroll={(event) => {
-                          historyShouldStickToBottomRef.current[node.id] =
-                            shouldStickTopologyHistoryToBottom({
-                              scrollHeight: event.currentTarget.scrollHeight,
-                              clientHeight: event.currentTarget.clientHeight,
-                              scrollTop: event.currentTarget.scrollTop,
-                            });
+                          getHistoryScrollTracker(node.id).updateStickState({
+                            scrollHeight: event.currentTarget.scrollHeight,
+                            clientHeight: event.currentTarget.clientHeight,
+                            scrollTop: event.currentTarget.scrollTop,
+                          });
                         }}
                         className="h-full space-y-1 overflow-y-auto"
                       >
@@ -829,7 +832,20 @@ export function TopologyGraph({
               </div>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+            <div
+              ref={(element) => {
+                maximizedHistoryScrollTrackerRef.current.bindViewport(element);
+              }}
+              data-testid="topology-fullscreen-history-viewport"
+              onScroll={(event) => {
+                maximizedHistoryScrollTrackerRef.current.updateStickState({
+                  scrollHeight: event.currentTarget.scrollHeight,
+                  clientHeight: event.currentTarget.clientHeight,
+                  scrollTop: event.currentTarget.scrollTop,
+                });
+              }}
+              className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2"
+            >
               {maximizedNodePresentation.historyItems.length > 0 ? (
                 <div className="space-y-1.5">
                   {maximizedNodePresentation.historyItems.map((item) => (

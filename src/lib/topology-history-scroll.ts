@@ -10,6 +10,12 @@ type TopologyHistoryViewportMetrics = {
   scrollTop: number;
 };
 
+interface TopologyHistoryAutoScrollTrackerState {
+  viewport: HTMLDivElement | null;
+  shouldStickToBottom: boolean;
+  lastItemId: string | null;
+}
+
 export function shouldAutoScrollTopologyHistory(
   input: TopologyHistoryAutoScrollInput,
 ): boolean {
@@ -26,4 +32,56 @@ export function shouldStickTopologyHistoryToBottom(
   const distanceToBottom =
     metrics.scrollHeight - metrics.clientHeight - metrics.scrollTop;
   return distanceToBottom <= 48;
+}
+
+export function createTopologyHistoryAutoScrollTracker() {
+  const state: TopologyHistoryAutoScrollTrackerState = {
+    viewport: null,
+    shouldStickToBottom: true,
+    lastItemId: null,
+  };
+
+  return {
+    bindViewport(viewport: HTMLDivElement | null) {
+      state.viewport = viewport;
+    },
+    updateStickState(metrics: TopologyHistoryViewportMetrics) {
+      state.shouldStickToBottom = shouldStickTopologyHistoryToBottom(metrics);
+    },
+    reinitialize() {
+      state.shouldStickToBottom = true;
+      state.lastItemId = null;
+    },
+    reset() {
+      state.viewport = null;
+      state.shouldStickToBottom = true;
+      state.lastItemId = null;
+    },
+    sync(nextLastItemId: string | null): number | null {
+      if (!state.viewport) {
+        state.lastItemId = nextLastItemId;
+        return null;
+      }
+
+      if (
+        shouldAutoScrollTopologyHistory({
+          previousLastItemId: state.lastItemId,
+          nextLastItemId,
+          shouldStickToBottom: state.shouldStickToBottom,
+        })
+      ) {
+        const frameId = requestAnimationFrame(() => {
+          if (!state.viewport) {
+            return;
+          }
+          state.viewport.scrollTop = state.viewport.scrollHeight;
+        });
+        state.lastItemId = nextLastItemId;
+        return frameId;
+      }
+
+      state.lastItemId = nextLastItemId;
+      return null;
+    },
+  };
 }
