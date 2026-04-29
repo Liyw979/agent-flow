@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { withOptionalValue } from "@shared/object-utils";
+import {
+  resolveAgentAttachButtonState,
+  resolveSessionStateFromSessionIdText,
+  resolveRuntimePreferredSessionState,
+} from "@/lib/agent-attach-state";
 import { getAgentColorToken } from "@/lib/agent-colors";
 import { buildAgentHistoryItems, type AgentHistoryItem } from "@/lib/agent-history";
 import { AgentHistoryMarkdown } from "@/lib/agent-history-markdown";
@@ -44,7 +49,7 @@ interface TopologyGraphProps {
   onSelectAgent: (agentId: string) => void;
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
-  openingAgentTerminalId?: string | null;
+  openingAgentTerminalId?: string;
   onOpenAgentTerminal?: (agentId: string) => void;
   runtimeSnapshots?: Record<string, AgentRuntimeSnapshot>;
 }
@@ -229,7 +234,7 @@ export function TopologyGraph({
   onSelectAgent,
   isMaximized = false,
   onToggleMaximize,
-  openingAgentTerminalId = null,
+  openingAgentTerminalId = "",
   onOpenAgentTerminal,
   runtimeSnapshots = {},
 }: TopologyGraphProps) {
@@ -476,11 +481,26 @@ export function TopologyGraph({
       showFullscreenButton: true,
       showAttachButton,
     });
-    const isAttachOpening = openingAgentTerminalId === agentId;
-    const attachDisabled = !taskAgent?.opencodeSessionId || isAttachOpening;
-    const attachTitle = taskAgent?.opencodeSessionId
-      ? (isAttachOpening ? `正在打开 ${agentId} 的 attach 终端` : `attach 到 ${agentId}`)
-      : `${agentId} 当前还没有可 attach 的 OpenCode session。`;
+    const runtimeSnapshotSessionIdText =
+      runtimeSnapshot && typeof runtimeSnapshot.sessionId === "string" ? runtimeSnapshot.sessionId : "";
+    const attachState = resolveAgentAttachButtonState({
+      agentId,
+      sessionState: resolveRuntimePreferredSessionState({
+        taskSessionState: resolveSessionStateFromSessionIdText(taskAgent?.opencodeSessionId ?? ""),
+        runtimeSnapshotState: Object.hasOwn(runtimeSnapshots, agentId)
+          ? {
+              kind: "known",
+              sessionState: resolveSessionStateFromSessionIdText(runtimeSnapshotSessionIdText),
+            }
+          : {
+              kind: "unknown",
+            },
+      }),
+      openingState: openingAgentTerminalId === agentId ? "opening" : "idle",
+    });
+    const isAttachOpening = attachState.label === "打开中";
+    const attachDisabled = attachState.disabled;
+    const attachTitle = attachState.title;
     return {
       color,
       historyItems,

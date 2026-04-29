@@ -38,9 +38,26 @@ import {
   type AgentPromptDialogState,
 } from "./lib/agent-prompt-dialog";
 import { shouldRefreshForRuntimeEvent } from "./lib/runtime-event-refresh";
+import { inspectRuntimeGap, shouldRefreshUiSnapshotFromRuntimeGap } from "./lib/runtime-ui-refresh";
+import { shouldAcceptRuntimeRefresh } from "./lib/runtime-refresh-gate";
 import { decideUiSnapshotRefreshAcceptance } from "./lib/ui-snapshot-refresh-gate";
 import { getUiSnapshotPollingIntervalMs } from "./lib/ui-snapshot-polling";
 import { resolveAppPanelVisibility, type AppPanelMode } from "./lib/app-panel-visibility";
+
+const MAX_UI_SNAPSHOT_CATCHUP_ATTEMPTS = 3;
+const EMPTY_RUNTIME_SNAPSHOTS: Record<string, AgentRuntimeSnapshot> = {};
+
+function logRuntimeRefreshDetail(payload: {
+  taskId: string;
+  phase: "attempt" | "stop" | "ignored-stale-runtime-response";
+  attempt: number;
+  gapReason: string;
+  agentId: string;
+  stopReason: string;
+  requestId: number;
+}) {
+  console.debug("[agent-team] runtime ui catch-up", payload);
+}
 
 function App() {
   const launchParams = useMemo(() => readLaunchParams(), []);
@@ -49,7 +66,7 @@ function App() {
   const [uiSnapshot, setUiSnapshot] = useState<UiSnapshotPayload | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [runtimeSnapshots, setRuntimeSnapshots] = useState<Record<string, AgentRuntimeSnapshot>>({});
-  const [openingAgentTerminalId, setOpeningAgentTerminalId] = useState<string | null>(null);
+  const [openingAgentTerminalId, setOpeningAgentTerminalId] = useState("");
   const [agentTerminalActionError, setAgentTerminalActionError] = useState<string | null>(null);
   const [promptLineCount, setPromptLineCount] = useState(1);
   const [agentCardGapPx, setAgentCardGapPx] = useState(6);
@@ -59,6 +76,10 @@ function App() {
   const latestUiSnapshotRef = useRef<UiSnapshotPayload | null>(null);
   const nextUiSnapshotRequestIdRef = useRef(0);
   const latestAcceptedUiSnapshotRequestIdRef = useRef(0);
+  const latestCatchUpRuntimeSnapshotsRef = useRef<Record<string, AgentRuntimeSnapshot>>({});
+  const uiSnapshotCatchUpPromiseRef = useRef<Promise<void> | null>(null);
+  const nextRuntimeRequestIdRef = useRef(0);
+  const latestAcceptedRuntimeRequestIdRef = useRef(0);
 
   const workspace = uiSnapshot?.workspace ?? null;
   const task = uiSnapshot?.task ?? null;
@@ -112,6 +133,106 @@ function App() {
     applyUiSnapshotRefreshResult(next, requestId);
   }
 
+  async function ensureUiSnapshotCatchUp(runtimeSnapshotsToMatch: Record<string, AgentRuntimeSnapshot>) {
+    latestCatchUpRuntimeSnapshotsRef.current = runtimeSnapshotsToMatch;
+    if (uiSnapshotCatchUpPromiseRef.current) {
+      await uiSnapshotCatchUpPromiseRef.current;
+      return;
+    }
+
+    const catchUpPromise = (async () => {
+      for (let attempt = 1; attempt <= MAX_UI_SNAPSHOT_CATCHUP_ATTEMPTS; attempt += 1) {
+        const currentTaskSnapshot = latestUiSnapshotRef.current?.task;
+        if (!currentTaskSnapshot) {
+          logRuntimeRefreshDetail({
+            taskId: launchTaskId,
+            phase: "stop",
+            attempt,
+            gapReason: "no-task",
+            agentId: "",
+            stopReason: "task-snapshot-unavailable-before-refresh",
+            requestId: 0,
+          });
+          return;
+        }
+        const gapInspectionBeforeRefresh = inspectRuntimeGap({
+          task: currentTaskSnapshot,
+          runtimeSnapshots: latestCatchUpRuntimeSnapshotsRef.current,
+        });
+        if (gapInspectionBeforeRefresh.reason === "aligned") {
+          logRuntimeRefreshDetail({
+            taskId: launchTaskId,
+            phase: "stop",
+            attempt,
+            gapReason: gapInspectionBeforeRefresh.reason,
+            agentId: gapInspectionBeforeRefresh.agentId,
+            stopReason: "ui-snapshot-aligned-before-refresh",
+            requestId: 0,
+          });
+          return;
+        }
+        logRuntimeRefreshDetail({
+          taskId: launchTaskId,
+          phase: "attempt",
+          attempt,
+          gapReason: gapInspectionBeforeRefresh.reason,
+          agentId: gapInspectionBeforeRefresh.agentId,
+          stopReason: "",
+          requestId: 0,
+        });
+        await refreshUiSnapshot();
+        const refreshedTaskSnapshot = latestUiSnapshotRef.current?.task;
+        if (!refreshedTaskSnapshot) {
+          logRuntimeRefreshDetail({
+            taskId: launchTaskId,
+            phase: "stop",
+            attempt,
+            gapReason: "no-task",
+            agentId: "",
+            stopReason: "task-snapshot-unavailable-after-refresh",
+            requestId: 0,
+          });
+          return;
+        }
+        const gapInspectionAfterRefresh = inspectRuntimeGap({
+          task: refreshedTaskSnapshot,
+          runtimeSnapshots: latestCatchUpRuntimeSnapshotsRef.current,
+        });
+        if (gapInspectionAfterRefresh.reason === "aligned") {
+          logRuntimeRefreshDetail({
+            taskId: launchTaskId,
+            phase: "stop",
+            attempt,
+            gapReason: gapInspectionAfterRefresh.reason,
+            agentId: gapInspectionAfterRefresh.agentId,
+            stopReason: "ui-snapshot-aligned-after-refresh",
+            requestId: 0,
+          });
+          return;
+        }
+        if (attempt === MAX_UI_SNAPSHOT_CATCHUP_ATTEMPTS) {
+          logRuntimeRefreshDetail({
+            taskId: launchTaskId,
+            phase: "stop",
+            attempt,
+            gapReason: gapInspectionAfterRefresh.reason,
+            agentId: gapInspectionAfterRefresh.agentId,
+            stopReason: "reached-max-catch-up-attempts",
+            requestId: 0,
+          });
+        }
+      }
+    })();
+    uiSnapshotCatchUpPromiseRef.current = catchUpPromise;
+    try {
+      await catchUpPromise;
+    } finally {
+      if (uiSnapshotCatchUpPromiseRef.current === catchUpPromise) {
+        uiSnapshotCatchUpPromiseRef.current = null;
+      }
+    }
+  }
+
   useEffect(() => {
     void refreshUiSnapshot();
   }, []);
@@ -136,7 +257,10 @@ function App() {
 
   useEffect(() => {
     if (!workspace || !task) {
-      setRuntimeSnapshots({});
+      setRuntimeSnapshots(EMPTY_RUNTIME_SNAPSHOTS);
+      latestCatchUpRuntimeSnapshotsRef.current = EMPTY_RUNTIME_SNAPSHOTS;
+      latestAcceptedRuntimeRequestIdRef.current = 0;
+      nextRuntimeRequestIdRef.current = 0;
       return;
     }
 
@@ -145,6 +269,8 @@ function App() {
     let timer: ReturnType<typeof setInterval> | null = null;
 
     async function loadRuntime() {
+      const requestId = nextRuntimeRequestIdRef.current + 1;
+      nextRuntimeRequestIdRef.current = requestId;
       try {
         const snapshots = await getTaskRuntime({
           taskId: activeTaskId,
@@ -152,10 +278,40 @@ function App() {
         if (cancelled) {
           return;
         }
-        setRuntimeSnapshots(Object.fromEntries(snapshots.map((snapshot) => [snapshot.agentId, snapshot])));
+        if (!shouldAcceptRuntimeRefresh({
+          latestAcceptedRequestId: latestAcceptedRuntimeRequestIdRef.current,
+          requestId,
+        })) {
+          logRuntimeRefreshDetail({
+            taskId: activeTaskId,
+            phase: "ignored-stale-runtime-response",
+            attempt: 0,
+            gapReason: "stale-runtime-response",
+            agentId: "",
+            stopReason: "ignored-older-runtime-response",
+            requestId,
+          });
+          return;
+        }
+        const nextRuntimeSnapshots = Object.fromEntries(
+          snapshots.map((snapshot) => [snapshot.agentId, snapshot]),
+        );
+        latestAcceptedRuntimeRequestIdRef.current = requestId;
+        setRuntimeSnapshots(nextRuntimeSnapshots);
+        const currentTaskSnapshot = latestUiSnapshotRef.current?.task;
+        if (currentTaskSnapshot && shouldRefreshUiSnapshotFromRuntimeGap({
+          task: currentTaskSnapshot,
+          runtimeSnapshots: nextRuntimeSnapshots,
+        })) {
+          await ensureUiSnapshotCatchUp(nextRuntimeSnapshots);
+        }
       } catch {
-        if (!cancelled) {
-          setRuntimeSnapshots({});
+        if (!cancelled && shouldAcceptRuntimeRefresh({
+          latestAcceptedRequestId: latestAcceptedRuntimeRequestIdRef.current,
+          requestId,
+        })) {
+          latestAcceptedRuntimeRequestIdRef.current = requestId;
+          setRuntimeSnapshots(EMPTY_RUNTIME_SNAPSHOTS);
         }
       }
     }
@@ -282,7 +438,7 @@ function App() {
         error instanceof Error ? error.message : `打开 ${agentId} 对应终端失败，请稍后重试。`,
       );
     } finally {
-      setOpeningAgentTerminalId((current) => (current === agentId ? null : current));
+      setOpeningAgentTerminalId((current) => (current === agentId ? "" : current));
     }
   }
 

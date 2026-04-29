@@ -47,7 +47,7 @@ interface ChatWindowProps {
   runtimeSnapshots?: Record<string, AgentRuntimeSnapshot>;
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
-  openingAgentTerminalId?: string | null;
+  openingAgentTerminalId?: string;
   onOpenAgentTerminal?: (agentId: string) => void;
   onSubmit: (payload: { content: string; mentionAgentId?: string }) => Promise<void>;
 }
@@ -134,12 +134,14 @@ function getDefaultAgentId(
 function MessageBubble({
   message,
   taskAgentEntries,
+  runtimeSnapshots,
   openingAgentTerminalId,
   onOpenAgentTerminal,
 }: {
   message: ChatMessageItem;
   taskAgentEntries: ReadonlyArray<Pick<TaskSnapshot["agents"][number], "id" | "opencodeSessionId">>;
-  openingAgentTerminalId: string | null;
+  runtimeSnapshots: Record<string, AgentRuntimeSnapshot>;
+  openingAgentTerminalId: string;
   onOpenAgentTerminal: ((agentId: string) => void) | undefined;
 }) {
   const isUser = message.sender === "user";
@@ -194,6 +196,7 @@ function MessageBubble({
   const attachButtonState = resolveChatMessageAttachButtonState({
     sender: message.sender,
     taskAgents: taskAgentEntries,
+    runtimeSnapshots,
     openingAgentTerminalId,
   });
 
@@ -297,6 +300,7 @@ function getExecutionHistoryItemClassName(item: AgentHistoryItem) {
 function RunningExecutionBubble({
   item,
   taskAgentEntries,
+  runtimeSnapshots,
   openingAgentTerminalId,
   onOpenAgentTerminal,
   viewportRef,
@@ -304,7 +308,8 @@ function RunningExecutionBubble({
 }: {
   item: RunningChatFeedExecutionItem;
   taskAgentEntries: ReadonlyArray<Pick<TaskSnapshot["agents"][number], "id" | "opencodeSessionId">>;
-  openingAgentTerminalId: string | null;
+  runtimeSnapshots: Record<string, AgentRuntimeSnapshot>;
+  openingAgentTerminalId: string;
   onOpenAgentTerminal: ((agentId: string) => void) | undefined;
   viewportRef: (element: HTMLDivElement | null) => void;
   onViewportScroll: (event: UIEvent<HTMLDivElement>) => void;
@@ -313,6 +318,7 @@ function RunningExecutionBubble({
   const attachButtonState = resolveChatMessageAttachButtonState({
     sender: item.agentId,
     taskAgents: taskAgentEntries,
+    runtimeSnapshots,
     openingAgentTerminalId,
   });
 
@@ -449,7 +455,7 @@ export function ChatWindow({
   runtimeSnapshots = {},
   isMaximized = false,
   onToggleMaximize,
-  openingAgentTerminalId = null,
+  openingAgentTerminalId = "",
   onOpenAgentTerminal,
   onSubmit,
 }: ChatWindowProps) {
@@ -794,6 +800,7 @@ export function ChatWindow({
                 key={item.id}
                 message={item.message}
                 taskAgentEntries={taskAgentEntries}
+                runtimeSnapshots={runtimeSnapshots}
                 openingAgentTerminalId={openingAgentTerminalId}
                 onOpenAgentTerminal={onOpenAgentTerminal}
               />
@@ -802,6 +809,7 @@ export function ChatWindow({
                 key={item.id}
                 message={item.message}
                 taskAgentEntries={taskAgentEntries}
+                runtimeSnapshots={runtimeSnapshots}
                 openingAgentTerminalId={openingAgentTerminalId}
                 onOpenAgentTerminal={onOpenAgentTerminal}
               />
@@ -810,6 +818,7 @@ export function ChatWindow({
                 key={item.id}
                 item={item}
                 taskAgentEntries={taskAgentEntries}
+                runtimeSnapshots={runtimeSnapshots}
                 openingAgentTerminalId={openingAgentTerminalId}
                 onOpenAgentTerminal={onOpenAgentTerminal}
                 viewportRef={(element) => {
