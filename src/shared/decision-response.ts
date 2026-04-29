@@ -57,6 +57,25 @@ export function extractTrailingDecisionSignalBlock(
 } | null {
   const trimmed = content.trim();
   const tokens = normalizeDecisionSignalTokens(allowedTriggers);
+  for (const token of tokens) {
+    if (!trimmed.startsWith(token.start)) {
+      continue;
+    }
+
+    const rawRemainder = trimmed.slice(token.start.length);
+    const responseWithoutTrailingEnd = stripTrailingMatchingEndToken(rawRemainder, token.end);
+    const response = responseWithoutTrailingEnd.trim();
+    if (!response || endsWithBareAllowedTriggerLine(responseWithoutTrailingEnd, tokens)) {
+      return null;
+    }
+
+    return {
+      body: response,
+      response,
+      rawBlock: trimmed,
+      trigger: token.start,
+    };
+  }
   let lastMatch: {
     trigger: string;
     rawBlock: string;
@@ -118,4 +137,24 @@ export function stripDecisionResponseMarkup(
 
 function escapeForRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function stripTrailingMatchingEndToken(content: string, endToken: string): string {
+  const trailingEndPattern = new RegExp(`(?:\\s|\\r|\\n)*${escapeForRegex(endToken)}\\s*$`, "u");
+  return content.replace(trailingEndPattern, "");
+}
+
+function endsWithBareAllowedTriggerLine(
+  content: string,
+  tokens: readonly DecisionSignalToken[],
+): boolean {
+  const trimmed = content.trimEnd();
+  if (!trimmed) {
+    return false;
+  }
+
+  return tokens.some((token) => {
+    const trailingTriggerPattern = new RegExp(`(?:^|\\n)\\s*${escapeForRegex(token.start)}\\s*$`, "u");
+    return trailingTriggerPattern.test(trimmed);
+  });
 }

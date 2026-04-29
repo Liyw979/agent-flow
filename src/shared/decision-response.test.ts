@@ -51,10 +51,33 @@ test("extractTrailingDecisionSignalBlock 支持识别示例回流 trigger", () =
   );
 });
 
-test("extractTrailingDecisionSignalBlock 缺少结束标签时不会识别前置裸 trigger", () => {
+test("extractTrailingDecisionSignalBlock 支持识别开头裸 trigger", () => {
   const parsed = extractTrailingDecisionSignalBlock(`${APPROVED}结束当前分支。`, [APPROVED, REVISE]);
 
+  assert.notEqual(parsed, null);
+  assert.equal(parsed?.body, "结束当前分支。");
+  assert.equal(parsed?.response, "结束当前分支。");
+  assert.equal(parsed?.trigger, APPROVED);
+  assert.equal(parsed?.rawBlock, `${APPROVED}结束当前分支。`);
+});
+
+test("extractTrailingDecisionSignalBlock 开头只有 trigger 没有正文时返回 null", () => {
+  const parsed = extractTrailingDecisionSignalBlock(APPROVED, [APPROVED, REVISE]);
+
   assert.equal(parsed, null);
+});
+
+test("extractTrailingDecisionSignalBlock 会移除开头裸 trigger 后多余的结束标签", () => {
+  const parsed = extractTrailingDecisionSignalBlock(`${REVISE}\n请继续补充实现依据。\n${REVISE_END}`, [
+    APPROVED,
+    REVISE,
+  ]);
+
+  assert.notEqual(parsed, null);
+  assert.equal(parsed?.body, "请继续补充实现依据。");
+  assert.equal(parsed?.response, "请继续补充实现依据。");
+  assert.equal(parsed?.trigger, REVISE);
+  assert.equal(parsed?.rawBlock, `${REVISE}\n请继续补充实现依据。\n${REVISE_END}`);
 });
 
 test("extractTrailingDecisionSignalBlock 不再兼容开头 trigger 与尾部裸 trigger 的混合格式", () => {
@@ -93,10 +116,31 @@ test("extractTrailingDecisionSignalBlock 支持按允许的 trigger 集合解析
   assert.equal(parsed?.rawBlock, "<abcd>请继续补充反驳。</abcd>");
 });
 
+test("extractTrailingDecisionSignalBlock 支持解析正文后跟成对自定义标签块", () => {
+  const parsed = extractTrailingDecisionSignalBlock(
+    "aaaaa<trigger> bbbbb</trigger>",
+    ["<trigger>"],
+  );
+
+  assert.notEqual(parsed, null);
+  assert.equal(parsed?.body, "aaaaa");
+  assert.equal(parsed?.response, "bbbbb");
+  assert.equal(parsed?.trigger, "<trigger>");
+  assert.equal(parsed?.rawBlock, "<trigger> bbbbb</trigger>");
+});
+
 test("stripDecisionResponseMarkup 会去掉示例 trigger 标签并保留正文", () => {
   assert.equal(
     stripDecisionResponseMarkup(`继续处理。\n\n${REVISE}请继续补充实现依据。`, [APPROVED, REVISE]),
     `继续处理。\n\n${REVISE}请继续补充实现依据。`,
+  );
+  assert.equal(
+    stripDecisionResponseMarkup(`${REVISE}\n请继续补充实现依据。`, [APPROVED, REVISE]),
+    "请继续补充实现依据。",
+  );
+  assert.equal(
+    stripDecisionResponseMarkup(`${REVISE}\n请继续补充实现依据。\n${REVISE_END}`, [APPROVED, REVISE]),
+    "请继续补充实现依据。",
   );
   assert.equal(
     stripDecisionResponseMarkup(
@@ -120,5 +164,9 @@ test("stripDecisionResponseMarkup 会去掉示例 trigger 标签并保留正文"
   assert.equal(
     stripDecisionResponseMarkup("继续处理。\n\n<chalenge>请继续补充实现依据。</chalenge>"),
     "继续处理。\n\n<chalenge>请继续补充实现依据。</chalenge>",
+  );
+  assert.equal(
+    stripDecisionResponseMarkup("aaaaa<trigger> bbbbb</trigger>", ["<trigger>"]),
+    "aaaaa\n\nbbbbb",
   );
 });

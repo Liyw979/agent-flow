@@ -284,6 +284,23 @@ test("通用调度脚本模式支持 decisionAgent 通过后显式触发 approve
   await runSchedulerScriptDrived({ topology, script });
 });
 
+test("脚本模式支持 decisionAgent 用开头 <complete> + 正文命中结束边", async () => {
+  const topology = createTopology({
+    downstream: {
+      Build: { TaskReview: "<default>" },
+      TaskReview: { __end__: "<complete>" },
+    },
+  });
+
+  const script = [
+    "user: @Build 请完成这个需求。",
+    "Build: Build 首轮实现完成。 @TaskReview",
+    "TaskReview: <complete>\n当前证据链已经完整，可以结束本轮判定。",
+  ];
+
+  await runSchedulerScriptDrived({ topology, script });
+});
+
 test("脚本模式支持 decisionAgent 显式返回自定义 label 并按该 label 派发下游", async () => {
   const topology = createTopology({
     nodes: ["Build", "Judge", "Summary"],

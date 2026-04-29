@@ -3046,7 +3046,7 @@ test("自定义结束 trigger 可以直接命中 __end__", async () => {
   orchestrator.opencodeRunner.run = async ({ agent }) =>
     buildCompletedExecutionResult({
       agent,
-      finalMessage: "当前争议点已经论证完毕。\n\n<done>结束当前任务。</done>",
+      finalMessage: "<done>\n当前争议点已经论证完毕。\n</done>",
       messageId: `message:${agent}:done`,
       timestamp: "2026-04-27T10:20:00.000Z",
     });
