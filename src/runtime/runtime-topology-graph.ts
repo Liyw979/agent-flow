@@ -62,14 +62,6 @@ export function getNextSpawnSequence(state: GraphTaskState, spawnRuleId: string)
   return next;
 }
 
-export function buildSpawnItemTitle(sourceContent: string | undefined, fallbackIndex: number): string {
-  const firstLine = (sourceContent ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean);
-  return firstLine ?? `spawn-item-${fallbackIndex}`;
-}
-
 export function buildSpawnItemId(spawnRuleId: string, sequence: number): string {
   return `${spawnRuleId}-${String(sequence).padStart(4, "0")}`;
 }

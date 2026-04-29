@@ -34,7 +34,7 @@
 - `nodes`
   当前图声明的节点数组。每个元素必须是一个对象，且必须通过 `type` 明确声明为 `agent` 或 `spawn`。
 - `links`
-  当前图声明的有向边数组。每条边都必须使用对象格式，并显式写出 `from`、`to`、`trigger_type`、`message_type`；根图若连接 `__end__` 也不例外。
+  当前图声明的有向边数组。每条边都必须使用对象格式，并显式写出 `from`、`to`、`trigger`、`message_type`；根图若连接 `__end__` 也不例外。
 
 ## 2. `nodes` 怎么写
 
@@ -71,6 +71,7 @@
 
 - `Build` 继续使用 OpenCode 内置 prompt，不允许在 JSON 里覆盖 `prompt`
 - 非内置模板节点如果不提供 `prompt` 或 `prompt` 为空，编译会失败
+- 如果该 Agent 存在非 `<default>` 的 outgoing trigger，这些 trigger 字面值必须显式出现在它自己的 `prompt` 里，否则编译会失败
 - 任何 Agent 如果不提供 `writable`，编译会失败
 
 ### 2.2 `spawn` 节点
@@ -101,7 +102,7 @@
       {
         "from": "漏洞论证",
         "to": "漏洞挑战",
-        "trigger_type": "continue",
+        "trigger": "<continue>",
         "message_type": "last"
       }
     ]
@@ -137,20 +138,20 @@
 
 ## 3. `links` 怎么写
 
-`links` 统一写成对象数组。普通业务边必须显式写出 `from`、`to`、`trigger_type`、`message_type`：
+`links` 统一写成对象数组。普通业务边必须显式写出 `from`、`to`、`trigger`、`message_type`：
 
 ```json
 [
   {
     "from": "上游节点",
     "to": "下游节点",
-    "trigger_type": "transfer",
+    "trigger": "<default>",
     "message_type": "last"
   },
   {
     "from": "上游节点",
     "to": "另一个下游节点",
-    "trigger_type": "transfer",
+    "trigger": "<default>",
     "message_type": "last-all"
   }
 ]
@@ -162,8 +163,8 @@
   边的起点节点 ID；必须能在当前层 `nodes` 中找到。
 - `to`
   边的终点节点 ID；必须能在当前层 `nodes` 中找到。
-- `trigger_type`
-  触发条件，决定这条边什么时候会被调度。
+- `trigger`
+  触发条件，决定这条边什么时候会被调度。必须是尖括号包裹的字面值，例如 `<default>`、`<continue>`、`<complete>`、`<abcd>`。
 - `message_type`
   消息传递策略，决定沿这条边派发下游时携带哪些上游内容。
 
@@ -174,7 +175,7 @@
   {
     "from": "线索发现",
     "to": "__end__",
-    "trigger_type": "complete",
+    "trigger": "<complete>",
     "message_type": "none"
   }
 ]
@@ -186,26 +187,20 @@
   终止来源节点名；必须能在根图当前层 `nodes` 中找到。
 - `to`
   固定写 `__end__`。
-- `trigger_type`
-  必填。`__end__` 会按 `complete` / `continue` / `transfer` 这些现有 trigger 语义命中。
+- `trigger`
+  必填。用于声明 Agent 必须返回的精确标签，例如 `<default>`、`<continue>`、`<complete>`、`<abcd>`。
 - `message_type`
   必填。当前 `__end__` 不消费上游消息正文，但 DSL 仍要求显式写出，建议统一写 `none`。
 
-`trigger_type` 当前支持三种值：
+`trigger` 标签协议：
 
-- `transfer`
-  表示普通协作流转。当前节点执行完成后，会沿这条边把结果继续派发给下游节点。
-- `complete`
-  表示当前分支已经完成判定后再流转。通常用于 decisionAgent / 裁决类节点在确认当前分支可以结束后，再把流程推进到下一个节点。
-- `continue`
-  表示当前分支需要继续处理时的回流。当前节点明确要求继续修改、补充或回应时，流程会沿这条边把意见退回给对应下游节点。
-
-`continue` / `complete` 标签协议：
-
-- Agent 需要命中 `trigger_type = "continue"` 或 `trigger_type = "complete"` 的条件边时，回复开头必须先输出对应标签，再输出正文。
-- `<continue>` 表示当前分支还需要继续处理；运行时会匹配当前节点的 `trigger_type = "continue"` 下游边。
-- `<complete>` 表示当前分支已经完成判定；运行时会匹配当前节点的 `trigger_type = "complete"` 下游边。
-- 根图可以把 `complete` 边直接连到 `__end__`，表示该节点回复以 `<complete>` 开头时直接结束流程。
+- Agent 需要命中条件边时，回复开头必须先输出对应标签，再输出正文。
+- 某个 Agent 只要存在非 `<default>` 的 outgoing trigger，这些 trigger 字面值就必须提前写进该 Agent 自己的 `prompt`，否则模型没有可依赖的输出协议，编译阶段会直接拒绝该拓扑。
+- `<default>` 表示普通协作流转。当前节点执行完成后，会沿这条边把结果继续派发给下游节点。
+- `<continue>`、`<complete>` 只是普通示例 label，本身没有任何内置语义。
+- 是否回流、是否进入其他下游、是否结束，只由当前 source 上命中的 `trigger` 与对应边配置决定。
+- 其他任意尖括号标签都会按字面值精确路由，例如 `{ "from": "漏洞论证", "to": "漏洞挑战", "trigger": "<abcd>", "message_type": "last" }` 只有在 Agent 返回 `<abcd>` 时才会命中。
+- 根图可以直接把任意 `trigger` 连到 `__end__`；例如 `{ "from": "漏洞论证", "to": "__end__", "trigger": "<done>", "message_type": "none" }` 表示只有返回 `<done>` 时才结束流程。
 - 拓扑 JSON 的 prompt 只提示开头标签写法。
 
 示例：
@@ -233,20 +228,22 @@
 
 ```json
 [
-  { "from": "任务分析", "to": "Build", "trigger_type": "transfer", "message_type": "last" },
-  { "from": "Build", "to": "CodeReview", "trigger_type": "transfer", "message_type": "last" },
-  { "from": "CodeReview", "to": "Build", "trigger_type": "continue", "message_type": "last" }
+  { "from": "任务分析", "to": "Build", "trigger": "<default>", "message_type": "last" },
+  { "from": "Build", "to": "CodeReview", "trigger": "<default>", "message_type": "last" },
+  { "from": "CodeReview", "to": "Build", "trigger": "<continue>", "message_type": "last" }
 ]
 ```
 
 含义：
 
-- `transfer`
-  普通协作流转；当前节点完成后直接把结果交给下游继续执行
-- `complete`
-  当前分支完成判定后流转；只有当前节点明确表示这一分支可以结束时才会触发这条边
-- `continue`
-  当前分支继续处理时回流；当前节点要求继续修改、补充或回应时，会沿这条边退回
+- `<default>`
+  唯一保留的普通 handoff trigger；当前节点执行完成后，会沿这条边把结果交给下游继续执行。
+- 其他任意尖括号 trigger
+  都只是字面值标签，例如 `<continue>`、`<complete>`、`<approved>`、`<revise>`、`<abcd>`；系统不会根据名字额外赋予语义。
+- `maxTriggerRounds`
+  只有显式声明这个字段的边，才表示 `action_required` 回流链路；同一条边最多允许连续命中这么多轮。
+- 是否属于回流、是否属于普通 labeled dispatch
+  只看同一个 `source` 下命中的 `trigger` 对应的边是否带 `maxTriggerRounds`，不看 trigger 名字。
 
 ## 4. 研发团队示例
 
@@ -263,13 +260,13 @@
     { "type": "agent", "id": "SecurityReview", "prompt": "...", "writable": false }
   ],
   "links": [
-    { "from": "任务分析", "to": "Build", "trigger_type": "transfer", "message_type": "last" },
-    { "from": "Build", "to": "CodeReview", "trigger_type": "transfer", "message_type": "last" },
-    { "from": "Build", "to": "UnitTest", "trigger_type": "transfer", "message_type": "last" },
-    { "from": "Build", "to": "SecurityReview", "trigger_type": "transfer", "message_type": "last" },
-    { "from": "CodeReview", "to": "Build", "trigger_type": "continue", "message_type": "last" },
-    { "from": "UnitTest", "to": "Build", "trigger_type": "continue", "message_type": "last" },
-    { "from": "SecurityReview", "to": "Build", "trigger_type": "continue", "message_type": "last" }
+    { "from": "任务分析", "to": "Build", "trigger": "<default>", "message_type": "last" },
+    { "from": "Build", "to": "CodeReview", "trigger": "<default>", "message_type": "last" },
+    { "from": "Build", "to": "UnitTest", "trigger": "<default>", "message_type": "last" },
+    { "from": "Build", "to": "SecurityReview", "trigger": "<default>", "message_type": "last" },
+    { "from": "CodeReview", "to": "Build", "trigger": "<continue>", "message_type": "last" },
+    { "from": "UnitTest", "to": "Build", "trigger": "<continue>", "message_type": "last" },
+    { "from": "SecurityReview", "to": "Build", "trigger": "<continue>", "message_type": "last" }
   ]
 }
 ```
@@ -279,17 +276,17 @@
 `vulnerability.json5` 展示了递归 `spawn` 的写法：
 
 - 根图入口是 `线索发现`
-- `线索发现 -> 疑点辩论` 不是无条件流转：有新的 finding 时，`线索发现` 的回复开头先输出 `<continue>`，再输出 finding 正文，并命中 `{ "from": "线索发现", "to": "疑点辩论", "trigger_type": "continue", "message_type": "last-all" }`
-- 没有新的 finding 时，`线索发现` 的回复开头先输出 `<complete>`，并补充本轮已检查范围、当前判断依据、仍未排除但暂缺证据的方向，然后命中 `{ "from": "线索发现", "to": "线索完备性评估", "trigger_type": "complete", "message_type": "last" }`
-- `线索完备性评估` 会判断是否还存在明显遗漏：给出 `<continue>` 时，命中 `{ "from": "线索完备性评估", "to": "线索发现", "trigger_type": "continue", "message_type": "last" }`，把具体补查方向回给 `线索发现`；给出 `<complete>` 时，命中 `{ "from": "线索完备性评估", "to": "__end__", "trigger_type": "complete", "message_type": "none" }`，真正结束到 `END`
-- `线索发现` 的默认 prompt 要求每轮只返回一个可疑漏洞点，并且回复开头先输出 `<complete>` / `<continue>` 判定标签，再输出正文；当准备结束时，必须额外说明本轮已检查范围与仍未排除的方向
+- `线索发现 -> 疑点辩论` 不是无条件流转：有新的 finding 时，`线索发现` 返回 `<continue>` 这个字面值，并命中 `{ "from": "线索发现", "to": "疑点辩论", "trigger": "<continue>", "message_type": "last-all" }`
+- 没有新的 finding 时，`线索发现` 返回 `<complete>` 这个字面值，并命中 `{ "from": "线索发现", "to": "线索完备性评估", "trigger": "<complete>", "message_type": "last" }`
+- `线索完备性评估` 若返回 `<continue>`，会命中 `{ "from": "线索完备性评估", "to": "线索发现", "trigger": "<continue>", "message_type": "last" }`；若返回 `<complete>`，会命中 `{ "from": "线索完备性评估", "to": "__end__", "trigger": "<complete>", "message_type": "none" }`
+- 上述 `<continue>` / `<complete>` 在这里只是该拓扑选择使用的 label；同类流程也可以改成任意其他尖括号字面值。
 - `疑点辩论` 是 `spawn` 节点
 - `spawn.graph` 里定义漏洞论证、漏洞挑战、讨论总结的子图
 - 这类 `spawn` 子图当前按 `exitWhen = "all_completed"` 运行：当 `讨论总结` 同时存在来自 `漏洞挑战`、`漏洞论证` 的 `complete` 入边时，运行时会先确认这两个来源角色都已经给出本轮回应，再允许把流程推进到 `讨论总结`；因此单边首轮直接 `complete` 不会再触发总结
 - 在这份漏洞团队拓扑里，`讨论总结` 是显式 `writable: true` 的可写 Agent；每轮都必须先把讨论总结写入当前代码仓的 `result/` 目录，再同步输出总结正文
 - `讨论总结` 写入 `result/` 时要求每个讨论单独一个文件；当前讨论必须新建新文件，不得覆盖、追加或复用已有讨论总结文件，文件名至少要能区分不同讨论
 - `讨论总结` 的默认 prompt 不是只要一个简短结论，而是要求输出完整裁决报告：固定包含“结论概览、finding 描述、代码事实与证据链、正方观点与成立条件、反方观点与不成立理由、争议点裁决、当前已形成的稳定结论、仍未解决的不确定点、后续排查建议”等章节，并明确区分“代码已直接证明”的事实与“根据现有事实做出的推断”
-- 根图写的是 `{ "from": "疑点辩论", "to": "线索发现", "trigger_type": "transfer", "message_type": "none" }`，因此 `讨论总结` 完成本轮裁决后，会按 `transfer` 触发 `线索发现` 继续寻找下一个 finding
+- 根图写的是 `{ "from": "疑点辩论", "to": "线索发现", "trigger": "<default>", "message_type": "none" }`，因此 `讨论总结` 完成本轮裁决后，会按 `"<default>"` 触发 `线索发现` 继续寻找下一个 finding
 
 ## 6. 当前硬约束
 
@@ -299,7 +296,7 @@
 - 当 `type = "spawn"` 时，节点按展开型结构解析：使用 `graph`，不使用 `prompt`
 - 节点 ID 必须全局唯一，不能在父子图里重复
 - `graph.entry` 必须指向本层真实存在的节点
-- `links` 必须使用对象格式，并显式写出 `from` / `to` / `trigger_type` / `message_type`
+- `links` 必须使用对象格式，并显式写出 `from` / `to` / `trigger` / `message_type`
 - `links` 里的 `from` / `to` 必须都能在当前层 `nodes` 中找到
 - `spawn` 节点没有 `prompt`
 - `spawn` 固定从上游输出的 `items` 数组展开子图

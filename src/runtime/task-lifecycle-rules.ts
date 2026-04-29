@@ -204,12 +204,15 @@ export function shouldFinishTaskFromPersistedState(input: {
 
 function resolveAgentStatusFromFinalMessage(
   message: MessageRecord,
+  messages: MessageRecord[],
 ): TaskAgentRecord["status"] {
   if (!isAgentFinalMessageRecord(message)) {
     return "completed";
   }
-  if (message.decision === "continue") {
-    return "continue";
+  if (messages.some((candidate) =>
+    isActionRequiredRequestMessageRecord(candidate) && candidate.followUpMessageId === message.id
+  )) {
+    return "action_required";
   }
   return "completed";
 }
@@ -303,7 +306,7 @@ export function reconcileTaskSnapshotFromMessages(input: {
 
     return {
       ...agent,
-      status: resolveAgentStatusFromFinalMessage(latestFinalMessage),
+      status: resolveAgentStatusFromFinalMessage(latestFinalMessage, input.messages),
     };
   });
 

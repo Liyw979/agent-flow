@@ -9,7 +9,7 @@ import { withOptionalString } from "@shared/object-utils";
 import { mergeTaskChatMessages, type ChatMessageItem } from "../lib/chat-messages";
 
 type MinimalMessage = MessageRecord;
-const NONE_MODE_CONTINUATION_MESSAGE = "continue";
+const NONE_MODE_PLACEHOLDER_MESSAGE = "[no-forwarded-message]";
 
 function extractMention(content: string): string | undefined {
   const match = content.match(/@([^\s]+)/u);
@@ -110,7 +110,7 @@ function resolveForwardedAgentMessage(
   activeAgentIds: string[],
 ): string {
   if (messageMode === "none") {
-    return NONE_MODE_CONTINUATION_MESSAGE;
+    return NONE_MODE_PLACEHOLDER_MESSAGE;
   }
 
   if (messageMode === "last-all") {

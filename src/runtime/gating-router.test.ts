@@ -4,10 +4,11 @@ import test from "node:test";
 import type { TopologyRecord } from "@shared/types";
 
 import {
-  applyAgentResultToGraphState,
+  applyAgentResultToGraphState as applyAgentResultToGraphStateInternal,
   createGraphTaskState,
   createUserDispatchDecision,
   resolveRestrictedRepairTargetsForSource,
+  type GraphAgentResult,
 } from "./gating-router";
 import { compileBuiltinVulnerabilityTopology } from "./builtin-topology-test-helpers";
 import { resolveExecutionDecisionAgent } from "./decision-agent-context";
@@ -16,21 +17,71 @@ function createBuiltinVulnerabilityTopology(): TopologyRecord {
   return compileBuiltinVulnerabilityTopology().topology;
 }
 
+function buildSpawnItemsPayload(...titles: string[]): string {
+  return JSON.stringify({
+    items: titles.map((title) => ({ title })),
+  });
+}
+
+type TestGraphAgentResult =
+  | Omit<Extract<GraphAgentResult, { status: "failed" }>, "messageId">
+  | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "default" }>, "messageId">
+  | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "invalid" }>, "messageId">
+  | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "labeled" }>, "messageId">;
+
+function applyResult(
+  state: Parameters<typeof applyAgentResultToGraphStateInternal>[0],
+  result: TestGraphAgentResult,
+) {
+  const baseResult = {
+    agentId: result.agentId,
+    messageId: `message:${result.agentId}`,
+    decisionAgent: result.decisionAgent,
+    agentStatus: result.agentStatus,
+    agentContextContent: result.agentContextContent,
+    opinion: result.opinion,
+    signalDone: result.signalDone,
+  };
+  let graphResult: GraphAgentResult;
+  if (result.status === "failed") {
+    graphResult = {
+      ...baseResult,
+      status: "failed",
+      routingKind: "invalid",
+      errorMessage: result.errorMessage,
+    };
+  } else if (result.routingKind === "labeled") {
+    graphResult = {
+      ...baseResult,
+      status: "completed",
+      routingKind: "labeled",
+      trigger: result.trigger,
+    };
+  } else {
+    graphResult = {
+      ...baseResult,
+      status: "completed",
+      routingKind: result.routingKind,
+    };
+  }
+  return applyAgentResultToGraphStateInternal(state, graphResult);
+}
+
 function createTopology(): TopologyRecord {
   return {
     nodes: ["BA", "Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "CodeReview", target: "TaskReview", triggerOn: "complete", messageMode: "last" },
+      { source: "BA", target: "Build", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "CodeReview", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" },
+      { source: "CodeReview", target: "Build", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
+      { source: "CodeReview", target: "TaskReview", trigger: "<complete>", messageMode: "last" },
     ],
   };
 }
 
-test("resolveExecutionDecisionAgent 会把 spawn 子图里带 complete 出边的运行时实例识别为 decision agent", () => {
+test("resolveExecutionDecisionAgent 会把 spawn 子图里带结束 trigger 出边的运行时实例识别为 decision agent", () => {
   const topology: TopologyRecord = {
     nodes: ["线索发现", "疑点辩论", "漏洞论证", "讨论总结"],
     nodeRecords: [
@@ -40,8 +91,8 @@ test("resolveExecutionDecisionAgent 会把 spawn 子图里带 complete 出边的
       { id: "讨论总结", kind: "agent", templateName: "讨论总结" },
     ],
     edges: [
-      { source: "线索发现", target: "疑点辩论", triggerOn: "transfer", messageMode: "last" },
-      { source: "疑点辩论", target: "线索发现", triggerOn: "transfer", messageMode: "last" },
+      { source: "线索发现", target: "疑点辩论", trigger: "<default>", messageMode: "last" },
+      { source: "疑点辩论", target: "线索发现", trigger: "<default>", messageMode: "last" },
     ],
     spawnRules: [
       {
@@ -53,11 +104,11 @@ test("resolveExecutionDecisionAgent 会把 spawn 子图里带 complete 出边的
           { role: "讨论总结", templateName: "讨论总结" },
         ],
         edges: [
-          { sourceRole: "漏洞论证", targetRole: "讨论总结", triggerOn: "complete", messageMode: "last" },
+          { sourceRole: "漏洞论证", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last" },
         ],
         exitWhen: "all_completed",
         reportToTemplateName: "线索发现",
-        reportToTriggerOn: "transfer",
+        reportToTrigger: "<default>",
       },
     ],
   };
@@ -89,7 +140,7 @@ test("resolveExecutionDecisionAgent 会把 spawn 子图里带 complete 出边的
     {
       source: "漏洞论证-1",
       target: "讨论总结-1",
-      triggerOn: "complete",
+      trigger: "<complete>",
       messageMode: "last",
     },
   ];
@@ -109,10 +160,10 @@ test("resolveRestrictedRepairTargetsForSource 只会保留 source 的直接 hand
   const topology: TopologyRecord = {
     nodes: ["Build", "UnitTest", "CodeReview", "TaskReview"],
     edges: [
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "UnitTest", target: "CodeReview", triggerOn: "complete", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "CodeReview", target: "TaskReview", triggerOn: "complete", messageMode: "last" },
+      { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+      { source: "UnitTest", target: "CodeReview", trigger: "<complete>", messageMode: "last" },
+      { source: "CodeReview", target: "Build", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
+      { source: "CodeReview", target: "TaskReview", trigger: "<complete>", messageMode: "last" },
     ],
   };
 
@@ -126,33 +177,11 @@ test("resolveRestrictedRepairTargetsForSource 只会保留 source 的直接 hand
   );
 });
 
-test("执行失败结果不会再落入 decision 语义，而是直接结束为 failed", () => {
-  const state = createGraphTaskState({
-    taskId: "task-failed-result",
-    topology: createTopology(),
-  });
-
-  const reduced = applyAgentResultToGraphState(state, {
-    agentId: "CodeReview",
-    status: "failed",
-    errorMessage: "Aborted",
-  });
-
-  assert.equal(reduced.state.taskStatus, "failed");
-  assert.equal(reduced.decision.type, "failed");
-  if (reduced.decision.type !== "failed") {
-    assert.fail("期望返回 failed 路由决策");
-  }
-  assert.equal(reduced.decision.errorMessage, "Aborted");
-  assert.equal(reduced.state.agentStatusesByName["CodeReview"], "failed");
-  assert.equal("CodeReview" in reduced.state.agentContextByName, false);
-});
-
-test("resolveExecutionDecisionAgent 不会把没有 complete 或 continue 出边的普通 agent 误判为 decision agent", () => {
+test("resolveExecutionDecisionAgent 不会把没有任何非 <default> trigger 出边的普通 agent 误判为 decision agent", () => {
   const topology: TopologyRecord = {
     nodes: ["线索发现", "疑点辩论"],
     edges: [
-      { source: "线索发现", target: "疑点辩论", triggerOn: "transfer", messageMode: "last" },
+      { source: "线索发现", target: "疑点辩论", trigger: "<default>", messageMode: "last" },
     ],
   };
 
@@ -167,7 +196,7 @@ test("resolveExecutionDecisionAgent 不会把没有 complete 或 continue 出边
   );
 });
 
-test("resolveExecutionDecisionAgent 会把仅通过 __end__ 暴露 complete 分支的节点识别为 decision agent", () => {
+test("resolveExecutionDecisionAgent 会把仅通过 __end__ 暴露结束 trigger 分支的节点识别为 decision agent", () => {
   const topology: TopologyRecord = {
     nodes: ["线索发现"],
     edges: [],
@@ -180,7 +209,7 @@ test("resolveExecutionDecisionAgent 会把仅通过 __end__ 暴露 complete 分�
         id: "__end__",
         sources: ["线索发现"],
         incoming: [
-          { source: "线索发现", triggerOn: "complete" },
+          { source: "线索发现", trigger: "<complete>" },
         ],
       },
     },
@@ -197,7 +226,7 @@ test("resolveExecutionDecisionAgent 会把仅通过 __end__ 暴露 complete 分�
   );
 });
 
-test("router 会保留 CodeReview 嵌套链路可先于外层 handoff 批次剩余 decisionAgent 继续推进的旧语义", () => {
+test("router 会按当前批次完整放行 default handoff 下游，不再保留旧的嵌套优先语义", () => {
   const topology = createTopology();
   const state = createGraphTaskState({
     taskId: "task-1",
@@ -211,64 +240,58 @@ test("router 会保留 CodeReview 嵌套链路可先于外层 handoff 批次剩�
   assert.equal(startDecision.type, "execute_batch");
   assert.deepEqual(startDecision.batch.jobs.map((job) => job.agentId), ["BA"]);
 
-  const afterBa = applyAgentResultToGraphState(state, {
+  const afterBa = applyResult(state, {
     agentId: "BA",
-    messageId: "msg-BA",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "需求已澄清",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBa.decision.type, "execute_batch");
   assert.deepEqual(afterBa.decision.batch.jobs.map((job) => job.agentId), ["Build"]);
 
-  const afterBuildFirst = applyAgentResultToGraphState(afterBa.state, {
+  const afterBuildFirst = applyResult(afterBa.state, {
     agentId: "Build",
-    messageId: "msg-Build",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "Build 首轮已完成",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBuildFirst.decision.type, "execute_batch");
   assert.deepEqual(
     afterBuildFirst.decision.batch.jobs.map((job) => job.agentId),
-    ["CodeReview", "UnitTest"],
+    ["CodeReview", "UnitTest", "TaskReview"],
   );
 
-  const afterApproved = applyAgentResultToGraphState(afterBuildFirst.state, {
+  const afterApproved = applyResult(afterBuildFirst.state, {
     agentId: "CodeReview",
-    messageId: "msg-CodeReview",
     status: "completed",
     decisionAgent: true,
-    decision: "complete",
+    routingKind: "labeled",
+    trigger: "<complete>",
     agentStatus: "completed",
     agentContextContent: "CodeReview 已通过",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterApproved.decision.type, "execute_batch");
   assert.deepEqual(afterApproved.decision.batch.jobs.map((job) => job.agentId), ["TaskReview"]);
 
-  const afterTaskReview = applyAgentResultToGraphState(afterApproved.state, {
+  const afterTaskReview = applyResult(afterApproved.state, {
     agentId: "TaskReview",
-    messageId: "msg-TaskReview",
     status: "completed",
     decisionAgent: true,
-    decision: "complete",
+    routingKind: "labeled",
+    trigger: "<complete>",
     agentStatus: "completed",
     agentContextContent: "TaskReview 已收到最新结果",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.deepEqual(afterTaskReview.decision, {
@@ -276,21 +299,20 @@ test("router 会保留 CodeReview 嵌套链路可先于外层 handoff 批次剩�
     finishReason: "no_runnable_agents",
   });
 
-  const afterUnitTest = applyAgentResultToGraphState(afterTaskReview.state, {
+  const afterUnitTest = applyResult(afterTaskReview.state, {
     agentId: "UnitTest",
-    messageId: "msg-UnitTest",
     status: "completed",
     decisionAgent: true,
-    decision: "complete",
+    routingKind: "labeled",
+    trigger: "<complete>",
     agentStatus: "completed",
     agentContextContent: "UnitTest 已收到最新结果",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.deepEqual(afterUnitTest.decision, {
     type: "finished",
-    finishReason: "all_agents_completed",
+    finishReason: "no_runnable_agents",
   });
 });
 
@@ -298,21 +320,19 @@ test("CodeReview 通过 UnitTest 间接回流 Build 后，Build 下一轮仍会�
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "UnitTest", "CodeReview", "TaskReview"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "UnitTest", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "UnitTest", target: "CodeReview", triggerOn: "complete", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "CodeReview", target: "TaskReview", triggerOn: "complete", messageMode: "last" },
-      { source: "TaskReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      { source: "BA", target: "Build", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+      { source: "UnitTest", target: "Build", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
+      { source: "UnitTest", target: "CodeReview", trigger: "<complete>", messageMode: "last" },
+      { source: "CodeReview", target: "Build", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
+      { source: "CodeReview", target: "TaskReview", trigger: "<complete>", messageMode: "last" },
+      { source: "TaskReview", target: "Build", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
     ],
   };
   const baseResult = {
-    messageId: "msg-base",
     status: "completed" as const,
     agentStatus: "completed" as const,
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   };
 
@@ -320,66 +340,59 @@ test("CodeReview 通过 UnitTest 间接回流 Build 后，Build 下一轮仍会�
     taskId: "nested-decision-back-to-build",
     topology,
   });
-  const afterBa = applyAgentResultToGraphState(startState, {
+  const afterBa = applyResult(startState, {
     agentId: "BA",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentContextContent: "BA 已整理需求",
     ...baseResult,
   });
-  const afterBuild1 = applyAgentResultToGraphState(afterBa.state, {
+  const afterBuild1 = applyResult(afterBa.state, {
     agentId: "Build",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentContextContent: "Build 第 1 次构建完成",
     ...baseResult,
   });
-  const afterUnitTestFail1 = applyAgentResultToGraphState(afterBuild1.state, {
+  const afterUnitTestFail1 = applyResult(afterBuild1.state, {
     agentId: "UnitTest",
-    messageId: "msg-UnitTest-continue-1",
-    status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
     agentContextContent: "UnitTest 第 1 轮未通过",
-    opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
-    signalDone: false,
+    ...baseResult,
   });
-  const afterBuild2 = applyAgentResultToGraphState(afterUnitTestFail1.state, {
+  const afterBuild2 = applyResult(afterUnitTestFail1.state, {
     agentId: "Build",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentContextContent: "Build 第 2 次构建完成",
     ...baseResult,
   });
-  const afterUnitTestPass2 = applyAgentResultToGraphState(afterBuild2.state, {
+  const afterUnitTestPass2 = applyResult(afterBuild2.state, {
     agentId: "UnitTest",
     decisionAgent: true,
-    decision: "complete",
+    routingKind: "labeled",
+    trigger: "<complete>",
     agentContextContent: "UnitTest 第 2 轮通过",
     ...baseResult,
   });
-  const afterCodeReviewFail = applyAgentResultToGraphState(afterUnitTestPass2.state, {
+  const afterCodeReviewFail = applyResult(afterUnitTestPass2.state, {
     agentId: "CodeReview",
-    messageId: "msg-CodeReview-continue-1",
-    status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
     agentContextContent: "CodeReview 未通过",
-    opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
-    signalDone: false,
+    ...baseResult,
   });
 
   assert.equal(afterCodeReviewFail.decision.type, "execute_batch");
   assert.deepEqual(afterCodeReviewFail.decision.batch.jobs.map((job) => job.agentId), ["Build"]);
 
-  const afterBuild3 = applyAgentResultToGraphState(afterCodeReviewFail.state, {
+  const afterBuild3 = applyResult(afterCodeReviewFail.state, {
     agentId: "Build",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentContextContent: "Build 第 3 次构建完成",
     ...baseResult,
   });
@@ -392,12 +405,12 @@ test("router 会在并发 decisionAgent 未收齐前保持等待，不会提前�
   const topology: TopologyRecord = {
     nodes: ["Build", "UnitTest", "TaskReview", "CodeReview"],
     edges: [
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "UnitTest", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "TaskReview", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "CodeReview", trigger: "<default>", messageMode: "last" },
+      { source: "UnitTest", target: "Build", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
+      { source: "TaskReview", target: "Build", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
+      { source: "CodeReview", target: "Build", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
     ],
   };
   const state = createGraphTaskState({
@@ -405,16 +418,14 @@ test("router 会在并发 decisionAgent 未收齐前保持等待，不会提前�
     topology,
   });
 
-  const afterBuild = applyAgentResultToGraphState(state, {
+  const afterBuild = applyResult(state, {
     agentId: "Build",
-    messageId: "msg-Build",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "Build 已完成",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBuild.decision.type, "execute_batch");
@@ -423,16 +434,15 @@ test("router 会在并发 decisionAgent 未收齐前保持等待，不会提前�
     ["UnitTest", "TaskReview", "CodeReview"],
   );
 
-  const afterUnitTestFail = applyAgentResultToGraphState(afterBuild.state, {
+  const afterUnitTestFail = applyResult(afterBuild.state, {
     agentId: "UnitTest",
-    messageId: "msg-UnitTest",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
     agentContextContent: "UnitTest 未通过",
     opinion: "请修复单测问题",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.deepEqual(afterUnitTestFail.decision, {
@@ -441,17 +451,192 @@ test("router 会在并发 decisionAgent 未收齐前保持等待，不会提前�
   });
 });
 
-test("并发 decisionAgent 中单条回流链路超限时，不应提前打断其他 decisionAgent", () => {
+
+test("并发 decisionAgent 补发旧回流时，必须沿旧 decisionAgent 自己的 trigger 路由", () => {
+  const topology: TopologyRecord = {
+    nodes: ["Build", "UnitTest", "TaskReview"],
+    edges: [
+      { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" },
+      { source: "UnitTest", target: "Build", trigger: "<first>", messageMode: "last" },
+      { source: "TaskReview", target: "Build", trigger: "<second>", messageMode: "last" },
+    ],
+  };
+  const state = createGraphTaskState({
+    taskId: "task-trigger-repair",
+    topology,
+  });
+
+  const afterBuild = applyResult(state, {
+    agentId: "Build",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "Build 首轮已完成",
+    opinion: "",
+    signalDone: false,
+  });
+  assert.equal(afterBuild.decision.type, "execute_batch");
+  assert.deepEqual(afterBuild.decision.batch.jobs.map((job) => job.agentId), ["UnitTest", "TaskReview"]);
+
+  const afterUnitTest = applyResult(afterBuild.state, {
+    agentId: "UnitTest",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<first>",
+    agentStatus: "action_required",
+    agentContextContent: "UnitTest 发现问题",
+    opinion: "请 Build 先修第一类问题。",
+    signalDone: false,
+  });
+  assert.equal(afterUnitTest.decision.type, "execute_batch");
+  assert.equal(afterUnitTest.decision.batch.sourceAgentId, "UnitTest");
+  assert.equal(afterUnitTest.decision.batch.trigger, "<first>");
+  assert.deepEqual(afterUnitTest.decision.batch.jobs.map((job) => job.agentId), ["Build"]);
+
+  const afterTaskReview = applyResult(afterUnitTest.state, {
+    agentId: "TaskReview",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<second>",
+    agentStatus: "action_required",
+    agentContextContent: "TaskReview 也发现问题",
+    opinion: "请 Build 先修第二类问题。",
+    signalDone: false,
+  });
+  assert.equal(afterTaskReview.decision.type, "execute_batch");
+  assert.equal(afterTaskReview.decision.batch.sourceAgentId, "TaskReview");
+  assert.equal(afterTaskReview.decision.batch.trigger, "<second>");
+  assert.deepEqual(afterTaskReview.decision.batch.jobs.map((job) => job.agentId), ["Build"]);
+});
+
+test("带 maxTriggerRounds 的 <revise> 会按 action_required 回流，而不是被当成普通 labeled 派发", () => {
+  const topology: TopologyRecord = {
+    nodes: ["Build", "Judge", "Research", "Summary"],
+    edges: [
+      { source: "Build", target: "Judge", trigger: "<default>", messageMode: "last" },
+      { source: "Judge", target: "Research", trigger: "<revise>", messageMode: "last", maxTriggerRounds: 2 },
+      { source: "Judge", target: "Summary", trigger: "<approved>", messageMode: "last" },
+    ],
+  };
+  const state = createGraphTaskState({
+    taskId: "task-revise-action-required",
+    topology,
+  });
+
+  const afterBuild = applyResult(state, {
+    agentId: "Build",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "Build 已完成首轮。",
+    opinion: "",
+    signalDone: false,
+  });
+  assert.equal(afterBuild.decision.type, "execute_batch");
+
+  const afterJudge = applyResult(afterBuild.state, {
+    agentId: "Judge",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<revise>",
+    agentStatus: "action_required",
+    agentContextContent: "Judge 需要继续补证。",
+    opinion: "请 Research 继续补证。",
+    signalDone: false,
+  });
+
+  assert.equal(afterJudge.decision.type, "execute_batch");
+  assert.equal(afterJudge.decision.batch.sourceAgentId, "Judge");
+  assert.equal(afterJudge.decision.batch.trigger, "<revise>");
+  assert.deepEqual(afterJudge.decision.batch.jobs.map((job) => ({
+    agentId: job.agentId,
+    sourceAgentId: "sourceAgentId" in job ? job.sourceAgentId : null,
+    sourceMessageId: "sourceMessageId" in job ? job.sourceMessageId : null,
+    sourceContent: "sourceContent" in job ? job.sourceContent : null,
+    displayContent: "displayContent" in job ? job.displayContent : null,
+    kind: job.kind,
+  })), [
+    {
+      agentId: "Research",
+      sourceAgentId: "Judge",
+      sourceMessageId: "message:Judge",
+      sourceContent: "请 Research 继续补证。",
+      displayContent: "请 Research 继续补证。",
+      kind: "action_required_request",
+    },
+  ]);
+});
+
+test("action_required 同 trigger 命中多个下游时，会按整组目标派发并限制每个修复节点的后续回流", () => {
+  const topology: TopologyRecord = {
+    nodes: ["Judge", "Build", "Doc", "OtherJudge"],
+    edges: [
+      { source: "Build", target: "Judge", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "OtherJudge", trigger: "<default>", messageMode: "last" },
+      { source: "Doc", target: "Judge", trigger: "<default>", messageMode: "last" },
+      { source: "Judge", target: "Build", trigger: "<revise>", messageMode: "last", maxTriggerRounds: 2 },
+      { source: "Judge", target: "Doc", trigger: "<revise>", messageMode: "last", maxTriggerRounds: 2 },
+    ],
+  };
+  const state = createGraphTaskState({
+    taskId: "task-multi-action-required-targets",
+    topology,
+  });
+
+  const afterJudge = applyResult(state, {
+    agentId: "Judge",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<revise>",
+    agentStatus: "action_required",
+    agentContextContent: "Judge 需要 Build 和 Doc 同时补齐。",
+    opinion: "请分别补齐实现与文档。",
+    signalDone: false,
+  });
+
+  assert.equal(afterJudge.decision.type, "execute_batch");
+  assert.deepEqual(
+    afterJudge.decision.batch.jobs.map((job) => job.agentId).sort(),
+    ["Build", "Doc"],
+  );
+  assert.deepEqual(afterJudge.state.pendingHandoffRepairTargetsBySource, {
+    Build: ["Judge"],
+    Doc: ["Judge"],
+  });
+
+  const afterBuildRepair = applyResult(afterJudge.state, {
+    agentId: "Build",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "Build 已补齐实现。",
+    opinion: "",
+    signalDone: false,
+  });
+
+  assert.equal(afterBuildRepair.decision.type, "finished");
+  assert.equal(afterBuildRepair.decision.finishReason, "no_runnable_agents");
+});
+
+test("并发 decisionAgent 中单条回流链路超限时，会先继续其他待处理 action_required 链路", () => {
   const topology: TopologyRecord = {
     nodes: ["Build", "UnitTest", "TaskReview", "CodeReview", "Judge"],
     edges: [
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "UnitTest", target: "Build", triggerOn: "continue", maxContinueRounds: 1, messageMode: "last" },
-      { source: "UnitTest", target: "Judge", triggerOn: "complete", messageMode: "last" },
-      { source: "TaskReview", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "CodeReview", trigger: "<default>", messageMode: "last" },
+      { source: "UnitTest", target: "Build", trigger: "<continue>", maxTriggerRounds: 1, messageMode: "last" },
+      { source: "UnitTest", target: "Judge", trigger: "<complete>", messageMode: "last" },
+      { source: "TaskReview", target: "Build", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
+      { source: "CodeReview", target: "Build", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
     ],
   };
   let state = createGraphTaskState({
@@ -459,16 +644,14 @@ test("并发 decisionAgent 中单条回流链路超限时，不应提前打断�
     topology,
   });
 
-  const afterBuildRound1 = applyAgentResultToGraphState(state, {
+  const afterBuildRound1 = applyResult(state, {
     agentId: "Build",
-    messageId: "msg-Build",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "Build 第 1 轮已完成",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBuildRound1.decision.type, "execute_batch");
@@ -477,104 +660,105 @@ test("并发 decisionAgent 中单条回流链路超限时，不应提前打断�
     ["UnitTest", "TaskReview", "CodeReview"],
   );
 
-  const afterTaskReviewApproved = applyAgentResultToGraphState(afterBuildRound1.state, {
+  const afterTaskReviewApproved = applyResult(afterBuildRound1.state, {
     agentId: "TaskReview",
-    messageId: "msg-TaskReview",
     status: "completed",
     decisionAgent: true,
-    decision: "complete",
+    routingKind: "labeled",
+    trigger: "<complete>",
     agentStatus: "completed",
     agentContextContent: "TaskReview 通过",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterTaskReviewApproved.decision.type, "finished");
 
-  const afterCodeReviewActionRequired = applyAgentResultToGraphState(afterTaskReviewApproved.state, {
+  const afterCodeReviewActionRequired = applyResult(afterTaskReviewApproved.state, {
     agentId: "CodeReview",
-    messageId: "msg-CodeReview",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
     agentContextContent: "CodeReview 第 1 轮未通过",
     opinion: "请修复 CodeReview 第 1 轮问题",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterCodeReviewActionRequired.decision.type, "finished");
 
-  const afterUnitTestActionRequiredRound1 = applyAgentResultToGraphState(afterCodeReviewActionRequired.state, {
+  const afterUnitTestActionRequiredRound1 = applyResult(afterCodeReviewActionRequired.state, {
     agentId: "UnitTest",
-    messageId: "msg-UnitTest",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
     agentContextContent: "UnitTest 第 1 轮未通过",
     opinion: "请修复 UnitTest 第 1 轮问题",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterUnitTestActionRequiredRound1.decision.type, "execute_batch");
   assert.deepEqual(afterUnitTestActionRequiredRound1.decision.batch.jobs.map((job) => job.agentId), ["Build"]);
   state = afterUnitTestActionRequiredRound1.state;
 
-  const afterBuildRound2 = applyAgentResultToGraphState(state, {
+  const afterBuildRound2 = applyResult(state, {
     agentId: "Build",
-    messageId: "msg-Build",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "Build 第 2 轮已完成",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBuildRound2.decision.type, "execute_batch");
   assert.deepEqual(afterBuildRound2.decision.batch.jobs.map((job) => job.agentId), ["UnitTest"]);
 
-  const afterUnitTestActionRequiredRound2 = applyAgentResultToGraphState(afterBuildRound2.state, {
+  const afterUnitTestActionRequiredRound2 = applyResult(afterBuildRound2.state, {
     agentId: "UnitTest",
-    messageId: "msg-UnitTest",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
     agentContextContent: "UnitTest 第 2 轮未通过",
     opinion: "请修复 UnitTest 第 2 轮问题",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
   assert.equal(afterUnitTestActionRequiredRound2.decision.type, "execute_batch");
-  assert.deepEqual(afterUnitTestActionRequiredRound2.decision.batch.jobs, [
+  assert.deepEqual(afterUnitTestActionRequiredRound2.decision.batch.jobs.map((job) => ({
+    agentId: job.agentId,
+    sourceAgentId: "sourceAgentId" in job ? job.sourceAgentId : null,
+    sourceMessageId: "sourceMessageId" in job ? job.sourceMessageId : null,
+    sourceContent: "sourceContent" in job ? job.sourceContent : null,
+    displayContent: "displayContent" in job ? job.displayContent : null,
+    kind: job.kind,
+  })), [
     {
       agentId: "Build",
       sourceAgentId: "CodeReview",
-      kind: "continue_request",
+      sourceMessageId: "message:CodeReview",
+      sourceContent: "请修复 CodeReview 第 1 轮问题",
+      displayContent: "请修复 CodeReview 第 1 轮问题",
+      kind: "action_required_request",
     },
   ]);
   assert.equal(afterUnitTestActionRequiredRound2.decision.batch.sourceAgentId, "CodeReview");
-  assert.match(
-    afterUnitTestActionRequiredRound2.decision.batch.sourceContent ?? "",
-    /请修复 CodeReview 第 1 轮问题/u,
-  );
+  assert.match(afterUnitTestActionRequiredRound2.decision.batch.sourceContent ?? "", /请修复 CodeReview 第 1 轮问题/u);
   assert.equal(
     afterUnitTestActionRequiredRound2.decision.batch.jobs.some((job) => job.agentId === "Judge"),
     false,
   );
 });
 
-test("回流超限时，如果 decisionAgent 正文已包含最终结论提示，不应再重复追加一遍", () => {
+test("回流超限时，如果存在唯一其他 trigger 下游，会直接升级到该 trigger 下游", () => {
   const topology: TopologyRecord = {
     nodes: ["Build", "漏洞挑战-1", "讨论总结-1"],
     edges: [
-      { source: "Build", target: "漏洞挑战-1", triggerOn: "transfer", messageMode: "last" },
-      { source: "漏洞挑战-1", target: "Build", triggerOn: "continue", messageMode: "last", maxContinueRounds: 1 },
-      { source: "漏洞挑战-1", target: "讨论总结-1", triggerOn: "complete", messageMode: "last" },
+      { source: "Build", target: "漏洞挑战-1", trigger: "<default>", messageMode: "last" },
+      { source: "漏洞挑战-1", target: "Build", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 1 },
+      { source: "漏洞挑战-1", target: "讨论总结-1", trigger: "<complete>", messageMode: "last" },
     ],
   };
   let state = createGraphTaskState({
@@ -582,16 +766,14 @@ test("回流超限时，如果 decisionAgent 正文已包含最终结论提示�
     topology,
   });
 
-  const afterBuildRound1 = applyAgentResultToGraphState(state, {
+  const afterBuildRound1 = applyResult(state, {
     agentId: "Build",
-    messageId: "msg-Build",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "Build 第 1 轮已完成",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBuildRound1.decision.type, "execute_batch");
@@ -600,66 +782,60 @@ test("回流超限时，如果 decisionAgent 正文已包含最终结论提示�
   const decisionBody = `当前证据仍不足以证明越权成立。
 
 漏洞挑战-1 -> Build 已连续交流 1 次`;
-  const afterDecisionAgentRound1 = applyAgentResultToGraphState(state, {
+  const afterDecisionAgentRound1 = applyResult(state, {
     agentId: "漏洞挑战-1",
-    messageId: "msg-漏洞挑战-1",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
     agentContextContent: decisionBody,
     opinion: decisionBody,
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterDecisionAgentRound1.decision.type, "execute_batch");
   assert.deepEqual(afterDecisionAgentRound1.decision.batch.jobs.map((job) => job.agentId), ["Build"]);
   state = afterDecisionAgentRound1.state;
 
-  const afterBuildRound2 = applyAgentResultToGraphState(state, {
+  const afterBuildRound2 = applyResult(state, {
     agentId: "Build",
-    messageId: "msg-Build",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "Build 第 2 轮已完成",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBuildRound2.decision.type, "execute_batch");
   assert.deepEqual(afterBuildRound2.decision.batch.jobs.map((job) => job.agentId), ["漏洞挑战-1"]);
   state = afterBuildRound2.state;
 
-  const afterDecisionAgentRound2 = applyAgentResultToGraphState(state, {
+  const afterDecisionAgentRound2 = applyResult(state, {
     agentId: "漏洞挑战-1",
-    messageId: "msg-漏洞挑战-1",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
     agentContextContent: decisionBody,
     opinion: decisionBody,
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
   assert.equal(afterDecisionAgentRound2.decision.type, "execute_batch");
   assert.deepEqual(afterDecisionAgentRound2.decision.batch.jobs.map((job) => job.agentId), ["讨论总结-1"]);
-  assert.equal(
-    afterDecisionAgentRound2.decision.batch.sourceContent,
-    decisionBody,
-  );
+  assert.equal(afterDecisionAgentRound2.decision.batch.trigger, "<complete>");
+  assert.equal(afterDecisionAgentRound2.decision.batch.sourceContent, decisionBody);
 });
 
-test("回流超限转给 approved 下游时，不应把系统超限提示注入到下游 agent 正文", () => {
+test("回流超限升级到其他 trigger 下游时，不应把系统超限提示注入到下游 agent 正文", () => {
   const topology: TopologyRecord = {
     nodes: ["Build", "漏洞挑战-1", "讨论总结-1"],
     edges: [
-      { source: "Build", target: "漏洞挑战-1", triggerOn: "transfer", messageMode: "last" },
-      { source: "漏洞挑战-1", target: "Build", triggerOn: "continue", messageMode: "last", maxContinueRounds: 1 },
-      { source: "漏洞挑战-1", target: "讨论总结-1", triggerOn: "complete", messageMode: "last" },
+      { source: "Build", target: "漏洞挑战-1", trigger: "<default>", messageMode: "last" },
+      { source: "漏洞挑战-1", target: "Build", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 1 },
+      { source: "漏洞挑战-1", target: "讨论总结-1", trigger: "<complete>", messageMode: "last" },
     ],
   };
   let state = createGraphTaskState({
@@ -667,68 +843,205 @@ test("回流超限转给 approved 下游时，不应把系统超限提示注入�
     topology,
   });
 
-  const afterBuildRound1 = applyAgentResultToGraphState(state, {
+  const afterBuildRound1 = applyResult(state, {
     agentId: "Build",
-    messageId: "msg-Build",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "Build 第 1 轮已完成",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBuildRound1.decision.type, "execute_batch");
   state = afterBuildRound1.state;
 
   const decisionBody = "当前证据仍不足以证明越权成立。";
-  const afterDecisionAgentRound1 = applyAgentResultToGraphState(state, {
+  const afterDecisionAgentRound1 = applyResult(state, {
     agentId: "漏洞挑战-1",
-    messageId: "msg-漏洞挑战-1",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
     agentContextContent: decisionBody,
     opinion: decisionBody,
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterDecisionAgentRound1.decision.type, "execute_batch");
   state = afterDecisionAgentRound1.state;
 
-  const afterBuildRound2 = applyAgentResultToGraphState(state, {
+  const afterBuildRound2 = applyResult(state, {
     agentId: "Build",
-    messageId: "msg-Build",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "Build 第 2 轮已完成",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBuildRound2.decision.type, "execute_batch");
   state = afterBuildRound2.state;
 
-  const afterDecisionAgentRound2 = applyAgentResultToGraphState(state, {
+  const afterDecisionAgentRound2 = applyResult(state, {
     agentId: "漏洞挑战-1",
-    messageId: "msg-漏洞挑战-1",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
     agentContextContent: decisionBody,
     opinion: decisionBody,
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
   assert.equal(afterDecisionAgentRound2.decision.type, "execute_batch");
   assert.deepEqual(afterDecisionAgentRound2.decision.batch.jobs.map((job) => job.agentId), ["讨论总结-1"]);
+  assert.equal(afterDecisionAgentRound2.decision.batch.trigger, "<complete>");
   assert.equal(afterDecisionAgentRound2.decision.batch.sourceContent, decisionBody);
+  assert.doesNotMatch(afterDecisionAgentRound2.decision.batch.sourceContent ?? "", /系统/u);
+});
+
+test("回流超限后若剩余候选只包含 action_required trigger，则必须直接失败", () => {
+  const topology: TopologyRecord = {
+    nodes: ["Build", "Judge", "Research"],
+    edges: [
+      { source: "Build", target: "Judge", trigger: "<default>", messageMode: "last" },
+      { source: "Judge", target: "Build", trigger: "<revise>", messageMode: "last", maxTriggerRounds: 1 },
+      { source: "Judge", target: "Research", trigger: "<retry>", messageMode: "last", maxTriggerRounds: 1 },
+    ],
+  };
+  let state = createGraphTaskState({
+    taskId: "task-loop-limit-no-labeled-escalation",
+    topology,
+  });
+
+  const afterBuildRound1 = applyResult(state, {
+    agentId: "Build",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "Build 第 1 轮已完成",
+    opinion: "",
+    signalDone: false,
+  });
+  assert.equal(afterBuildRound1.decision.type, "execute_batch");
+  state = afterBuildRound1.state;
+
+  const afterJudgeRound1 = applyResult(state, {
+    agentId: "Judge",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<revise>",
+    agentStatus: "action_required",
+    agentContextContent: "Judge 需要继续修订。",
+    opinion: "请 Build 继续修订。",
+    signalDone: false,
+  });
+  assert.equal(afterJudgeRound1.decision.type, "execute_batch");
+  state = afterJudgeRound1.state;
+
+  const afterBuildRound2 = applyResult(state, {
+    agentId: "Build",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "Build 第 2 轮已完成",
+    opinion: "",
+    signalDone: false,
+  });
+  assert.equal(afterBuildRound2.decision.type, "execute_batch");
+  state = afterBuildRound2.state;
+
+  const afterJudgeRound2 = applyResult(state, {
+    agentId: "Judge",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<revise>",
+    agentStatus: "action_required",
+    agentContextContent: "Judge 仍需继续修订。",
+    opinion: "Build 还需要继续修订。",
+    signalDone: false,
+  });
+
+  assert.equal(afterJudgeRound2.decision.type, "failed");
+  assert.match(afterJudgeRound2.decision.errorMessage, /已连续交流 1 次/u);
+});
+
+test("回流超限时会按真实自定义 trigger 升级到对应下游", () => {
+  const topology: TopologyRecord = {
+    nodes: ["Build", "Judge", "Summary"],
+    edges: [
+      { source: "Build", target: "Judge", trigger: "<default>", messageMode: "last" },
+      { source: "Judge", target: "Build", trigger: "<revise>", messageMode: "last", maxTriggerRounds: 1 },
+      { source: "Judge", target: "Summary", trigger: "<approved>", messageMode: "last" },
+    ],
+  };
+  let state = createGraphTaskState({
+    taskId: "task-loop-limit-custom-approved-trigger",
+    topology,
+  });
+
+  const afterBuildRound1 = applyResult(state, {
+    agentId: "Build",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "Build 第 1 轮已完成",
+    opinion: "",
+    signalDone: false,
+  });
+  assert.equal(afterBuildRound1.decision.type, "execute_batch");
+  state = afterBuildRound1.state;
+
+  const afterJudgeRound1 = applyResult(state, {
+    agentId: "Judge",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<revise>",
+    agentStatus: "action_required",
+    agentContextContent: "还需要继续修订。",
+    opinion: "请继续修改。",
+    signalDone: false,
+  });
+  assert.equal(afterJudgeRound1.decision.type, "execute_batch");
+  state = afterJudgeRound1.state;
+
+  const afterBuildRound2 = applyResult(state, {
+    agentId: "Build",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "Build 第 2 轮已完成",
+    opinion: "",
+    signalDone: false,
+  });
+  assert.equal(afterBuildRound2.decision.type, "execute_batch");
+  state = afterBuildRound2.state;
+
+  const afterJudgeRound2 = applyResult(state, {
+    agentId: "Judge",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<revise>",
+    agentStatus: "action_required",
+    agentContextContent: "仍然需要修改，但已达到超限。",
+    opinion: "请升级到总结节点。",
+    signalDone: false,
+  });
+
+  assert.equal(afterJudgeRound2.decision.type, "execute_batch");
+  assert.equal(afterJudgeRound2.decision.batch.trigger, "<approved>");
+  assert.deepEqual(afterJudgeRound2.decision.batch.jobs.map((job) => job.agentId), ["Summary"]);
 });
 
 test("用户消息命中 spawn 节点时会自动生成实例组并启动入口角色", () => {
@@ -754,13 +1067,14 @@ test("用户消息命中 spawn 节点时会自动生成实例组并启动入口�
           { role: "summary", templateName: "Summary模板" },
         ],
         edges: [
-          { sourceRole: "pro", targetRole: "con", triggerOn: "continue", messageMode: "last" },
-          { sourceRole: "con", targetRole: "pro", triggerOn: "continue", messageMode: "last" },
-          { sourceRole: "pro", targetRole: "summary", triggerOn: "complete", messageMode: "last" },
-          { sourceRole: "con", targetRole: "summary", triggerOn: "complete", messageMode: "last" },
+          { sourceRole: "pro", targetRole: "con", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
+          { sourceRole: "con", targetRole: "pro", trigger: "<continue>", maxTriggerRounds: 4, messageMode: "last" },
+          { sourceRole: "pro", targetRole: "summary", trigger: "<complete>", messageMode: "last" },
+          { sourceRole: "con", targetRole: "summary", trigger: "<complete>", messageMode: "last" },
         ],
         exitWhen: "one_side_agrees",
         reportToTemplateName: "线索发现",
+        reportToTrigger: "<default>",
       },
     ],
   };
@@ -771,7 +1085,7 @@ test("用户消息命中 spawn 节点时会自动生成实例组并启动入口�
 
   const decision = createUserDispatchDecision(state, {
     targetAgentId: "疑点辩论工厂",
-    content: "发现上传文件名被直接拼到目标路径。",
+    content: buildSpawnItemsPayload("发现上传文件名被直接拼到目标路径。"),
   });
 
   assert.equal(decision.type, "execute_batch");
@@ -796,9 +1110,9 @@ test("自动 handoff 命中 spawn 节点时，会实例化动态团队并派发�
       { id: "CodeReview", kind: "spawn", templateName: "CodeReview", spawnRuleId: "spawn-rule:CodeReview", spawnEnabled: true },
     ],
     edges: [
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
+      { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "CodeReview", trigger: "<default>", messageMode: "last" },
     ],
     spawnRules: [
       {
@@ -810,6 +1124,7 @@ test("自动 handoff 命中 spawn 节点时，会实例化动态团队并派发�
         edges: [],
         exitWhen: "one_side_agrees",
         reportToTemplateName: "Build",
+        reportToTrigger: "<default>",
       },
       {
         id: "spawn-rule:TaskReview",
@@ -820,6 +1135,7 @@ test("自动 handoff 命中 spawn 节点时，会实例化动态团队并派发�
         edges: [],
         exitWhen: "one_side_agrees",
         reportToTemplateName: "Build",
+        reportToTrigger: "<default>",
       },
       {
         id: "spawn-rule:CodeReview",
@@ -830,6 +1146,7 @@ test("自动 handoff 命中 spawn 节点时，会实例化动态团队并派发�
         edges: [],
         exitWhen: "one_side_agrees",
         reportToTemplateName: "Build",
+        reportToTrigger: "<default>",
       },
     ],
   };
@@ -838,16 +1155,14 @@ test("自动 handoff 命中 spawn 节点时，会实例化动态团队并派发�
     topology,
   });
 
-  const afterBuild = applyAgentResultToGraphState(state, {
+  const afterBuild = applyResult(state, {
     agentId: "Build",
-    messageId: "msg-Build",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
-    agentContextContent: "Build 已完成",
+    agentContextContent: buildSpawnItemsPayload("Build 已完成"),
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
@@ -863,23 +1178,22 @@ test("自动 handoff 命中 spawn 节点时，会实例化动态团队并派发�
   assert.equal(afterBuild.state.spawnBundles.length, 3);
 });
 
-test("线索发现没有 finding 并命中 complete 时，会先转给线索完备性评估而不是继续触发 spawn decisionAgent", () => {
+test("线索发现没有 finding 并命中结束 trigger 时，会先转给线索完备性评估而不是继续触发 spawn decisionAgent", () => {
   const topology = createBuiltinVulnerabilityTopology();
   const state = createGraphTaskState({
     taskId: "task-vulnerability-no-findings",
     topology,
   });
 
-  const afterTriage = applyAgentResultToGraphState(state, {
+  const afterTriage = applyResult(state, {
     agentId: "线索发现",
-    messageId: "msg-线索发现",
     status: "completed",
     decisionAgent: true,
-    decision: "complete",
+    routingKind: "labeled",
+    trigger: "<complete>",
     agentStatus: "completed",
     agentContextContent: "本轮没有发现新的可疑点。",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
@@ -895,16 +1209,15 @@ test("线索发现存在 finding 且未发出 TASK_DONE 时，会按条件分支
     topology,
   });
 
-  const afterTriage = applyAgentResultToGraphState(state, {
+  const afterTriage = applyResult(state, {
     agentId: "线索发现",
-    messageId: "msg-线索发现",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
-    agentContextContent: "发现一个新的可疑点：上传文件名可能被直接拼接到落盘路径。",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
+    agentContextContent: buildSpawnItemsPayload("发现一个新的可疑点：上传文件名可能被直接拼接到落盘路径。"),
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
@@ -912,48 +1225,56 @@ test("线索发现存在 finding 且未发出 TASK_DONE 时，会按条件分支
   assert.deepEqual(afterTriage.decision.batch.jobs.map((job) => job.agentId), ["漏洞挑战-1"]);
 });
 
-test("漏洞团队里漏洞挑战首轮直接 complete 时，会继续派发到漏洞论证而不是结束任务", () => {
+test("漏洞团队里漏洞挑战首轮直接命中结束 trigger 时，会继续派发到漏洞论证而不是结束任务", () => {
   const topology = createBuiltinVulnerabilityTopology();
   const state = createGraphTaskState({
     taskId: "task-vulnerability-challenge-complete-needs-argument",
     topology,
   });
 
-  const afterTriage = applyAgentResultToGraphState(state, {
+  const afterTriage = applyResult(state, {
     agentId: "线索发现",
-    messageId: "msg-线索发现",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
-    agentContextContent: "发现一个新的可疑点。",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
+    agentContextContent: buildSpawnItemsPayload("发现一个新的可疑点。"),
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterTriage.decision.type, "execute_batch");
   assert.deepEqual(afterTriage.decision.batch.jobs.map((job) => job.agentId), ["漏洞挑战-1"]);
 
-  const afterChallenge = applyAgentResultToGraphState(afterTriage.state, {
+  const afterChallenge = applyResult(afterTriage.state, {
     agentId: "漏洞挑战-1",
-    messageId: "msg-漏洞挑战-1",
     status: "completed",
     decisionAgent: true,
-    decision: "complete",
+    routingKind: "labeled",
+    trigger: "<complete>",
     agentStatus: "completed",
     agentContextContent: "当前材料已经足够，可以进入总结。",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
   assert.equal(afterChallenge.decision.type, "execute_batch");
   assert.equal(afterChallenge.decision.batch.sourceAgentId, "漏洞挑战-1");
-  assert.deepEqual(afterChallenge.decision.batch.jobs, [
+  assert.deepEqual(afterChallenge.decision.batch.jobs.map((job) => ({
+    agentId: job.agentId,
+    sourceAgentId: "sourceAgentId" in job ? job.sourceAgentId : null,
+    sourceMessageId: "sourceMessageId" in job ? job.sourceMessageId : null,
+    sourceContent: "sourceContent" in job ? job.sourceContent : null,
+    displayContent: "displayContent" in job ? job.displayContent : null,
+    kind: job.kind,
+  })), [
     {
       agentId: "漏洞论证-1",
       sourceAgentId: "漏洞挑战-1",
-      kind: "continue_request",
+      sourceMessageId: "message:漏洞挑战-1",
+      sourceContent: "当前材料已经足够，可以进入总结。",
+      displayContent: "当前材料已经足够，可以进入总结。",
+      kind: "action_required_request",
     },
   ]);
 });
@@ -965,21 +1286,56 @@ test("__end__ 带 trigger 时，不匹配的判定结论不能直接结束", () 
     topology,
   });
 
-  const afterTriage = applyAgentResultToGraphState(state, {
+  const afterTriage = applyResult(state, {
     agentId: "线索发现",
-    messageId: "msg-线索发现",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
-    agentContextContent: "发现一个新的可疑点。",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
+    agentContextContent: buildSpawnItemsPayload("发现一个新的可疑点。"),
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: true,
   });
 
   assert.equal(afterTriage.decision.type, "execute_batch");
   assert.deepEqual(afterTriage.decision.batch.jobs.map((job) => job.agentId), ["漏洞挑战-1"]);
+});
+
+test("自定义结束 trigger 命中 __end__ 时必须直接给出 end_edge_triggered", () => {
+  const state = createGraphTaskState({
+    taskId: "task-custom-end-trigger",
+    topology: {
+      nodes: ["Reviewer"],
+      edges: [],
+      langgraph: {
+        start: {
+          id: "__start__",
+          targets: ["Reviewer"],
+        },
+        end: {
+          id: "__end__",
+          sources: ["Reviewer"],
+          incoming: [{ source: "Reviewer", trigger: "<done>" }],
+        },
+      },
+    },
+  });
+
+  const afterReview = applyResult(state, {
+    agentId: "Reviewer",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<done>",
+    agentStatus: "completed",
+    agentContextContent: "已经可以结束。",
+    opinion: "当前任务可以结束。",
+    signalDone: false,
+  });
+
+  assert.equal(afterReview.decision.type, "finished");
+  assert.equal(afterReview.decision.finishReason, "end_edge_triggered");
 });
 
 test("spawn 展开后，handoff 批次会把待响应目标同步成运行时实例 id，而不是残留静态 spawn 节点", () => {
@@ -992,8 +1348,8 @@ test("spawn 展开后，handoff 批次会把待响应目标同步成运行时实
       { id: "讨论总结", kind: "agent", templateName: "讨论总结" },
     ],
     edges: [
-      { source: "线索发现", target: "辩论", triggerOn: "transfer", messageMode: "last" },
-      { source: "辩论", target: "线索发现", triggerOn: "transfer", messageMode: "last" },
+      { source: "线索发现", target: "辩论", trigger: "<default>", messageMode: "last" },
+      { source: "辩论", target: "线索发现", trigger: "<default>", messageMode: "last" },
     ],
     spawnRules: [
       {
@@ -1005,11 +1361,11 @@ test("spawn 展开后，handoff 批次会把待响应目标同步成运行时实
           { role: "讨论总结", templateName: "讨论总结" },
         ],
         edges: [
-          { sourceRole: "漏洞论证", targetRole: "讨论总结", triggerOn: "complete", messageMode: "last" },
+          { sourceRole: "漏洞论证", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last" },
         ],
         exitWhen: "all_completed",
         reportToTemplateName: "线索发现",
-        reportToTriggerOn: "transfer",
+        reportToTrigger: "<default>",
       },
     ],
   };
@@ -1018,16 +1374,14 @@ test("spawn 展开后，handoff 批次会把待响应目标同步成运行时实
     topology,
   });
 
-  const afterTriage = applyAgentResultToGraphState(state, {
+  const afterTriage = applyResult(state, {
     agentId: "线索发现",
-    messageId: "msg-线索发现",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
-    agentContextContent: "发现一个可疑点：上传文件名被直接拼进目标路径",
+    agentContextContent: buildSpawnItemsPayload("发现一个可疑点：上传文件名被直接拼进目标路径"),
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
@@ -1050,8 +1404,8 @@ test("spawn 子图全部完成后，会把 spawn 节点视为完成并按普通 
       { id: "讨论总结", kind: "agent", templateName: "讨论总结" },
     ],
     edges: [
-      { source: "线索发现", target: "辩论", triggerOn: "transfer", messageMode: "last" },
-      { source: "辩论", target: "线索发现", triggerOn: "transfer", messageMode: "last" },
+      { source: "线索发现", target: "辩论", trigger: "<default>", messageMode: "last" },
+      { source: "辩论", target: "线索发现", trigger: "<default>", messageMode: "last" },
     ],
     spawnRules: [
       {
@@ -1064,11 +1418,11 @@ test("spawn 子图全部完成后，会把 spawn 节点视为完成并按普通 
           { role: "讨论总结", templateName: "讨论总结" },
         ],
         edges: [
-          { sourceRole: "漏洞论证", targetRole: "讨论总结", triggerOn: "complete", messageMode: "last" },
+          { sourceRole: "漏洞论证", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last" },
         ],
         exitWhen: "all_completed",
         reportToTemplateName: "线索发现",
-        reportToTriggerOn: "transfer",
+        reportToTrigger: "<default>",
       },
     ],
   };
@@ -1077,16 +1431,14 @@ test("spawn 子图全部完成后，会把 spawn 节点视为完成并按普通 
     topology,
   });
 
-  const afterTriage = applyAgentResultToGraphState(state, {
+  const afterTriage = applyResult(state, {
     agentId: "线索发现",
-    messageId: "msg-线索发现",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: `{"items":[{"title":"路径穿越"}]}`,
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterTriage.decision.type, "execute_batch");
@@ -1094,16 +1446,15 @@ test("spawn 子图全部完成后，会把 spawn 节点视为完成并按普通 
     "漏洞论证-1",
   ]);
 
-  const afterPro = applyAgentResultToGraphState(afterTriage.state, {
+  const afterPro = applyResult(afterTriage.state, {
     agentId: "漏洞论证-1",
-    messageId: "msg-漏洞论证-1",
     status: "completed",
     decisionAgent: true,
-    decision: "complete",
+    routingKind: "labeled",
+    trigger: "<complete>",
     agentStatus: "completed",
     agentContextContent: "漏洞论证认为漏洞成立",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterPro.decision.type, "execute_batch");
@@ -1111,22 +1462,165 @@ test("spawn 子图全部完成后，会把 spawn 节点视为完成并按普通 
     "讨论总结-1",
   ]);
 
-  const afterSummary = applyAgentResultToGraphState(afterPro.state, {
+  const afterSummary = applyResult(afterPro.state, {
     agentId: "讨论总结-1",
-    messageId: "msg-讨论总结-1",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "裁决：漏洞成立",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
   assert.equal(afterSummary.decision.type, "execute_batch");
   assert.equal(afterSummary.decision.batch.sourceAgentId, "讨论总结-1");
   assert.deepEqual(afterSummary.decision.batch.jobs.map((job) => job.agentId), ["线索发现"]);
+});
+
+test("all_completed 特殊补发会按 trigger 精确挑选匹配目标", () => {
+  const topology: TopologyRecord = {
+    nodes: ["线索发现", "辩论", "漏洞论证", "漏洞挑战", "证据补查", "总结甲", "总结乙"],
+    nodeRecords: [
+      { id: "线索发现", kind: "agent", templateName: "线索发现" },
+      { id: "辩论", kind: "spawn", templateName: "辩论", spawnRuleId: "spawn-rule:辩论", spawnEnabled: true },
+      { id: "漏洞论证", kind: "agent", templateName: "漏洞论证" },
+      { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战" },
+      { id: "证据补查", kind: "agent", templateName: "证据补查" },
+      { id: "总结甲", kind: "agent", templateName: "总结甲" },
+      { id: "总结乙", kind: "agent", templateName: "总结乙" },
+    ],
+    edges: [
+      { source: "线索发现", target: "辩论", trigger: "<default>", messageMode: "last" },
+    ],
+    spawnRules: [
+      {
+        id: "spawn-rule:辩论",
+        spawnNodeName: "辩论",
+        sourceTemplateName: "线索发现",
+        entryRole: "pro",
+        spawnedAgents: [
+          { role: "pro", templateName: "漏洞论证" },
+          { role: "con", templateName: "漏洞挑战" },
+          { role: "research", templateName: "证据补查" },
+          { role: "summary-a", templateName: "总结甲" },
+          { role: "summary-b", templateName: "总结乙" },
+        ],
+        edges: [
+          { sourceRole: "pro", targetRole: "con", trigger: "<approve>", messageMode: "last" },
+          { sourceRole: "pro", targetRole: "research", trigger: "<revise>", messageMode: "last" },
+          { sourceRole: "pro", targetRole: "summary-a", trigger: "<approve>", messageMode: "last" },
+          { sourceRole: "con", targetRole: "summary-a", trigger: "<approve>", messageMode: "last" },
+          { sourceRole: "pro", targetRole: "summary-b", trigger: "<revise>", messageMode: "last" },
+          { sourceRole: "research", targetRole: "summary-b", trigger: "<revise>", messageMode: "last" },
+        ],
+        exitWhen: "all_completed",
+      },
+    ],
+  };
+  const state = createGraphTaskState({
+    taskId: "task-all-completed-trigger",
+    topology,
+  });
+
+  const afterDiscovery = applyResult(state, {
+    agentId: "线索发现",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "{\"items\":[{\"title\":\"疑点 1\"}]}",
+    opinion: "",
+    signalDone: false,
+  });
+  assert.equal(afterDiscovery.decision.type, "execute_batch");
+  assert.deepEqual(afterDiscovery.decision.batch.jobs.map((job) => job.agentId), ["漏洞论证-1"]);
+
+  const afterArgument = applyResult(afterDiscovery.state, {
+    agentId: "漏洞论证-1",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<approve>",
+    agentStatus: "action_required",
+    agentContextContent: "漏洞论证认为可以进入总结甲",
+    opinion: "请漏洞挑战补齐同意或反驳意见。",
+    signalDone: false,
+  });
+
+  assert.equal(afterArgument.decision.type, "execute_batch");
+  assert.equal(afterArgument.decision.batch.sourceAgentId, "漏洞论证-1");
+  assert.equal(afterArgument.decision.batch.trigger, "<approve>");
+  assert.deepEqual(afterArgument.decision.batch.jobs.map((job) => job.agentId), ["漏洞挑战-1"]);
+});
+
+test("all_completed 特殊补发会按自定义结束 trigger 继续派发等待中的对弈目标", () => {
+  const topology: TopologyRecord = {
+    nodes: ["线索发现", "辩论", "漏洞论证", "漏洞挑战", "总结甲"],
+    nodeRecords: [
+      { id: "线索发现", kind: "agent", templateName: "线索发现" },
+      { id: "辩论", kind: "spawn", templateName: "辩论", spawnRuleId: "spawn-rule:辩论", spawnEnabled: true },
+      { id: "漏洞论证", kind: "agent", templateName: "漏洞论证" },
+      { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战" },
+      { id: "总结甲", kind: "agent", templateName: "总结甲" },
+    ],
+    edges: [
+      { source: "线索发现", target: "辩论", trigger: "<default>", messageMode: "last" },
+    ],
+    spawnRules: [
+      {
+        id: "spawn-rule:辩论",
+        spawnNodeName: "辩论",
+        sourceTemplateName: "线索发现",
+        entryRole: "pro",
+        spawnedAgents: [
+          { role: "pro", templateName: "漏洞论证" },
+          { role: "con", templateName: "漏洞挑战" },
+          { role: "summary-a", templateName: "总结甲" },
+        ],
+        edges: [
+          { sourceRole: "pro", targetRole: "con", trigger: "<approve>", messageMode: "last" },
+          { sourceRole: "pro", targetRole: "summary-a", trigger: "<approve>", messageMode: "last" },
+          { sourceRole: "con", targetRole: "summary-a", trigger: "<approve>", messageMode: "last" },
+        ],
+        exitWhen: "all_completed",
+      },
+    ],
+  };
+  const state = createGraphTaskState({
+    taskId: "task-all-completed-custom-complete-trigger",
+    topology,
+  });
+
+  const afterDiscovery = applyResult(state, {
+    agentId: "线索发现",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "{\"items\":[{\"title\":\"疑点 1\"}]}",
+    opinion: "",
+    signalDone: false,
+  });
+  assert.equal(afterDiscovery.decision.type, "execute_batch");
+  assert.deepEqual(afterDiscovery.decision.batch.jobs.map((job) => job.agentId), ["漏洞论证-1"]);
+
+  const afterArgument = applyResult(afterDiscovery.state, {
+    agentId: "漏洞论证-1",
+    status: "completed",
+    decisionAgent: true,
+    routingKind: "labeled",
+    trigger: "<approve>",
+    agentStatus: "completed",
+    agentContextContent: "漏洞论证认为已经可以推进到总结阶段。",
+    opinion: "请漏洞挑战补齐最终意见。",
+    signalDone: false,
+  });
+
+  assert.equal(afterArgument.decision.type, "execute_batch");
+  assert.equal(afterArgument.decision.batch.sourceAgentId, "漏洞论证-1");
+  assert.equal(afterArgument.decision.batch.trigger, "<approve>");
+  assert.deepEqual(afterArgument.decision.batch.jobs.map((job) => job.agentId), ["漏洞挑战-1"]);
 });
 
 test("裁决直接回流到外层节点时，也会同步把 spawn 激活标记完成，避免后续卡住", () => {
@@ -1139,7 +1633,7 @@ test("裁决直接回流到外层节点时，也会同步把 spawn 激活标记�
       { id: "讨论总结", kind: "agent", templateName: "讨论总结" },
     ],
     edges: [
-      { source: "线索发现", target: "辩论", triggerOn: "transfer", messageMode: "last" },
+      { source: "线索发现", target: "辩论", trigger: "<default>", messageMode: "last" },
     ],
     spawnRules: [
       {
@@ -1151,11 +1645,11 @@ test("裁决直接回流到外层节点时，也会同步把 spawn 激活标记�
           { role: "讨论总结", templateName: "讨论总结" },
         ],
         edges: [
-          { sourceRole: "漏洞论证", targetRole: "讨论总结", triggerOn: "complete", messageMode: "last" },
+          { sourceRole: "漏洞论证", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last" },
         ],
         exitWhen: "all_completed",
         reportToTemplateName: "线索发现",
-        reportToTriggerOn: "transfer",
+        reportToTrigger: "<default>",
       },
     ],
   };
@@ -1164,42 +1658,37 @@ test("裁决直接回流到外层节点时，也会同步把 spawn 激活标记�
     topology,
   });
 
-  const afterTriage = applyAgentResultToGraphState(state, {
+  const afterTriage = applyResult(state, {
     agentId: "线索发现",
-    messageId: "msg-线索发现",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
-    agentContextContent: "发现一个可疑点：上传文件名被拼接到目标路径",
+    agentContextContent: buildSpawnItemsPayload("发现一个可疑点：上传文件名被拼接到目标路径"),
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
-  const afterPro = applyAgentResultToGraphState(afterTriage.state, {
+  const afterPro = applyResult(afterTriage.state, {
     agentId: "漏洞论证-1",
-    messageId: "msg-漏洞论证-1",
     status: "completed",
     decisionAgent: true,
-    decision: "complete",
+    routingKind: "labeled",
+    trigger: "<complete>",
     agentStatus: "completed",
     agentContextContent: "漏洞论证认为需要交给裁决",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
-  const afterSummary = applyAgentResultToGraphState(afterPro.state, {
+  const afterSummary = applyResult(afterPro.state, {
     agentId: "讨论总结-1",
-    messageId: "msg-讨论总结-1",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "裁决：该点讨论完毕，回到线索发现继续下一个 finding",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
@@ -1210,6 +1699,71 @@ test("裁决直接回流到外层节点时，也会同步把 spawn 激活标记�
   assert.equal(afterSummary.state.agentStatusesByName["辩论"], "completed");
 });
 
+test("多 item spawn 通过 report 回外层时，会等所有 bundle 都 ready 后再标记 activation 完成", () => {
+  const topology: TopologyRecord = {
+    nodes: ["辩论", "归档"],
+    nodeRecords: [
+      { id: "辩论", kind: "spawn", templateName: "辩论", spawnRuleId: "spawn-rule:辩论" },
+      { id: "归档", kind: "agent", templateName: "归档" },
+    ],
+    edges: [
+      { source: "辩论", target: "归档", trigger: "<default>", messageMode: "last" },
+    ],
+    spawnRules: [
+      {
+        id: "spawn-rule:辩论",
+        spawnNodeName: "辩论",
+        entryRole: "summary",
+        spawnedAgents: [
+          { role: "summary", templateName: "讨论总结" },
+        ],
+        edges: [],
+        exitWhen: "all_completed",
+        reportToTemplateName: "归档",
+        reportToTrigger: "<default>",
+      },
+    ],
+  };
+  const state = createGraphTaskState({
+    taskId: "task-multi-item-spawn-report",
+    topology,
+  });
+
+  const start = createUserDispatchDecision(state, {
+    targetAgentId: "辩论",
+    content: buildSpawnItemsPayload("finding-1", "finding-2"),
+  });
+  assert.equal(start.type, "execute_batch");
+  assert.deepEqual(start.batch.jobs.map((job) => job.agentId), ["讨论总结-1", "讨论总结-2"]);
+
+  const afterFirst = applyResult(state, {
+    agentId: "讨论总结-1",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "第一个 finding 已总结完成",
+    opinion: "",
+    signalDone: false,
+  });
+  assert.notEqual(afterFirst.decision.type, "execute_batch");
+  assert.equal(afterFirst.state.spawnActivations[0]?.dispatched, false);
+
+  const afterSecond = applyResult(afterFirst.state, {
+    agentId: "讨论总结-2",
+    status: "completed",
+    decisionAgent: false,
+    routingKind: "default",
+    agentStatus: "completed",
+    agentContextContent: "第二个 finding 已总结完成",
+    opinion: "",
+    signalDone: false,
+  });
+  assert.equal(afterSecond.decision.type, "execute_batch");
+  assert.deepEqual(afterSecond.decision.batch.jobs.map((job) => job.agentId), ["归档"]);
+  assert.equal(afterSecond.state.spawnActivations[0]?.dispatched, true);
+});
+
 test("漏洞团队第一轮讨论总结回到线索发现后，第二轮 finding 不会继续派发上一轮的漏洞挑战实例", () => {
   const topology = createBuiltinVulnerabilityTopology();
   const state = createGraphTaskState({
@@ -1217,77 +1771,71 @@ test("漏洞团队第一轮讨论总结回到线索发现后，第二轮 finding
     topology,
   });
 
-  const afterFirstFinding = applyAgentResultToGraphState(state, {
+  const afterFirstFinding = applyResult(state, {
     agentId: "线索发现",
-    messageId: "msg-线索发现",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
-    agentContextContent: "第 1 个 finding",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
+    agentContextContent: buildSpawnItemsPayload("第 1 个 finding"),
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterFirstFinding.decision.type, "execute_batch");
   assert.deepEqual(afterFirstFinding.decision.batch.jobs.map((job) => job.agentId), ["漏洞挑战-1"]);
 
-  const afterChallenge = applyAgentResultToGraphState(afterFirstFinding.state, {
+  const afterChallenge = applyResult(afterFirstFinding.state, {
     agentId: "漏洞挑战-1",
-    messageId: "msg-漏洞挑战-1",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
     agentContextContent: "当前材料仍需漏洞论证继续补证",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterChallenge.decision.type, "execute_batch");
   assert.deepEqual(afterChallenge.decision.batch.jobs.map((job) => job.agentId), ["漏洞论证-1"]);
 
-  const afterArgument = applyAgentResultToGraphState(afterChallenge.state, {
+  const afterArgument = applyResult(afterChallenge.state, {
     agentId: "漏洞论证-1",
-    messageId: "msg-漏洞论证-1",
     status: "completed",
     decisionAgent: true,
-    decision: "complete",
+    routingKind: "labeled",
+    trigger: "<complete>",
     agentStatus: "completed",
     agentContextContent: "当前材料已经足够，进入讨论总结",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterArgument.decision.type, "execute_batch");
   assert.deepEqual(afterArgument.decision.batch.jobs.map((job) => job.agentId), ["讨论总结-1"]);
 
-  const afterSummary = applyAgentResultToGraphState(afterArgument.state, {
+  const afterSummary = applyResult(afterArgument.state, {
     agentId: "讨论总结-1",
-    messageId: "msg-讨论总结-1",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "当前这条更像真实漏洞，回到线索发现继续挖掘",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterSummary.decision.type, "execute_batch");
   assert.deepEqual(afterSummary.decision.batch.jobs.map((job) => job.agentId), ["线索发现"]);
   assert.equal(afterSummary.state.spawnActivations[0]?.dispatched, true);
 
-  const afterSecondFinding = applyAgentResultToGraphState(afterSummary.state, {
+  const afterSecondFinding = applyResult(afterSummary.state, {
     agentId: "线索发现",
-    messageId: "msg-线索发现",
     status: "completed",
     decisionAgent: true,
-    decision: "continue",
-    agentStatus: "continue",
-    agentContextContent: "第 2 个 finding",
+    routingKind: "labeled",
+    trigger: "<continue>",
+    agentStatus: "action_required",
+    agentContextContent: buildSpawnItemsPayload("第 2 个 finding"),
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 
@@ -1299,8 +1847,8 @@ test("最后一个叶子节点完成后，router 会直接判定 finished，而�
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "QA"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "QA", triggerOn: "transfer", messageMode: "last" },
+      { source: "BA", target: "Build", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "QA", trigger: "<default>", messageMode: "last" },
     ],
   };
   const state = createGraphTaskState({
@@ -1308,46 +1856,40 @@ test("最后一个叶子节点完成后，router 会直接判定 finished，而�
     topology,
   });
 
-  const afterBa = applyAgentResultToGraphState(state, {
+  const afterBa = applyResult(state, {
     agentId: "BA",
-    messageId: "msg-BA",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "需求已澄清",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBa.decision.type, "execute_batch");
   assert.deepEqual(afterBa.decision.batch.jobs.map((job) => job.agentId), ["Build"]);
 
-  const afterBuild = applyAgentResultToGraphState(afterBa.state, {
+  const afterBuild = applyResult(afterBa.state, {
     agentId: "Build",
-    messageId: "msg-Build",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "实现已完成",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.equal(afterBuild.decision.type, "execute_batch");
   assert.deepEqual(afterBuild.decision.batch.jobs.map((job) => job.agentId), ["QA"]);
 
-  const afterQa = applyAgentResultToGraphState(afterBuild.state, {
+  const afterQa = applyResult(afterBuild.state, {
     agentId: "QA",
-    messageId: "msg-QA",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "验证已完成",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
   assert.deepEqual(afterQa.decision, {
@@ -1360,8 +1902,8 @@ test("单一路径上游完成后，router 会继续派发下一个 handoff 下�
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "QA"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "QA", triggerOn: "transfer", messageMode: "last" },
+      { source: "BA", target: "Build", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "QA", trigger: "<default>", messageMode: "last" },
     ],
   };
   const state = createGraphTaskState({
@@ -1369,16 +1911,14 @@ test("单一路径上游完成后，router 会继续派发下一个 handoff 下�
     topology,
   });
 
-  const afterBa = applyAgentResultToGraphState(state, {
+  const afterBa = applyResult(state, {
     agentId: "BA",
-    messageId: "msg-BA",
     status: "completed",
     decisionAgent: false,
-    decision: "complete",
+    routingKind: "default",
     agentStatus: "completed",
     agentContextContent: "需求已澄清",
     opinion: "",
-    allowDirectFallbackWhenNoBatch: false,
     signalDone: false,
   });
 

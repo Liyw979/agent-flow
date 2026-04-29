@@ -1,15 +1,26 @@
 import {
+  DEFAULT_TOPOLOGY_TRIGGER,
+  LANGGRAPH_END_NODE_ID,
+  LANGGRAPH_START_NODE_ID,
+  normalizeActionRequiredMaxRounds,
   normalizeTopologyEdgeTrigger,
   type SpawnRule,
   type SpawnedAgentTemplate,
   type TopologyEdge,
   type TopologyEdgeTrigger,
   type TopologyNodeRecord,
+  type TopologyLangGraphRecord,
   type TopologyRecord,
   type TopologyEdgeMessageMode,
 } from "@shared/types";
 
-type DownstreamMode = TopologyEdgeTrigger | "spawn";
+type TriggerConfig =
+  | TopologyEdgeTrigger
+  | {
+      trigger: TopologyEdgeTrigger;
+      maxTriggerRounds?: number;
+    };
+type DownstreamMode = TriggerConfig | "spawn";
 
 type DownstreamMap = Record<string, Record<string, DownstreamMode>>;
 
@@ -21,11 +32,11 @@ type SpawnAgentInput =
     };
 
 type SpawnLinkInput =
-  | readonly [string, string, TopologyEdgeTrigger]
+  | readonly [string, string, TriggerConfig]
   | {
       sourceRole: string;
       targetRole: string;
-      triggerOn: TopologyEdgeTrigger;
+      trigger: TriggerConfig;
       messageMode: TopologyEdgeMessageMode;
     };
 
@@ -43,19 +54,6 @@ interface CreateTopologyDslInput {
   spawn?: Record<string, SpawnTemplateInput>;
 }
 
-interface CreateTopologyLegacyInput {
-  nodes: string[];
-  edges: TopologyRecord["edges"];
-  nodeRecords?: TopologyRecord["nodeRecords"];
-  spawnRules?: TopologyRecord["spawnRules"];
-}
-
-function isLegacyInput(
-  input: CreateTopologyDslInput | CreateTopologyLegacyInput,
-): input is CreateTopologyLegacyInput {
-  return "edges" in input;
-}
-
 function pushUnique(values: string[], value: string): void {
   if (!values.includes(value)) {
     values.push(value);
@@ -69,6 +67,9 @@ function collectNodes(input: CreateTopologyDslInput): string[] {
   for (const [source, targets] of Object.entries(input.downstream)) {
     pushUnique(nodes, source);
     for (const target of Object.keys(targets)) {
+      if (target === LANGGRAPH_END_NODE_ID) {
+        continue;
+      }
       pushUnique(nodes, target);
     }
   }
@@ -91,11 +92,27 @@ function buildEdges(input: CreateTopologyDslInput): TopologyEdge[] {
 
   for (const [source, targets] of Object.entries(input.downstream)) {
     for (const [target, mode] of Object.entries(targets)) {
+      if (target === LANGGRAPH_END_NODE_ID) {
+        continue;
+      }
+      if (mode === "spawn") {
+        edges.push({
+          source,
+          target,
+          trigger: DEFAULT_TOPOLOGY_TRIGGER,
+          messageMode: "last",
+        });
+        continue;
+      }
+      const resolvedLink = resolveTestTopologyLinkConfig(mode);
       edges.push({
         source,
         target,
-        triggerOn: mode === "spawn" ? "transfer" : normalizeTopologyEdgeTrigger(mode),
+        trigger: resolvedLink.trigger,
         messageMode: "last",
+        ...(typeof resolvedLink.maxTriggerRounds === "number"
+          ? { maxTriggerRounds: resolvedLink.maxTriggerRounds }
+          : {}),
       });
     }
   }
@@ -180,29 +197,50 @@ function normalizeSpawnedAgents(
 function normalizeSpawnLinks(config: SpawnTemplateInput | undefined): SpawnRule["edges"] {
   return (config?.links ?? []).map((link) => {
     if (Array.isArray(link)) {
-      const [sourceRole, targetRole, triggerOn] = link;
+      const [sourceRole, targetRole, trigger] = link;
+      const resolvedLink = resolveTestTopologyLinkConfig(trigger);
       return {
         sourceRole,
         targetRole,
-        triggerOn: normalizeTopologyEdgeTrigger(triggerOn),
+        trigger: resolvedLink.trigger,
         messageMode: "last",
+        ...(typeof resolvedLink.maxTriggerRounds === "number"
+          ? { maxTriggerRounds: resolvedLink.maxTriggerRounds }
+          : {}),
       };
     }
 
-    const objectLink = link as Extract<SpawnLinkInput, {
-      sourceRole: string;
-      targetRole: string;
-      triggerOn: TopologyEdgeTrigger;
-      messageMode: TopologyEdgeMessageMode;
-    }>;
+    const objectLink = link as Exclude<SpawnLinkInput, readonly [string, string, TriggerConfig]>;
 
+    const resolvedLink = resolveTestTopologyLinkConfig(objectLink.trigger);
     return {
       sourceRole: objectLink.sourceRole,
       targetRole: objectLink.targetRole,
-      triggerOn: normalizeTopologyEdgeTrigger(objectLink.triggerOn),
+      trigger: resolvedLink.trigger,
       messageMode: objectLink.messageMode,
+      ...(typeof resolvedLink.maxTriggerRounds === "number"
+        ? { maxTriggerRounds: resolvedLink.maxTriggerRounds }
+        : {}),
     };
   });
+}
+
+function resolveTestTopologyLinkConfig(input: TriggerConfig): {
+  trigger: TopologyEdgeTrigger;
+  maxTriggerRounds?: number;
+} {
+  if (typeof input === "string") {
+    return {
+      trigger: normalizeTopologyEdgeTrigger(input),
+    };
+  }
+
+  return {
+    trigger: normalizeTopologyEdgeTrigger(input.trigger),
+    ...(typeof input.maxTriggerRounds === "number"
+      ? { maxTriggerRounds: normalizeActionRequiredMaxRounds(input.maxTriggerRounds) }
+      : {}),
+  };
 }
 
 function buildSpawnRules(input: CreateTopologyDslInput): SpawnRule[] {
@@ -229,43 +267,48 @@ function buildSpawnRules(input: CreateTopologyDslInput): SpawnRule[] {
       edges: normalizeSpawnLinks(config),
       exitWhen: "one_side_agrees",
       reportToTemplateName: config?.reportTo ?? sourceTemplateName,
+      reportToTrigger: DEFAULT_TOPOLOGY_TRIGGER,
     };
   });
 }
 
-export function createTopology(
-  input: CreateTopologyDslInput | CreateTopologyLegacyInput,
-): TopologyRecord {
-  if (isLegacyInput(input)) {
-    const topology: TopologyRecord = {
-      nodes: [...input.nodes],
-      edges: input.edges.map((edge) => ({
-        ...edge,
-        triggerOn: normalizeTopologyEdgeTrigger(edge.triggerOn),
-      })),
-      ...(input.nodeRecords ? { nodeRecords: input.nodeRecords.map((node) => ({ ...node })) } : {}),
-      ...(input.spawnRules
-        ? {
-            spawnRules: input.spawnRules.map((rule) => ({
-              ...rule,
-              spawnNodeName: rule.spawnNodeName ?? rule.id,
-              spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
-              edges: rule.edges.map((edge) => ({
-                ...edge,
-                triggerOn: normalizeTopologyEdgeTrigger(edge.triggerOn),
-              })),
-            })),
-          }
-        : {}),
-    };
-    return topology;
+function buildLangGraphFromDownstream(input: CreateTopologyDslInput): TopologyLangGraphRecord | undefined {
+  const incoming = Object.entries(input.downstream).flatMap(([source, targets]) => {
+    const mode = targets[LANGGRAPH_END_NODE_ID];
+    if (!mode || mode === "spawn") {
+      return [];
+    }
+    return [{
+      source,
+      trigger: resolveTestTopologyLinkConfig(mode).trigger,
+    }];
+  });
+  if (incoming.length === 0) {
+    return undefined;
   }
+  return {
+    start: {
+      id: LANGGRAPH_START_NODE_ID,
+      targets: [],
+    },
+    end: {
+      id: LANGGRAPH_END_NODE_ID,
+      sources: incoming.map((item) => item.source),
+      incoming,
+    },
+  };
+}
 
+export function createTopology(
+  input: CreateTopologyDslInput,
+): TopologyRecord {
   const nodes = collectNodes(input);
+  const langgraph = buildLangGraphFromDownstream(input);
 
   const topology: TopologyRecord = {
     nodes,
     edges: buildEdges(input),
+    ...(langgraph ? { langgraph } : {}),
     ...(buildNodeRecords(nodes, input).length > 0 ? { nodeRecords: buildNodeRecords(nodes, input) } : {}),
     ...(buildSpawnRules(input).length > 0 ? { spawnRules: buildSpawnRules(input) } : {}),
   };

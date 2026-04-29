@@ -1,11 +1,14 @@
 import {
+  assertNoAmbiguousTopologyTriggerRoutes,
   DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
   LANGGRAPH_END_NODE_ID,
   type AgentRecord,
   createTopologyLangGraphRecord,
+  isDefaultTopologyTrigger,
+  isActionRequiredTopologyTrigger,
   normalizeActionRequiredMaxRounds,
+  normalizeTopologyEdgeTrigger,
   type TopologyEdgeMessageMode,
-  type TopologyEdgeTrigger,
   type TopologyLangGraphRecord,
   type TopologyNodeRecord,
   type TopologyRecord,
@@ -38,9 +41,9 @@ type GraphDslNode = GraphDslAgentNode | GraphDslSpawnNode;
 interface GraphDslLink {
   from: string;
   to: string;
-  trigger_type: TopologyEdgeTrigger;
+  trigger: string;
   message_type: TopologyEdgeMessageMode;
-  maxContinueRounds?: number | undefined;
+  maxTriggerRounds?: number;
 }
 
 export interface GraphDslGraph {
@@ -54,7 +57,7 @@ export type TeamDslDefinition = GraphDslGraph;
 export interface CompiledTeamDslAgent {
   id: string;
   prompt: string;
-  templateName: string | null;
+  templateName: string;
   isWritable: boolean;
 }
 
@@ -63,22 +66,41 @@ export interface CompiledTeamDsl {
   topology: TopologyRecord;
 }
 
-const GraphDslLinkSchema: z.ZodType<GraphDslLink> = z.object({
+const GraphDslLinkSchema = z.object({
   from: z.string(),
   to: z.string(),
-  trigger_type: z.enum(["transfer", "complete", "continue"]),
+  trigger: z.string(),
   message_type: z.enum(["none", "last", "last-all"]),
-  maxContinueRounds: z.number().finite().optional(),
-}).strict();
+  maxTriggerRounds: z.number().finite().optional(),
+}).strict().superRefine((value, ctx) => {
+  let normalizedTrigger: string;
+  try {
+    normalizedTrigger = normalizeTopologyEdgeTrigger(value.trigger);
+  } catch (error) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["trigger"],
+      message: error instanceof Error ? error.message : "非法 trigger。",
+    });
+    return;
+  }
+  if (!isActionRequiredTopologyTrigger(normalizedTrigger, value.maxTriggerRounds) && value.maxTriggerRounds !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["maxTriggerRounds"],
+      message: "只有 action-required trigger 才允许声明 maxTriggerRounds。",
+    });
+  }
+});
 
-const GraphDslAgentNodeSchema: z.ZodType<GraphDslAgentNode> = z.object({
+const GraphDslAgentNodeSchema = z.object({
   type: z.literal("agent"),
   id: z.string(),
   prompt: z.string(),
   writable: z.boolean(),
 }).strict();
 
-const GraphDslNodeSchema: z.ZodType<GraphDslNode> = z.lazy(() =>
+const GraphDslNodeSchema: z.ZodType<GraphDslNode> = z.lazy((): z.ZodType<GraphDslNode> =>
   z.union([
     GraphDslAgentNodeSchema,
     z.object({
@@ -89,13 +111,13 @@ const GraphDslNodeSchema: z.ZodType<GraphDslNode> = z.lazy(() =>
   ]),
 );
 
-const GraphDslGraphSchema: z.ZodType<GraphDslGraph> = z.lazy(() =>
+const GraphDslGraphSchema = z.lazy(() =>
   z.object({
     entry: z.string(),
     nodes: z.array(GraphDslNodeSchema),
     links: z.array(GraphDslLinkSchema),
   }).strict(),
-);
+) as z.ZodType<GraphDslGraph>;
 
 function normalizeComparableAgents(agents: Array<{
   id: string;
@@ -118,20 +140,20 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
       .map((edge) => ({
         source: edge.source,
         target: edge.target,
-        triggerOn: edge.triggerOn,
+        trigger: edge.trigger,
         messageMode: edge.messageMode,
-        ...(edge.triggerOn === "continue"
+        ...(isActionRequiredTopologyTrigger(edge.trigger, edge.maxTriggerRounds)
           ? {
-              maxContinueRounds:
-                edge.maxContinueRounds === undefined
+              maxTriggerRounds:
+                edge.maxTriggerRounds === undefined
                   ? DEFAULT_ACTION_REQUIRED_MAX_ROUNDS
-                  : normalizeActionRequiredMaxRounds(edge.maxContinueRounds),
+                  : normalizeActionRequiredMaxRounds(edge.maxTriggerRounds),
             }
           : {}),
       }))
       .sort((left, right) => {
-        const leftKey = `${left.source}__${left.target}__${left.triggerOn}__${left.messageMode ?? ""}__${left.maxContinueRounds ?? ""}`;
-        const rightKey = `${right.source}__${right.target}__${right.triggerOn}__${right.messageMode ?? ""}__${right.maxContinueRounds ?? ""}`;
+        const leftKey = `${left.source}__${left.target}__${left.trigger}__${left.messageMode}__${String(left.maxTriggerRounds)}`;
+        const rightKey = `${right.source}__${right.target}__${right.trigger}__${right.messageMode}__${String(right.maxTriggerRounds)}`;
         return leftKey.localeCompare(rightKey);
       }),
     ...(topology.langgraph
@@ -160,15 +182,11 @@ function normalizeComparableLangGraph(langgraph: TopologyLangGraphRecord): Topol
       ? {
           id: langgraph.end.id,
           sources: [...langgraph.end.sources].sort((left, right) => left.localeCompare(right)),
-          ...(langgraph.end.incoming
-            ? {
-                incoming: [...langgraph.end.incoming].sort((left, right) => {
-                  const leftKey = `${left.source}__${left.triggerOn ?? ""}`;
-                  const rightKey = `${right.source}__${right.triggerOn ?? ""}`;
-                  return leftKey.localeCompare(rightKey);
-                }),
-              }
-            : {}),
+          incoming: [...langgraph.end.incoming].sort((left, right) => {
+            const leftKey = `${left.source}__${left.trigger}`;
+            const rightKey = `${right.source}__${right.trigger}`;
+            return leftKey.localeCompare(rightKey);
+          }),
         }
       : null,
   };
@@ -227,7 +245,7 @@ function compileAgentDefinition(agent: TeamDslAgentRecord): CompiledTeamDslAgent
   return {
     id: name,
     prompt,
-    templateName: templateName || null,
+    templateName: templateName || name,
     isWritable: agent.writable,
   };
 }
@@ -332,13 +350,13 @@ function formatGraphDslParseError(error: z.ZodError): string {
     && issue.path[0] === "links"
     && issue.expected === "object"
   ) {
-    return `${formatZodIssuePath(issue.path)} 必须使用对象格式，并显式写出 from、to、trigger_type、message_type。`;
+    return `${formatZodIssuePath(issue.path)} 必须使用对象格式，并显式写出 from、to、trigger、message_type。`;
   }
   if (
     issue.code === z.ZodIssueCode.unrecognized_keys
     && issue.path[0] === "links"
   ) {
-    return `${formatZodIssuePath(issue.path)} 只允许显式写出 from、to、trigger_type、message_type、maxContinueRounds。`;
+    return `${formatZodIssuePath(issue.path)} 只允许显式写出 from、to、trigger、message_type、maxTriggerRounds。`;
   }
   if (issue.code === z.ZodIssueCode.invalid_type) {
     if (issue.received === "undefined") {
@@ -357,19 +375,16 @@ function parseGraphDsl(input: unknown): GraphDslGraph {
   return parsed.data;
 }
 
-function normalizeGraphDslMessageMode(messageMode: GraphDslLink["message_type"]): TopologyEdgeMessageMode {
-  return messageMode;
-}
-
 function mapGraphDslLinkToTopologyEdge(link: GraphDslLink) {
+  const trigger = normalizeTopologyEdgeTrigger(link.trigger);
   return {
     source: link.from,
     target: link.to,
-    triggerOn: link.trigger_type,
-    messageMode: normalizeGraphDslMessageMode(link.message_type),
-    ...(link.trigger_type === "continue" && typeof link.maxContinueRounds === "number"
+    trigger,
+    messageMode: link.message_type,
+    ...(isActionRequiredTopologyTrigger(trigger, link.maxTriggerRounds) && typeof link.maxTriggerRounds === "number"
       ? {
-          maxContinueRounds: normalizeActionRequiredMaxRounds(link.maxContinueRounds),
+          maxTriggerRounds: normalizeActionRequiredMaxRounds(link.maxTriggerRounds),
         }
       : {}),
   };
@@ -380,19 +395,23 @@ function resolveSpawnReportTo(
   spawnNodeName: string,
 ): {
   target: string;
-  triggerOn: TopologyEdgeTrigger;
+  trigger: string;
   messageMode: TopologyEdgeMessageMode;
-  maxContinueRounds?: number;
+  maxTriggerRounds?: number;
 } | undefined {
   const outgoingLinks = graph.links.filter((link) => link.from === spawnNodeName);
   return outgoingLinks.length === 1
     ? {
         target: outgoingLinks[0]!.to,
-        triggerOn: outgoingLinks[0]!.trigger_type,
-        messageMode: normalizeGraphDslMessageMode(outgoingLinks[0]!.message_type),
-        ...(outgoingLinks[0]!.trigger_type === "continue" && typeof outgoingLinks[0]!.maxContinueRounds === "number"
+        trigger: normalizeTopologyEdgeTrigger(outgoingLinks[0]!.trigger),
+        messageMode: outgoingLinks[0]!.message_type,
+        ...(isActionRequiredTopologyTrigger(
+          normalizeTopologyEdgeTrigger(outgoingLinks[0]!.trigger),
+          outgoingLinks[0]!.maxTriggerRounds,
+        )
+          && typeof outgoingLinks[0]!.maxTriggerRounds === "number"
           ? {
-              maxContinueRounds: normalizeActionRequiredMaxRounds(outgoingLinks[0]!.maxContinueRounds),
+              maxTriggerRounds: normalizeActionRequiredMaxRounds(outgoingLinks[0]!.maxTriggerRounds),
             }
           : {}),
       }
@@ -413,9 +432,9 @@ function resolveGraphExternalReport(
 ): {
   source: string;
   target: string;
-  triggerOn: TopologyEdgeTrigger;
+  trigger: string;
   messageMode: TopologyEdgeMessageMode;
-  maxContinueRounds?: number;
+  maxTriggerRounds?: number;
 } | undefined {
   const localNames = new Set(graph.nodes.map((node) => node.id));
   const externalLinks = graph.links.filter((link) =>
@@ -431,11 +450,12 @@ function resolveGraphExternalReport(
   return {
     source: externalLink.from,
     target: externalLink.to,
-    triggerOn: externalLink.trigger_type,
-    messageMode: normalizeGraphDslMessageMode(externalLink.message_type),
-    ...(externalLink.trigger_type === "continue" && typeof externalLink.maxContinueRounds === "number"
+    trigger: normalizeTopologyEdgeTrigger(externalLink.trigger),
+    messageMode: externalLink.message_type,
+    ...(isActionRequiredTopologyTrigger(normalizeTopologyEdgeTrigger(externalLink.trigger), externalLink.maxTriggerRounds)
+      && typeof externalLink.maxTriggerRounds === "number"
       ? {
-          maxContinueRounds: normalizeActionRequiredMaxRounds(externalLink.maxContinueRounds),
+          maxTriggerRounds: normalizeActionRequiredMaxRounds(externalLink.maxTriggerRounds),
         }
       : {}),
   };
@@ -503,9 +523,12 @@ function collectGraphDslNodeDefinitions(
       throw new Error(`spawn 节点 ${node.id} 不能同时在外层和子图里声明回到外层的出口。`);
     }
     const reportToTemplateName = externalReportTarget?.target ?? reportTarget?.target;
-    const reportToTriggerOn = externalReportTarget?.triggerOn ?? reportTarget?.triggerOn;
+    const reportToTrigger = externalReportTarget?.trigger ?? reportTarget?.trigger;
     const reportToMessageMode = externalReportTarget?.messageMode ?? reportTarget?.messageMode;
-    const reportToMaxContinueRounds = externalReportTarget?.maxContinueRounds ?? reportTarget?.maxContinueRounds;
+    const reportToMaxTriggerRounds = externalReportTarget?.maxTriggerRounds ?? reportTarget?.maxTriggerRounds;
+    if (reportToTemplateName && !reportToTrigger) {
+      throw new Error(`spawn 节点 ${node.id} 存在回到外层的目标时，必须显式声明 trigger。`);
+    }
     context.nodeRecords.set(node.id, {
       id: node.id,
       kind: "spawn",
@@ -532,20 +555,22 @@ function collectGraphDslNodeDefinitions(
         .map((link) => ({
           sourceRole: link.from,
           targetRole: link.to,
-          triggerOn: link.trigger_type,
-          messageMode: normalizeGraphDslMessageMode(link.message_type),
-          ...(link.trigger_type === "continue" && typeof link.maxContinueRounds === "number"
+          trigger: normalizeTopologyEdgeTrigger(link.trigger),
+          messageMode: link.message_type,
+          ...(isActionRequiredTopologyTrigger(normalizeTopologyEdgeTrigger(link.trigger), link.maxTriggerRounds)
+            && typeof link.maxTriggerRounds === "number"
             ? {
-                maxContinueRounds: normalizeActionRequiredMaxRounds(link.maxContinueRounds),
+                maxTriggerRounds: normalizeActionRequiredMaxRounds(link.maxTriggerRounds),
               }
             : {}),
         })),
       exitWhen: "all_completed",
       ...(reportToTemplateName ? { reportToTemplateName } : {}),
-      ...(reportToTriggerOn ? { reportToTriggerOn } : {}),
+      ...(reportToTrigger ? { reportToTrigger } : {}),
       ...(reportToMessageMode ? { reportToMessageMode } : {}),
-      ...(reportToTriggerOn === "continue" && typeof reportToMaxContinueRounds === "number"
-        ? { reportToMaxContinueRounds }
+      ...(reportToTrigger && isActionRequiredTopologyTrigger(reportToTrigger, reportToMaxTriggerRounds)
+        && typeof reportToMaxTriggerRounds === "number"
+        ? { reportToMaxTriggerRounds }
         : {}),
     });
   }
@@ -557,12 +582,52 @@ function collectGraphDslEndLinks(graph: GraphDslGraph): GraphDslLink[] {
     .filter((value, index, list) =>
       list.findIndex((item) =>
         item.from === value.from
-        && item.trigger_type === value.trigger_type
+        && normalizeTopologyEdgeTrigger(item.trigger) === normalizeTopologyEdgeTrigger(value.trigger)
         && item.message_type === value.message_type,
       ) === index);
 }
 
+function assertGraphAgentPromptsDeclareOutgoingTriggers(graph: GraphDslGraph): void {
+  const agentPrompts = new Map(
+    graph.nodes
+      .filter((node): node is GraphDslAgentNode => node.type === "agent")
+      .map((node) => [node.id, node.prompt]),
+  );
+  const triggersBySource = new Map<string, Set<string>>();
+
+  for (const link of graph.links) {
+    if (!agentPrompts.has(link.from)) {
+      continue;
+    }
+    const trigger = normalizeTopologyEdgeTrigger(link.trigger);
+    if (isDefaultTopologyTrigger(trigger)) {
+      continue;
+    }
+    const current = triggersBySource.get(link.from) ?? new Set<string>();
+    current.add(trigger);
+    triggersBySource.set(link.from, current);
+  }
+
+  for (const [agentId, triggers] of triggersBySource.entries()) {
+    const prompt = agentPrompts.get(agentId);
+    if (prompt === undefined) {
+      continue;
+    }
+    const missingTriggers = [...triggers].filter((trigger) => !prompt.includes(trigger));
+    if (missingTriggers.length > 0) {
+      throw new Error(`DSL Agent ${agentId} 的 prompt 必须显式包含以下 trigger：${missingTriggers.join("、")}`);
+    }
+  }
+
+  for (const node of graph.nodes) {
+    if (node.type === "spawn") {
+      assertGraphAgentPromptsDeclareOutgoingTriggers(node.graph);
+    }
+  }
+}
+
 function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
+  assertGraphAgentPromptsDeclareOutgoingTriggers(input);
   const agentDefinitions = new Map<string, TeamDslAgentRecord>();
   const nodeRecords = new Map<string, TopologyNodeRecord>();
   const spawnRules = new Map<string, SpawnRule>();
@@ -603,13 +668,17 @@ function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
       startTargets: [input.entry],
       endIncoming: endLinks.map((link) => ({
         source: link.from,
-        triggerOn: link.trigger_type,
+        trigger: normalizeTopologyEdgeTrigger(link.trigger),
       })),
     }),
     nodeRecords: compiledNodeRecords,
     spawnRules: [...spawnRules.values()],
   };
   assertTopologyAgentsDeclared(compiledAgents, topology);
+  assertNoAmbiguousTopologyTriggerRoutes({
+    edges: topology.edges,
+    endIncoming: topology.langgraph?.end?.incoming ?? [],
+  });
 
   return {
     agents: compiledAgents,

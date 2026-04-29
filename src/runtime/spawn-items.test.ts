@@ -7,8 +7,8 @@ test("extractSpawnItemsFromContent 默认读取 JSON 里的 items 数组", () =>
   const parsed = extractSpawnItemsFromContent(`{"items":[{"title":"路径穿越"},{"title":"鉴权缺失"}]}`);
 
   assert.deepEqual(parsed.items, [
-    { id: "item-1", title: "路径穿越" },
-    { id: "item-2", title: "鉴权缺失" },
+    { id: "路径穿越", title: "路径穿越" },
+    { id: "鉴权缺失", title: "鉴权缺失" },
   ]);
 });
 
@@ -26,7 +26,7 @@ test("extractSpawnItemsFromContent 支持 JSON5 语法与代码块", () => {
 
   assert.deepEqual(parsed.items, [
     { id: "finding-1", title: "路径穿越" },
-    { id: "item-2", title: "鉴权缺失" },
+    { id: "鉴权缺失", title: "鉴权缺失" },
   ]);
 });
 

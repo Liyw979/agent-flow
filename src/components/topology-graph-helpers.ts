@@ -1,4 +1,5 @@
 import {
+  DEFAULT_TOPOLOGY_TRIGGER,
   isDecisionAgentInTopology,
   isTaskCompletedMessageRecord,
   type MessageRecord,
@@ -8,7 +9,7 @@ import {
 
 export interface TopologyAgentStatusBadgePresentation {
   label: string;
-  icon: "idle" | "running" | "success" | "continue" | "failed";
+  icon: "idle" | "running" | "success" | "action_required" | "failed";
   className: string;
   effectClassName: string;
 }
@@ -53,16 +54,16 @@ export function getTopologyAgentStatusBadgePresentation(
         label: decisionAgent
           ? (isFinalLoopFailedDecisionAgent ? "继续处理，最后一次" : "继续处理")
           : "执行失败",
-        icon: decisionAgent ? "continue" : "failed",
+        icon: decisionAgent ? "action_required" : "failed",
         className: decisionAgent
           ? "border border-[#d6a14a]/55 bg-[#fff7e8] text-[#8a5a12]"
           : "border border-[#d66b63]/45 bg-[#fff1ef] text-[#a33f38]",
         effectClassName: "",
       };
-    case "continue":
+    case "action_required":
       return {
         label: "继续处理",
-        icon: "continue",
+        icon: "action_required",
         className: "border border-[#d6a14a]/55 bg-[#fff7e8] text-[#8a5a12]",
         effectClassName: "",
       };
@@ -104,37 +105,21 @@ export function getTopologyLoopLimitFailedDecisionAgentName(
   return decisionAgentName || null;
 }
 
-export function getTopologyEdgeTriggerAppearance(triggerOn: TopologyEdge["triggerOn"]) {
-  switch (triggerOn) {
-    case "transfer":
+export function getTopologyEdgeTriggerAppearance(trigger: TopologyEdge["trigger"]) {
+  switch (trigger) {
+    case DEFAULT_TOPOLOGY_TRIGGER:
       return {
         color: "#2C4A3F",
         strokeWidth: 2,
         strokeDasharray: undefined,
-        zIndex: 1,
-        animated: false,
-      };
-    case "complete":
-      return {
-        color: "#2F5E9E",
-        strokeWidth: 2,
-        strokeDasharray: "6 4",
-        zIndex: 1,
-        animated: false,
-      };
-    case "continue":
-      return {
-        color: "#A95C42",
-        strokeWidth: 2,
-        strokeDasharray: "6 4",
         zIndex: 1,
         animated: false,
       };
     default:
       return {
-        color: "#2C4A3F",
+        color: "#2F5E9E",
         strokeWidth: 2,
-        strokeDasharray: undefined,
+        strokeDasharray: "6 4",
         zIndex: 1,
         animated: false,
       };

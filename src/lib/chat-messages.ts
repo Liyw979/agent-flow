@@ -159,7 +159,7 @@ function extractAgentFinalDisplayContent(message: MessageRecord): string {
   }
 
   const normalizedRawContent = stripDecisionResponseMarkup(rawContent);
-  const trailingSection = isAgentFinalMessageRecord(message) && message.decision
+  const trailingSection = isAgentFinalMessageRecord(message)
     ? normalizedRawContent
     : extractTrailingTopLevelSection(normalizedRawContent);
   const normalized = trailingSection
@@ -184,8 +184,7 @@ function buildMergedActionRequiredRequestContent(previous: ChatMessageItem, curr
   const normalizedPreviousFinalResponse =
     previousLastMessage
     && isAgentFinalMessageRecord(previousLastMessage)
-    && previousLastMessage.decision === "continue"
-      ? (extractLastDecisionResponse(previousLastMessage.content) || "")
+      ? previousLastMessage.responseNote
         .replace(/\s+/g, " ")
         .trim()
       : "";
@@ -261,7 +260,7 @@ function shouldMergeAgentFinalWithDispatch(previous: ChatMessageItem, current: M
 function shouldMergeActionRequiredRequest(previous: ChatMessageItem, current: MessageRecord) {
   const previousLastMessage = previous.messageChain.at(-1);
   return (
-    current.kind === "continue-request" &&
+    current.kind === "action-required-request" &&
     previous.kinds.at(-1) === "agent-final" &&
     !!previousLastMessage &&
     isAgentFinalMessageRecord(previousLastMessage) &&
@@ -273,7 +272,7 @@ function findActionRequiredRequestMergeTargetIndex(
   merged: ChatMessageItem[],
   current: MessageRecord,
 ): number {
-  if (current.kind !== "continue-request" || !isNonSystemAgent(current.sender)) {
+  if (current.kind !== "action-required-request" || !isNonSystemAgent(current.sender)) {
     return -1;
   }
 
@@ -283,7 +282,7 @@ function findActionRequiredRequestMergeTargetIndex(
     if (!candidate || candidate.sender !== current.sender) {
       continue;
     }
-    if (candidate.kinds.includes("continue-request")) {
+    if (candidate.kinds.includes("action-required-request")) {
       continue;
     }
     if (
@@ -318,7 +317,7 @@ function getDisplayContent(message: MessageRecord): string {
   if (message.kind === "agent-dispatch") {
     return message.content.trim();
   }
-  if (message.kind === "continue-request") {
+  if (message.kind === "action-required-request") {
     return formatDisplayContentWithStoredMentions(message.content, getActionRequiredRequestDisplayBody(message));
   }
   return message.content;
@@ -335,7 +334,7 @@ export function mergeTaskChatMessages(messages: MessageRecord[]): ChatMessageIte
       last.id = `${last.id}:${message.id}`;
       last.timestamp = message.timestamp;
       last.content =
-        message.kind === "continue-request"
+        message.kind === "action-required-request"
           ? buildMergedActionRequiredRequestContent(last, message)
           : message.kind === "agent-dispatch" && last.kinds.at(-1) === "agent-final"
             ? buildMergedAgentFinalTriggerContent(last, message)

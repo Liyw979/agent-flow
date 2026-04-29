@@ -47,11 +47,11 @@ finding格式要求:\n\
           }
         ],
         "links": [
-          { "from": "漏洞论证", "to": "漏洞挑战", "trigger_type": "continue", "message_type": "last" },
-          { "from": "漏洞挑战", "to": "漏洞论证", "trigger_type": "continue", "message_type": "last" },
-          { "from": "漏洞论证", "to": "讨论总结", "trigger_type": "complete", "message_type": "last-all" },
-          { "from": "漏洞挑战", "to": "讨论总结", "trigger_type": "complete", "message_type": "last-all" },
-          { "from": "讨论总结", "to": "线索发现", "trigger_type": "transfer", "message_type": "none" }
+          { "from": "漏洞论证", "to": "漏洞挑战", "trigger": "<continue>", "message_type": "last", "maxTriggerRounds": 4 },
+          { "from": "漏洞挑战", "to": "漏洞论证", "trigger": "<continue>", "message_type": "last", "maxTriggerRounds": 4 },
+          { "from": "漏洞论证", "to": "讨论总结", "trigger": "<complete>", "message_type": "last-all" },
+          { "from": "漏洞挑战", "to": "讨论总结", "trigger": "<complete>", "message_type": "last-all" },
+          { "from": "讨论总结", "to": "线索发现", "trigger": "<default>", "message_type": "none" }
         ]
       }
     },
@@ -70,12 +70,12 @@ finding格式要求:\n\
     {
       "from": "线索发现",
       "to": "疑点辩论",
-      "trigger_type": "continue",
+      "trigger": "<continue>",
       "message_type": "last-all",
-      "maxContinueRounds": 999
+      "maxTriggerRounds": 999
     },
-    { "from": "线索发现", "to": "线索完备性评估", "trigger_type": "complete", "message_type": "last" },
-    { "from": "线索完备性评估", "to": "线索发现", "trigger_type": "continue", "message_type": "last" },
-    { "from": "线索完备性评估", "to": "__end__", "trigger_type": "complete", "message_type": "none" }
+    { "from": "线索发现", "to": "线索完备性评估", "trigger": "<complete>", "message_type": "last" },
+    { "from": "线索完备性评估", "to": "线索发现", "trigger": "<continue>", "message_type": "last", "maxTriggerRounds": 4 },
+    { "from": "线索完备性评估", "to": "__end__", "trigger": "<complete>", "message_type": "none" }
   ]
 }

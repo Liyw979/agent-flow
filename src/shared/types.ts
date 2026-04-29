@@ -3,16 +3,16 @@ export type AgentStatus =
   | "running"
   | "completed"
   | "failed"
-  | "continue";
+  | "action_required";
 
 export type TaskStatus =
   | "pending"
   | "running"
   | "finished"
   | "failed"
-  | "continue";
+  | "action_required";
 
-export type Decision = "complete" | "continue";
+export type AgentRoutingKind = "default" | "labeled" | "invalid";
 
 export type PermissionMode = "allow" | "ask" | "deny";
 
@@ -46,7 +46,7 @@ export interface TaskRecord {
 export interface AgentRecord {
   id: string;
   prompt: string;
-  isWritable?: boolean;
+  isWritable: boolean;
 }
 
 export interface TopologyAgentSeed {
@@ -57,12 +57,18 @@ export type TopologyNodeKind = "agent" | "spawn";
 
 export type SpawnedAgentRole = "pro" | "con" | "summary" | string;
 
+function buildTopologyTrigger(name: string): TopologyTrigger {
+  return `<${name}>`;
+}
+
+export const DEFAULT_TOPOLOGY_TRIGGER = buildTopologyTrigger("default");
+
 export interface SpawnedAgentTemplate {
   role: SpawnedAgentRole;
   templateName: string;
 }
 
-export interface SpawnRule {
+interface SpawnRuleBase {
   id: string;
   spawnNodeName?: string;
   sourceTemplateName?: string;
@@ -71,16 +77,26 @@ export interface SpawnRule {
   edges: Array<{
     sourceRole: SpawnedAgentRole;
     targetRole: SpawnedAgentRole;
-    triggerOn: TopologyEdgeTrigger;
+    trigger: TopologyTrigger;
     messageMode: TopologyEdgeMessageMode;
-    maxContinueRounds?: number;
+    maxTriggerRounds?: number;
   }>;
   exitWhen: "one_side_agrees" | "all_completed";
-  reportToTemplateName?: string;
-  reportToTriggerOn?: TopologyEdgeTrigger;
-  reportToMessageMode?: TopologyEdgeMessageMode;
-  reportToMaxContinueRounds?: number;
 }
+
+export type SpawnRule =
+  | (SpawnRuleBase & {
+      reportToTemplateName: string;
+      reportToTrigger: TopologyTrigger;
+      reportToMessageMode?: TopologyEdgeMessageMode;
+      reportToMaxTriggerRounds?: number;
+    })
+  | (SpawnRuleBase & {
+      reportToTemplateName?: undefined;
+      reportToTrigger?: undefined;
+      reportToMessageMode?: undefined;
+      reportToMaxTriggerRounds?: undefined;
+    });
 
 export interface TopologyNodeRecord {
   id: string;
@@ -101,7 +117,8 @@ export interface TaskAgentRecord {
   runCount: number;
 }
 
-export type TopologyEdgeTrigger = | "transfer" | "complete" | "continue";
+export type TopologyTrigger = string;
+export type TopologyEdgeTrigger = TopologyTrigger;
 export type TopologyEdgeMessageMode = "none" | "last" | "last-all";
 
 export const DEFAULT_ACTION_REQUIRED_MAX_ROUNDS = 4;
@@ -112,9 +129,22 @@ export const LANGGRAPH_END_NODE_ID = "__end__";
 export interface TopologyEdge {
   source: string;
   target: string;
-  triggerOn: TopologyEdgeTrigger;
+  trigger: TopologyTrigger;
   messageMode: TopologyEdgeMessageMode;
-  maxContinueRounds?: number;
+  maxTriggerRounds?: number;
+}
+
+export type TopologyTriggerRouteKind = "labeled" | "action_required";
+
+export interface TopologyTriggerRoute {
+  source: string;
+  trigger: TopologyTrigger;
+  routeKind: TopologyTriggerRouteKind;
+}
+
+interface TopologyTriggerRouteInput {
+  edges: ReadonlyArray<Pick<TopologyEdge, "source" | "trigger" | "maxTriggerRounds">>;
+  endIncoming: ReadonlyArray<TopologyLangGraphEndIncoming>;
 }
 
 export interface TopologyLangGraphStartNode {
@@ -124,13 +154,13 @@ export interface TopologyLangGraphStartNode {
 
 export interface TopologyLangGraphEndIncoming {
   source: string;
-  triggerOn?: TopologyEdgeTrigger;
+  trigger: TopologyTrigger;
 }
 
 export interface TopologyLangGraphEndNode {
   id: typeof LANGGRAPH_END_NODE_ID;
   sources: string[];
-  incoming?: TopologyLangGraphEndIncoming[];
+  incoming: TopologyLangGraphEndIncoming[];
 }
 
 export interface TopologyLangGraphRecord {
@@ -160,9 +190,9 @@ export interface RuntimeTopologyNode {
 export interface RuntimeTopologyEdge {
   source: string;
   target: string;
-  triggerOn: TopologyEdgeTrigger;
+  trigger: TopologyTrigger;
   messageMode: TopologyEdgeMessageMode;
-  maxContinueRounds?: number;
+  maxTriggerRounds?: number;
 }
 
 export interface SpawnItemPayload {
@@ -193,25 +223,35 @@ export interface SpawnActivationRecord {
 
 export function normalizeActionRequiredMaxRounds(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
-    throw new Error("maxContinueRounds 必须是大于等于 1 的整数");
+    throw new Error("maxTriggerRounds 必须是大于等于 1 的整数");
   }
   return value;
 }
 
 export function getActionRequiredEdgeLoopLimit(
-  topology: Pick<TopologyRecord, "edges">,
+  topology: Pick<TopologyRecord, "edges"> & Partial<Pick<TopologyRecord, "langgraph">>,
   sourceAgentId: string,
   targetAgentId: string,
+  trigger: string,
 ): number {
-  const edge = topology.edges.find(
+  const candidateEdges = topology.edges.filter(
     (item) =>
       item.source === sourceAgentId
       && item.target === targetAgentId
-      && normalizeTopologyEdgeTrigger(item.triggerOn) === "continue",
+      && resolveTriggerRoutingKindForSource(topology, item.source, item.trigger) === "action_required",
   );
-  return edge?.maxContinueRounds === undefined
+  if (candidateEdges.length === 0) {
+    throw new Error(`未找到 action_required 边：${sourceAgentId} -> ${targetAgentId}`);
+  }
+
+  const edge = candidateEdges.find((item) => normalizeTopologyEdgeTrigger(item.trigger) === trigger);
+  if (!edge) {
+    throw new Error(`未找到匹配 trigger 的 action_required 边：${sourceAgentId} -> ${targetAgentId} (${trigger})`);
+  }
+
+  return edge.maxTriggerRounds === undefined
     ? DEFAULT_ACTION_REQUIRED_MAX_ROUNDS
-    : normalizeActionRequiredMaxRounds(edge.maxContinueRounds);
+    : normalizeActionRequiredMaxRounds(edge.maxTriggerRounds);
 }
 
 interface BaseMessageRecord {
@@ -240,14 +280,23 @@ export interface TaskCreatedMessageRecord extends BaseMessageRecord {
   sender: "system";
 }
 
-export interface AgentFinalMessageRecord extends BaseMessageRecord {
+type AgentFinalMessageRecordBase = BaseMessageRecord & {
   kind: "agent-final";
-  decision: Decision;
-  decisionNote: string;
+  responseNote: string;
   rawResponse: string;
-  status: "completed";
+  status: "completed" | "error";
   senderDisplayName?: string;
-}
+};
+
+export type AgentFinalMessageRecord =
+  | (AgentFinalMessageRecordBase & {
+      routingKind: "default" | "invalid";
+      trigger?: never;
+    })
+  | (AgentFinalMessageRecordBase & {
+      routingKind: "labeled";
+      trigger: TopologyTrigger;
+    });
 
 export interface AgentDispatchMessageRecord extends BaseMessageRecord {
   kind: "agent-dispatch";
@@ -257,7 +306,7 @@ export interface AgentDispatchMessageRecord extends BaseMessageRecord {
 }
 
 export interface ActionRequiredRequestMessageRecord extends BaseMessageRecord {
-  kind: "continue-request";
+  kind: "action-required-request";
   followUpMessageId: string;
   targetAgentIds: string[];
   senderDisplayName?: string;
@@ -298,7 +347,7 @@ export function isAgentDispatchMessageRecord(message: MessageRecord): message is
 }
 
 export function isActionRequiredRequestMessageRecord(message: MessageRecord): message is ActionRequiredRequestMessageRecord {
-  return message.kind === "continue-request";
+  return message.kind === "action-required-request";
 }
 
 export function isTaskCompletedMessageRecord(message: MessageRecord): message is TaskCompletedMessageRecord {
@@ -313,7 +362,7 @@ export function getMessageTargetAgentIds(message: MessageRecord): string[] {
   switch (message.kind) {
     case "user":
     case "agent-dispatch":
-    case "continue-request":
+    case "action-required-request":
       return message.targetAgentIds;
     default:
       return [];
@@ -324,7 +373,7 @@ export function getMessageSenderDisplayName(message: MessageRecord): string | un
   switch (message.kind) {
     case "agent-final":
     case "agent-dispatch":
-    case "continue-request":
+    case "action-required-request":
       return message.senderDisplayName;
     default:
       return undefined;
@@ -434,15 +483,114 @@ export interface AgentTeamEvent {
   payload: unknown;
 }
 
-export function normalizeTopologyEdgeTrigger(value: unknown): "transfer" | "complete" | "continue" {
-  if (value === "transfer" || value === "complete" || value === "continue") {
-    return value;
+export function normalizeTopologyEdgeTrigger(value: unknown): TopologyTrigger {
+  if (typeof value !== "string") {
+    throw new Error(`非法拓扑 trigger：${String(value)}`);
   }
-  throw new Error(`非法拓扑 trigger：${String(value)}`);
+  const normalized = value.trim();
+  if (!/^<([^\s<>/]+)>$/u.test(normalized)) {
+    throw new Error(`非法拓扑 trigger：${String(value)}`);
+  }
+  return normalized;
 }
 
-export function getTopologyEdgeId(edge: Pick<TopologyEdge, "source" | "target" | "triggerOn">): string {
-  return `${edge.source}__${edge.target}__${normalizeTopologyEdgeTrigger(edge.triggerOn)}`;
+export function isDefaultTopologyTrigger(trigger: string): boolean {
+  return trigger === DEFAULT_TOPOLOGY_TRIGGER;
+}
+
+export function isActionRequiredTopologyTrigger(
+  trigger: string,
+  maxTriggerRounds?: number,
+): boolean {
+  return !isDefaultTopologyTrigger(trigger) && typeof maxTriggerRounds === "number";
+}
+
+function computeTopologyTriggerRoutes(input: TopologyTriggerRouteInput): TopologyTriggerRoute[] {
+  const routesBySourceAndTrigger = new Map<string, TopologyTriggerRoute>();
+  const register = (
+    source: string,
+    trigger: string,
+    routeKind: "labeled" | "action_required",
+  ) => {
+    if (isDefaultTopologyTrigger(trigger)) {
+      return;
+    }
+    const normalizedTrigger = normalizeTopologyEdgeTrigger(trigger);
+    const currentRouteKind = routeKind;
+    const key = `${source}__${normalizedTrigger}`;
+    const existingRoute = routesBySourceAndTrigger.get(key);
+    if (existingRoute && existingRoute.routeKind !== currentRouteKind) {
+      throw new Error(`同一 source 不允许把同一个 trigger 同时用于 action_required 和 labeled：${source} ${normalizedTrigger}`);
+    }
+    routesBySourceAndTrigger.set(key, {
+      source,
+      trigger: normalizedTrigger,
+      routeKind: currentRouteKind,
+    });
+  };
+
+  const edgeGroups = new Map<string, {
+    source: string;
+    trigger: string;
+    hasTriggerLimit: boolean;
+    hasPlainRoute: boolean;
+  }>();
+  for (const edge of input.edges) {
+    const normalizedTrigger = normalizeTopologyEdgeTrigger(edge.trigger);
+    if (isDefaultTopologyTrigger(normalizedTrigger)) {
+      continue;
+    }
+    const key = `${edge.source}__${normalizedTrigger}`;
+    const current = edgeGroups.get(key);
+    edgeGroups.set(key, {
+      source: edge.source,
+      trigger: normalizedTrigger,
+      hasTriggerLimit: (current?.hasTriggerLimit ?? false) || typeof edge.maxTriggerRounds === "number",
+      hasPlainRoute: (current?.hasPlainRoute ?? false) || typeof edge.maxTriggerRounds !== "number",
+    });
+  }
+  for (const edge of edgeGroups.values()) {
+    if (edge.hasTriggerLimit && edge.hasPlainRoute) {
+      throw new Error(`同一 source 不允许把同一个 trigger 同时用于 action_required 和 labeled：${edge.source} ${edge.trigger}`);
+    }
+    register(edge.source, edge.trigger, edge.hasTriggerLimit ? "action_required" : "labeled");
+  }
+  for (const edge of input.endIncoming) {
+    register(edge.source, edge.trigger, "labeled");
+  }
+
+  return [...routesBySourceAndTrigger.values()];
+}
+
+export function collectTopologyTriggerShapes(input: TopologyTriggerRouteInput): TopologyTriggerRoute[] {
+  return computeTopologyTriggerRoutes(input);
+}
+
+export function assertNoAmbiguousTopologyTriggerRoutes(input: TopologyTriggerRouteInput): void {
+  computeTopologyTriggerRoutes(input);
+}
+
+export function resolveTriggerRoutingKindForSource(
+  topology: Pick<TopologyRecord, "edges"> & Partial<Pick<TopologyRecord, "langgraph">>,
+  source: string,
+  trigger: string,
+): "labeled" | "action_required" | null {
+  const normalizedTrigger = normalizeTopologyEdgeTrigger(trigger);
+  if (isDefaultTopologyTrigger(normalizedTrigger)) {
+    return null;
+  }
+  return collectTopologyTriggerShapes({
+    edges: topology.edges,
+    endIncoming: topology.langgraph?.end?.incoming ?? [],
+  }).find((item) =>
+    item.source === source && item.trigger === normalizedTrigger
+  )?.routeKind ?? null;
+}
+
+export function getTopologyEdgeId(
+  edge: Pick<TopologyEdge, "source" | "target" | "trigger">,
+): string {
+  return `${edge.source}__${edge.target}__${normalizeTopologyEdgeTrigger(edge.trigger)}`;
 }
 
 export function isDecisionAgentInTopology(
@@ -452,24 +600,18 @@ export function isDecisionAgentInTopology(
   const hasDecisionEdge = topology.edges.some(
     (edge) =>
       edge.source === agentId &&
-      (() => {
-        const triggerOn = normalizeTopologyEdgeTrigger(edge.triggerOn);
-        return triggerOn === "complete" || triggerOn === "continue";
-      })(),
+      !isDefaultTopologyTrigger(normalizeTopologyEdgeTrigger(edge.trigger)),
   );
   if (hasDecisionEdge) {
     return true;
   }
 
-  return topology.langgraph?.end?.incoming?.some(
+  const endIncoming = topology.langgraph?.end?.incoming ?? [];
+  return endIncoming.some(
     (edge) =>
       edge.source === agentId &&
-      edge.triggerOn &&
-      (() => {
-        const triggerOn = normalizeTopologyEdgeTrigger(edge.triggerOn);
-        return triggerOn === "complete" || triggerOn === "continue";
-      })(),
-  ) === true;
+      !isDefaultTopologyTrigger(normalizeTopologyEdgeTrigger(edge.trigger)),
+  );
 }
 
 export function resolveBuildAgentId(
@@ -544,9 +686,9 @@ export function createDefaultTopology(
     agents.find((agent) => agent.id !== startAgent?.id) ?? null;
 
   const push = (
-    source: string | null | undefined,
-    target: string | null | undefined,
-    triggerOn: TopologyEdge["triggerOn"],
+    source: string | undefined,
+    target: string | undefined,
+    trigger: TopologyEdge["trigger"],
   ) => {
     if (!source || !target) {
       return;
@@ -557,17 +699,17 @@ export function createDefaultTopology(
     edges.push({
       source,
       target,
-      triggerOn,
+      trigger,
       messageMode: DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE,
-      ...(triggerOn === "continue"
+      ...(isActionRequiredTopologyTrigger(trigger, DEFAULT_ACTION_REQUIRED_MAX_ROUNDS)
         ? {
-            maxContinueRounds: DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
+            maxTriggerRounds: DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
           }
         : {}),
     });
   };
 
-  push(startAgent?.id, nextAgent?.id, "transfer");
+  push(startAgent?.id, nextAgent?.id, DEFAULT_TOPOLOGY_TRIGGER);
 
   return {
     nodes,
@@ -575,8 +717,9 @@ export function createDefaultTopology(
     langgraph: createTopologyLangGraphRecord({
       nodes,
       edges,
-      startTargets: [startAgent?.id ?? nodes[0] ?? ""],
-      endSources: null,
+      startTargets: startAgent?.id
+        ? [startAgent.id]
+        : (nodes[0] ? [nodes[0]] : []),
     }),
     nodeRecords: nodes.map((name) => ({
       id: name,
@@ -614,29 +757,42 @@ export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
       .map((node) => [node.spawnRuleId!, node.id]),
   );
   return (topology.spawnRules ?? []).map((rule) => {
-    const reportToTriggerOn =
-      rule.reportToTriggerOn === undefined ? undefined : normalizeTopologyEdgeTrigger(rule.reportToTriggerOn);
+    if (rule.reportToTemplateName && !rule.reportToTrigger) {
+      throw new Error(`spawn rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`);
+    }
+    const reportToTrigger = typeof rule.reportToTrigger === "string"
+      ? normalizeTopologyEdgeTrigger(rule.reportToTrigger)
+      : null;
 
-    return {
-      ...rule,
+    const normalizedBase = {
+      id: rule.id,
       spawnNodeName: rule.spawnNodeName ?? spawnNodeNameByRuleId.get(rule.id) ?? rule.id,
+      ...(rule.sourceTemplateName ? { sourceTemplateName: rule.sourceTemplateName } : {}),
+      entryRole: rule.entryRole,
       spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
       edges: rule.edges.map((edge) => {
-        const triggerOn = normalizeTopologyEdgeTrigger(edge.triggerOn);
+        const trigger = normalizeTopologyEdgeTrigger(edge.trigger);
         return {
           ...edge,
-          triggerOn,
-          ...(triggerOn === "continue" && typeof edge.maxContinueRounds === "number"
-            ? { maxContinueRounds: normalizeActionRequiredMaxRounds(edge.maxContinueRounds) }
+          trigger,
+          ...(isActionRequiredTopologyTrigger(trigger, edge.maxTriggerRounds) && typeof edge.maxTriggerRounds === "number"
+            ? { maxTriggerRounds: normalizeActionRequiredMaxRounds(edge.maxTriggerRounds) }
             : {}),
         };
       }),
-      ...(reportToTriggerOn ? { reportToTriggerOn } : {}),
-      ...(rule.reportToMessageMode
-        ? { reportToMessageMode: rule.reportToMessageMode }
-        : {}),
-      ...(reportToTriggerOn === "continue" && typeof rule.reportToMaxContinueRounds === "number"
-        ? { reportToMaxContinueRounds: normalizeActionRequiredMaxRounds(rule.reportToMaxContinueRounds) }
+      exitWhen: rule.exitWhen,
+    };
+    if (!reportToTrigger || !rule.reportToTemplateName) {
+      return normalizedBase;
+    }
+    return {
+      ...normalizedBase,
+      reportToTemplateName: rule.reportToTemplateName,
+      reportToTrigger,
+      ...(rule.reportToMessageMode ? { reportToMessageMode: rule.reportToMessageMode } : {}),
+      ...(isActionRequiredTopologyTrigger(reportToTrigger, rule.reportToMaxTriggerRounds)
+        && typeof rule.reportToMaxTriggerRounds === "number"
+        ? { reportToMaxTriggerRounds: normalizeActionRequiredMaxRounds(rule.reportToMaxTriggerRounds) }
         : {}),
     };
   });
@@ -645,15 +801,12 @@ export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
 export function createTopologyLangGraphRecord(input: {
   nodes: string[];
   edges: TopologyEdge[];
-  startTargets?: ReadonlyArray<string | null | undefined>;
-  endSources?: ReadonlyArray<string | null | undefined> | null;
-  endIncoming?: ReadonlyArray<{
-    source: string | null | undefined;
-    triggerOn?: TopologyEdgeTrigger | null | undefined;
-  }> | null;
+  startTargets?: ReadonlyArray<string>;
+  endSources?: ReadonlyArray<string>;
+  endIncoming?: ReadonlyArray<TopologyLangGraphEndIncoming>;
 }): TopologyLangGraphRecord {
   const knownNodes = new Set(input.nodes);
-  const normalizeRefs = (values: ReadonlyArray<string | null | undefined> | null | undefined) =>
+  const normalizeRefs = (values: ReadonlyArray<string> | undefined) =>
     (values ?? [])
       .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
       .map((value) => value.trim())
@@ -670,18 +823,22 @@ export function createTopologyLangGraphRecord(input: {
   }
 
   const endIncoming = (input.endIncoming ?? [])
-    .filter((value): value is { source: string; triggerOn?: TopologyEdgeTrigger | null | undefined } =>
-      Boolean(value?.source) && typeof value.source === "string" && value.source.trim().length > 0)
-    .map((value) => ({
-      source: value.source.trim(),
-      ...(value.triggerOn ? { triggerOn: normalizeTopologyEdgeTrigger(value.triggerOn) } : {}),
-    }))
+    .map((value) => {
+      return {
+        source: value.source.trim(),
+        trigger: normalizeTopologyEdgeTrigger(value.trigger),
+      };
+    })
+    .filter((value) => value.source.length > 0)
     .filter((value) => knownNodes.has(value.source))
     .filter((value, index, list) =>
-      list.findIndex((item) => item.source === value.source && item.triggerOn === value.triggerOn) === index,
+      list.findIndex((item) =>
+        item.source === value.source
+        && item.trigger === value.trigger
+      ) === index,
     );
   const endSources = normalizeRefs([
-    ...((input.endSources ?? []) as ReadonlyArray<string | null | undefined>),
+    ...(input.endSources ?? []),
     ...endIncoming.map((item) => item.source),
   ]);
 
@@ -694,7 +851,7 @@ export function createTopologyLangGraphRecord(input: {
       ? {
           id: LANGGRAPH_END_NODE_ID,
           sources: endSources,
-          ...(endIncoming.length > 0 ? { incoming: endIncoming } : {}),
+          incoming: endIncoming,
         }
       : null,
   };

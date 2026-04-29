@@ -66,13 +66,13 @@ test("getTopologyAgentStatusBadgePresentation 会把普通 agent 状态映射为
   );
 });
 
-test("getTopologyAgentStatusBadgePresentation 会把判定 agent 映射为 continue/complete 语义对应的状态徽标", () => {
+test("getTopologyAgentStatusBadgePresentation 会把判定 agent 映射为 action_required/completed 对应的状态徽标", () => {
   const topology = {
     edges: [
       {
         source: "CodeReview",
         target: "Build",
-        triggerOn: "continue" as const,
+        trigger: "<continue>" as const,
         messageMode: "last" as const,
       },
     ],
@@ -89,10 +89,10 @@ test("getTopologyAgentStatusBadgePresentation 会把判定 agent 映射为 conti
   );
 
   assert.deepEqual(
-    getTopologyAgentStatusBadgePresentation(topology, "CodeReview", "continue"),
+    getTopologyAgentStatusBadgePresentation(topology, "CodeReview", "action_required"),
     {
       label: "继续处理",
-      icon: "continue",
+      icon: "action_required",
       className: "border border-[#d6a14a]/55 bg-[#fff7e8] text-[#8a5a12]",
       effectClassName: "",
     },
@@ -104,7 +104,7 @@ test("getTopologyAgentStatusBadgePresentation 会把判定 agent 映射为 conti
     }),
     {
       label: "继续处理，最后一次",
-      icon: "continue",
+      icon: "action_required",
       className: "border border-[#d6a14a]/55 bg-[#fff7e8] text-[#8a5a12]",
       effectClassName: "",
     },

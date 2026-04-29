@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  collectTopologyTriggerShapes,
   createDefaultTopology,
   getSpawnRules,
   getActionRequiredEdgeLoopLimit,
@@ -32,7 +33,7 @@ test("默认拓扑只生成首节点到次节点的 transfer 边", () => {
   assert.deepEqual(topology.edges[0], {
     source: "Build",
     target: "BA",
-    triggerOn: "transfer",
+    trigger: "<default>",
     messageMode: "last",
   });
   assert.deepEqual(topology.langgraph, {
@@ -43,7 +44,7 @@ test("默认拓扑只生成首节点到次节点的 transfer 边", () => {
     end: null,
   });
   assert.equal(
-    topology.edges.some((edge) => edge.triggerOn === "complete" || edge.triggerOn === "continue"),
+    topology.edges.some((edge) => edge.trigger === "complete" || edge.trigger === "continue"),
     false,
   );
 });
@@ -74,7 +75,7 @@ test("存在 decision 出边时 isDecisionAgentInTopology 返回 true", () => {
       {
         source: "TaskReview",
         target: "Build",
-        triggerOn: "continue",
+        trigger: "<continue>",
         messageMode: "last",
       },
     ],
@@ -84,28 +85,138 @@ test("存在 decision 出边时 isDecisionAgentInTopology 返回 true", () => {
   assert.equal(isDecisionAgentInTopology(topology, "Build"), false);
 });
 
-test("continue 边默认回流上限为 4，且支持按边单独覆盖", () => {
+test("回流边默认上限为 4，且支持按显式 trigger 单独覆盖", () => {
   const topology: TopologyRecord = {
     nodes: ["Build", "UnitTest", "TaskReview"],
     edges: [
       {
         source: "UnitTest",
         target: "Build",
-        triggerOn: "continue",
+        trigger: "<continue>",
         messageMode: "last",
+        maxTriggerRounds: 4,
       },
       {
         source: "TaskReview",
         target: "Build",
-        triggerOn: "continue",
+        trigger: "<continue>",
         messageMode: "last",
-        maxContinueRounds: 7,
+        maxTriggerRounds: 7,
       },
     ],
   };
 
-  assert.equal(getActionRequiredEdgeLoopLimit(topology, "UnitTest", "Build"), 4);
-  assert.equal(getActionRequiredEdgeLoopLimit(topology, "TaskReview", "Build"), 7);
+  assert.equal(getActionRequiredEdgeLoopLimit(topology, "UnitTest", "Build", "<continue>"), 4);
+  assert.equal(getActionRequiredEdgeLoopLimit(topology, "TaskReview", "Build", "<continue>"), 7);
+});
+
+test("getActionRequiredEdgeLoopLimit 会按 trigger 精确命中同源同目标回流边", () => {
+  const topology: TopologyRecord = {
+    nodes: ["漏洞论证", "Build"],
+    edges: [
+      {
+        source: "漏洞论证",
+        target: "Build",
+        trigger: "<first>",
+        messageMode: "last",
+        maxTriggerRounds: 2,
+      },
+      {
+        source: "漏洞论证",
+        target: "Build",
+        trigger: "<second>",
+        messageMode: "last",
+        maxTriggerRounds: 5,
+      },
+    ],
+  };
+
+  assert.equal(getActionRequiredEdgeLoopLimit(topology, "漏洞论证", "Build", "<first>"), 2);
+  assert.equal(getActionRequiredEdgeLoopLimit(topology, "漏洞论证", "Build", "<second>"), 5);
+});
+
+test("getActionRequiredEdgeLoopLimit 在 trigger 不匹配时必须直接报错", () => {
+  const topology: TopologyRecord = {
+    nodes: ["漏洞论证", "Build"],
+    edges: [
+      {
+        source: "漏洞论证",
+        target: "Build",
+        trigger: "<first>",
+        messageMode: "last",
+        maxTriggerRounds: 2,
+      },
+    ],
+  };
+
+  assert.throws(
+    () => getActionRequiredEdgeLoopLimit(topology, "漏洞论证", "Build", "<second>"),
+    /未找到匹配 trigger 的 action_required 边/u,
+  );
+});
+
+test("自定义 label 的回流与通过不再按 trigger 名字推断，而是按边配置区分", () => {
+  const topology: TopologyRecord = {
+    nodes: ["Build", "Judge", "Summary"],
+    edges: [
+      {
+        source: "Build",
+        target: "Judge",
+        trigger: "<default>",
+        messageMode: "last",
+      },
+      {
+        source: "Judge",
+        target: "Build",
+        trigger: "<revise>",
+        messageMode: "last",
+        maxTriggerRounds: 2,
+      },
+      {
+        source: "Judge",
+        target: "Summary",
+        trigger: "<approved>",
+        messageMode: "last",
+      },
+    ],
+  };
+
+  assert.deepEqual(collectTopologyTriggerShapes({
+    edges: topology.edges,
+    endIncoming: topology.langgraph?.end?.incoming ?? [],
+  }), [
+    { source: "Judge", trigger: "<revise>", routeKind: "action_required" },
+    { source: "Judge", trigger: "<approved>", routeKind: "labeled" },
+  ]);
+});
+
+test("示例 label 作为普通 trigger 时不会获得特殊待遇，仍只按边配置区分", () => {
+  const topology: TopologyRecord = {
+    nodes: ["Judge", "Build", "Summary"],
+    edges: [
+      {
+        source: "Judge",
+        target: "Summary",
+        trigger: "<continue>",
+        messageMode: "last",
+      },
+      {
+        source: "Judge",
+        target: "Build",
+        trigger: "<complete>",
+        messageMode: "last",
+        maxTriggerRounds: 3,
+      },
+    ],
+  };
+
+  assert.deepEqual(collectTopologyTriggerShapes({
+    edges: topology.edges,
+    endIncoming: topology.langgraph?.end?.incoming ?? [],
+  }), [
+    { source: "Judge", trigger: "<continue>", routeKind: "labeled" },
+    { source: "Judge", trigger: "<complete>", routeKind: "action_required" },
+  ]);
 });
 
 test("只有 Build 继续视为 OpenCode 内置 prompt", () => {
@@ -117,15 +228,18 @@ test("只有 Build 继续视为 OpenCode 内置 prompt", () => {
 
 test("未知 trigger 必须直接报错，canonical trigger 保持新命名", () => {
   assert.throws(() => normalizeTopologyEdgeTrigger("unknown"), /非法拓扑 trigger/u);
-  assert.equal(normalizeTopologyEdgeTrigger("transfer"), "transfer");
-  assert.equal(normalizeTopologyEdgeTrigger("complete"), "complete");
-  assert.equal(normalizeTopologyEdgeTrigger("continue"), "continue");
+  assert.throws(() => normalizeTopologyEdgeTrigger("transfer"), /非法拓扑 trigger/u);
+  assert.throws(() => normalizeTopologyEdgeTrigger("complete"), /非法拓扑 trigger/u);
+  assert.throws(() => normalizeTopologyEdgeTrigger("continue"), /非法拓扑 trigger/u);
+  assert.equal(normalizeTopologyEdgeTrigger("<default>"), "<default>");
+  assert.equal(normalizeTopologyEdgeTrigger("<complete>"), "<complete>");
+  assert.equal(normalizeTopologyEdgeTrigger("<continue>"), "<continue>");
 });
 
-test("非法 maxContinueRounds 必须直接报错，不能偷偷修正", () => {
-  assert.throws(() => normalizeActionRequiredMaxRounds(0), /maxContinueRounds 必须是大于等于 1 的整数/u);
-  assert.throws(() => normalizeActionRequiredMaxRounds(1.5), /maxContinueRounds 必须是大于等于 1 的整数/u);
-  assert.throws(() => normalizeActionRequiredMaxRounds("4"), /maxContinueRounds 必须是大于等于 1 的整数/u);
+test("非法 maxTriggerRounds 必须直接报错，不能偷偷修正", () => {
+  assert.throws(() => normalizeActionRequiredMaxRounds(0), /maxTriggerRounds 必须是大于等于 1 的整数/u);
+  assert.throws(() => normalizeActionRequiredMaxRounds(1.5), /maxTriggerRounds 必须是大于等于 1 的整数/u);
+  assert.throws(() => normalizeActionRequiredMaxRounds("4"), /maxTriggerRounds 必须是大于等于 1 的整数/u);
   assert.equal(normalizeActionRequiredMaxRounds(4), 4);
 });
 
@@ -177,7 +291,7 @@ test("getSpawnRules 保留显式声明的 messageMode，不再依赖默认补值
           {
             sourceRole: "pro",
             targetRole: "con",
-            triggerOn: "continue",
+            trigger: "<continue>",
             messageMode: "last-all",
           },
         ],
@@ -190,8 +304,42 @@ test("getSpawnRules 保留显式声明的 messageMode，不再依赖默认补值
     {
       sourceRole: "pro",
       targetRole: "con",
-      triggerOn: "continue",
+      trigger: "<continue>",
       messageMode: "last-all",
     },
   ]);
+});
+
+test("getSpawnRules 会拒绝缺少 reportToTrigger 的 spawn report 配置", () => {
+  const topology: TopologyRecord = {
+    nodes: ["线索发现", "疑点辩论", "漏洞论证", "漏洞挑战"],
+    edges: [],
+    nodeRecords: [
+      { id: "线索发现", kind: "agent", templateName: "线索发现" },
+      { id: "疑点辩论", kind: "spawn", templateName: "疑点辩论", spawnRuleId: "spawn-rule:疑点辩论" },
+      { id: "漏洞论证", kind: "agent", templateName: "漏洞论证" },
+      { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战" },
+    ],
+    spawnRules: [
+      {
+        id: "spawn-rule:疑点辩论",
+        spawnNodeName: "疑点辩论",
+        entryRole: "pro",
+        spawnedAgents: [
+          { role: "pro", templateName: "漏洞论证" },
+          { role: "con", templateName: "漏洞挑战" },
+        ],
+        edges: [],
+        exitWhen: "all_completed",
+        reportToTemplateName: "线索发现",
+        reportToTrigger: "<default>",
+      },
+    ],
+  };
+  Reflect.deleteProperty(topology.spawnRules![0]!, "reportToTrigger");
+
+  assert.throws(
+    () => getSpawnRules(topology),
+    /必须显式声明 reportToTrigger/u,
+  );
 });

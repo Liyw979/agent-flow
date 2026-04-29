@@ -167,7 +167,7 @@ function renderStatusBadgeIcon(presentation: TopologyAgentStatusBadgePresentatio
     );
   }
 
-  if (presentation.icon === "continue") {
+  if (presentation.icon === "action_required") {
     return (
       <svg
         viewBox="0 0 16 16"

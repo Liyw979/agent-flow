@@ -40,7 +40,6 @@ function createDefaultWorkspaceState(): WorkspaceStateFile {
       langgraph: createTopologyLangGraphRecord({
         nodes: [],
         edges: [],
-        endSources: null,
       }),
     },
     tasks: [],

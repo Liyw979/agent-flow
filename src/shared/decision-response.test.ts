@@ -2,124 +2,120 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  DECISION_COMPLETE_END_LABEL,
-  DECISION_COMPLETE_LABEL,
-  DECISION_CONTINUE_END_LABEL,
-  DECISION_CONTINUE_LABEL,
   extractTrailingDecisionSignalBlock,
   stripDecisionResponseMarkup,
 } from "./decision-response";
+
+const APPROVED = "<approved>";
+const APPROVED_END = "</approved>";
+const REVISE = "<revise>";
+const REVISE_END = "</revise>";
 
 test("extractTrailingDecisionSignalBlock 不再识别错拼的 chalenge", () => {
   const content =
     "目前缺少测试文件，无法完成单测判定。"
     + "<chalenge>请把 temp_add.js 和对应测试文件一起发出来。</chalenge>";
 
-  const parsed = extractTrailingDecisionSignalBlock(content);
+  const parsed = extractTrailingDecisionSignalBlock(content, [APPROVED, REVISE]);
   assert.equal(parsed, null);
 });
 
-test("extractTrailingDecisionSignalBlock 支持识别 complete", () => {
+test("extractTrailingDecisionSignalBlock 支持识别示例结束 trigger", () => {
   const content =
     "证据链已经完整，漏洞定性成立。"
-    + `${DECISION_COMPLETE_LABEL}结束当前分支。${DECISION_COMPLETE_END_LABEL}`;
+    + `${APPROVED}结束当前分支。${APPROVED_END}`;
 
-  const parsed = extractTrailingDecisionSignalBlock(content);
+  const parsed = extractTrailingDecisionSignalBlock(content, [APPROVED, REVISE]);
   assert.notEqual(parsed, null);
   assert.equal(parsed?.body, "证据链已经完整，漏洞定性成立。");
   assert.equal(parsed?.response, "结束当前分支。");
-  assert.equal(parsed?.kind, "complete");
+  assert.equal(parsed?.trigger, APPROVED);
   assert.equal(
     parsed?.rawBlock,
-    `${DECISION_COMPLETE_LABEL}结束当前分支。${DECISION_COMPLETE_END_LABEL}`,
+    `${APPROVED}结束当前分支。${APPROVED_END}`,
   );
 });
 
-test("extractTrailingDecisionSignalBlock 支持识别 canonical continue", () => {
+test("extractTrailingDecisionSignalBlock 支持识别示例回流 trigger", () => {
   const content =
-    `判定未通过。${DECISION_CONTINUE_LABEL}请继续补测试。${DECISION_CONTINUE_END_LABEL}`;
+    `判定未通过。${REVISE}请继续补测试。${REVISE_END}`;
 
-  const parsed = extractTrailingDecisionSignalBlock(content);
+  const parsed = extractTrailingDecisionSignalBlock(content, [APPROVED, REVISE]);
   assert.notEqual(parsed, null);
   assert.equal(parsed?.body, "判定未通过。");
   assert.equal(parsed?.response, "请继续补测试。");
-  assert.equal(parsed?.kind, "continue");
+  assert.equal(parsed?.trigger, REVISE);
   assert.equal(
     parsed?.rawBlock,
-    `${DECISION_CONTINUE_LABEL}请继续补测试。${DECISION_CONTINUE_END_LABEL}`,
+    `${REVISE}请继续补测试。${REVISE_END}`,
   );
 });
 
-test("extractTrailingDecisionSignalBlock 支持识别前置 complete 标签", () => {
-  const parsed = extractTrailingDecisionSignalBlock(`${DECISION_COMPLETE_LABEL}结束当前分支。`);
+test("extractTrailingDecisionSignalBlock 缺少结束标签时不会识别前置裸 trigger", () => {
+  const parsed = extractTrailingDecisionSignalBlock(`${APPROVED}结束当前分支。`, [APPROVED, REVISE]);
 
-  assert.notEqual(parsed, null);
-  assert.equal(parsed?.body, "");
-  assert.equal(parsed?.response, "结束当前分支。");
-  assert.equal(parsed?.kind, "complete");
-  assert.equal(parsed?.rawBlock, `${DECISION_COMPLETE_LABEL}结束当前分支。`);
+  assert.equal(parsed, null);
 });
 
-test("extractTrailingDecisionSignalBlock 会忽略开头合法标签后重复追加的尾部裸 continue", () => {
+test("extractTrailingDecisionSignalBlock 不再兼容开头 trigger 与尾部裸 trigger 的混合格式", () => {
   const parsed = extractTrailingDecisionSignalBlock(
-    `${DECISION_CONTINUE_LABEL}\n请继续补充实现依据。\n\n${DECISION_CONTINUE_LABEL}`,
+    `${REVISE}\n请继续补充实现依据。\n\n${REVISE}`,
+    [APPROVED, REVISE],
   );
 
-  assert.notEqual(parsed, null);
-  assert.equal(parsed?.body, "");
-  assert.equal(parsed?.response, "请继续补充实现依据。");
-  assert.equal(parsed?.kind, "continue");
-  assert.equal(
-    parsed?.rawBlock,
-    `${DECISION_CONTINUE_LABEL}\n请继续补充实现依据。\n\n${DECISION_CONTINUE_LABEL}`,
-  );
+  assert.equal(parsed, null);
 });
 
-test("extractTrailingDecisionSignalBlock 缺少结束标签时也能识别尾部 continue", () => {
-  const parsed = extractTrailingDecisionSignalBlock(`请继续补充。${DECISION_CONTINUE_LABEL}还有内容`);
-  assert.notEqual(parsed, null);
-  assert.equal(parsed?.body, "请继续补充。");
-  assert.equal(parsed?.response, "还有内容");
-  assert.equal(parsed?.kind, "continue");
-  assert.equal(parsed?.rawBlock, `${DECISION_CONTINUE_LABEL}还有内容`);
+test("extractTrailingDecisionSignalBlock 缺少结束标签时返回 null", () => {
+  const parsed = extractTrailingDecisionSignalBlock(`请继续补充。${REVISE}还有内容`, [APPROVED, REVISE]);
+  assert.equal(parsed, null);
 });
 
-test("extractTrailingDecisionSignalBlock 支持识别正文后只保留裸 continue 标签", () => {
-  const parsed = extractTrailingDecisionSignalBlock(`请继续补充实现依据。\n\n${DECISION_CONTINUE_LABEL}`);
-
-  assert.notEqual(parsed, null);
-  assert.equal(parsed?.body, "请继续补充实现依据。");
-  assert.equal(parsed?.response, "请继续补充实现依据。");
-  assert.equal(parsed?.kind, "continue");
-  assert.equal(parsed?.rawBlock, DECISION_CONTINUE_LABEL);
+test("extractTrailingDecisionSignalBlock 正文后只保留裸 trigger 时返回 null", () => {
+  const parsed = extractTrailingDecisionSignalBlock(`请继续补充实现依据。\n\n${REVISE}`, [APPROVED, REVISE]);
+  assert.equal(parsed, null);
 });
 
 test("extractTrailingDecisionSignalBlock 在缺少标签时返回 null", () => {
   assert.equal(extractTrailingDecisionSignalBlock("这是普通正文。"), null);
 });
 
-test("stripDecisionResponseMarkup 会去掉 continue 和 complete 标签并保留正文", () => {
+test("extractTrailingDecisionSignalBlock 支持按允许的 trigger 集合解析自定义标签", () => {
+  const parsed = extractTrailingDecisionSignalBlock(
+    "漏洞挑战需要继续回应。\n\n<abcd>请继续补充反驳。</abcd>",
+    ["<abcd>"],
+  );
+
+  assert.notEqual(parsed, null);
+  assert.equal(parsed?.body, "漏洞挑战需要继续回应。");
+  assert.equal(parsed?.response, "请继续补充反驳。");
+  assert.equal(parsed?.trigger, "<abcd>");
+  assert.equal(parsed?.rawBlock, "<abcd>请继续补充反驳。</abcd>");
+});
+
+test("stripDecisionResponseMarkup 会去掉示例 trigger 标签并保留正文", () => {
   assert.equal(
-    stripDecisionResponseMarkup(`继续处理。\n\n${DECISION_CONTINUE_LABEL}请继续补充实现依据。`),
-    "继续处理。\n\n请继续补充实现依据。",
+    stripDecisionResponseMarkup(`继续处理。\n\n${REVISE}请继续补充实现依据。`, [APPROVED, REVISE]),
+    `继续处理。\n\n${REVISE}请继续补充实现依据。`,
   );
   assert.equal(
     stripDecisionResponseMarkup(
-      `继续处理。\n\n${DECISION_CONTINUE_LABEL}请继续补充实现依据。${DECISION_CONTINUE_END_LABEL}`,
+      `继续处理。\n\n${REVISE}请继续补充实现依据。${REVISE_END}`,
+      [APPROVED, REVISE],
     ),
     "继续处理。\n\n请继续补充实现依据。",
   );
   assert.equal(
-    stripDecisionResponseMarkup(`当前分支可以结束。\n\n${DECISION_COMPLETE_LABEL}结束当前分支。${DECISION_COMPLETE_END_LABEL}`),
+    stripDecisionResponseMarkup(`当前分支可以结束。\n\n${APPROVED}结束当前分支。${APPROVED_END}`, [APPROVED, REVISE]),
     "当前分支可以结束。\n\n结束当前分支。",
   );
   assert.equal(
-    stripDecisionResponseMarkup(`继续处理。\n\n${DECISION_CONTINUE_END_LABEL}请继续补充实现依据。`),
-    "继续处理。\n\n请继续补充实现依据。",
+    stripDecisionResponseMarkup(`继续处理。\n\n${REVISE_END}请继续补充实现依据。`, [APPROVED, REVISE]),
+    `继续处理。\n\n${REVISE_END}请继续补充实现依据。`,
   );
   assert.equal(
-    stripDecisionResponseMarkup(`请继续补充实现依据。\n\n${DECISION_CONTINUE_LABEL}`),
-    "请继续补充实现依据。",
+    stripDecisionResponseMarkup(`请继续补充实现依据。\n\n${REVISE}`, [APPROVED, REVISE]),
+    `请继续补充实现依据。\n\n${REVISE}`,
   );
   assert.equal(
     stripDecisionResponseMarkup("继续处理。\n\n<chalenge>请继续补充实现依据。</chalenge>"),

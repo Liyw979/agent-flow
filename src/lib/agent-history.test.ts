@@ -9,21 +9,38 @@ function createAgentFinalMessage(input: {
   sender: string;
   content: string;
   timestamp: string;
-  decision?: "complete" | "continue";
-  status?: "completed";
-}): MessageRecord {
-  return {
+  status?: "completed" | "error";
+} & (
+  | {
+      routingKind: "default" | "invalid";
+      trigger?: never;
+    }
+  | {
+      routingKind: "labeled";
+      trigger: string;
+    }
+)): MessageRecord {
+  const base = {
     id: input.id,
     taskId: "task-1",
     sender: input.sender,
     content: input.content,
     timestamp: input.timestamp,
-    kind: "agent-final",
-    decision: input.decision ?? "complete",
-    decisionNote: "",
+    kind: "agent-final" as const,
+    responseNote: "",
     rawResponse: input.content,
     status: input.status ?? "completed",
   };
+  return input.routingKind === "labeled"
+    ? {
+        ...base,
+        routingKind: "labeled",
+        trigger: input.trigger,
+      }
+    : {
+        ...base,
+        routingKind: input.routingKind,
+      };
 }
 
 function createTaskCompletedMessage(input: {
@@ -46,8 +63,8 @@ function createTaskCompletedMessage(input: {
 const topology: TopologyRecord = {
   nodes: ["Build", "TaskReview"],
   edges: [
-    { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-    { source: "TaskReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+    { source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" },
+    { source: "TaskReview", target: "Build", trigger: "<continue>", messageMode: "last" },
   ],
 };
 
@@ -58,12 +75,14 @@ test("buildAgentHistoryItems 会返回单个 agent 的完整历史记录", () =>
       sender: "Build",
       content: "初版已提交",
       timestamp: "2026-04-20T09:00:00.000Z",
+      routingKind: "default",
     }),
     createAgentFinalMessage({
       id: "message-2",
       sender: "Build",
       content: "第二版已提交",
       timestamp: "2026-04-20T09:03:00.000Z",
+      routingKind: "default",
     }),
   ];
   const runtimeSnapshot: AgentRuntimeSnapshot = {
@@ -235,14 +254,15 @@ test("buildAgentExecutionHistoryItems 不会跨越思考记录合并工具调用
   );
 });
 
-test("buildAgentHistoryItems 会把判定标签去掉并标记为继续处理", () => {
+test("buildAgentHistoryItems 会把判定标签去掉并按当前状态展示结果标签", () => {
   const messages: MessageRecord[] = [
     createAgentFinalMessage({
       id: "decision-1",
       sender: "TaskReview",
       content: "缺少测试。\n\n请补充测试",
       timestamp: "2026-04-20T09:05:00.000Z",
-      decision: "continue",
+      routingKind: "labeled",
+      trigger: "<continue>",
     }),
   ];
 
@@ -258,7 +278,7 @@ test("buildAgentHistoryItems 会把判定标签去掉并标记为继续处理", 
     })),
     [
       {
-        label: "继续处理",
+        label: "已完成判定",
         detailSnippet: "缺少测试。\n请补充测试",
         detail: "缺少测试。\n\n请补充测试",
       },
@@ -273,6 +293,7 @@ test("buildAgentHistoryItems 会移除历史消息中的多余空行，避免卡
       sender: "Build",
       content: "实际验证结果已经有了，且可以复核：\n\n```text\nprint('ok')\n```",
       timestamp: "2026-04-20T09:06:00.000Z",
+      routingKind: "default",
     }),
   ];
 
@@ -301,6 +322,8 @@ test("buildAgentHistoryItems 会把超限失败的 decisionAgent 标记为继续
       sender: "TaskReview",
       content: "当前 decisionAgent 未提供额外正文。",
       timestamp: "2026-04-20T09:05:00.000Z",
+      status: "error",
+      routingKind: "default",
     }),
     createTaskCompletedMessage({
       id: "task-failed",
@@ -335,6 +358,7 @@ test("buildAgentHistoryItems 不会把同一条最终回复同时展示成判定
       sender: "TaskReview",
       content: "这次我认可最终交付结论。",
       timestamp: "2026-04-20T14:34:44.000Z",
+      routingKind: "default",
     }),
   ];
 
@@ -385,7 +409,8 @@ test("buildAgentHistoryItems 会保留同一条最终回复里的 thinking，并
       sender: "TaskReview",
       content: "这次我认可最终交付结论。",
       timestamp: "2026-04-20T14:34:44.000Z",
-      decision: "complete",
+      routingKind: "labeled",
+      trigger: "<complete>",
     }),
   ];
 
@@ -447,12 +472,14 @@ test("buildAgentExecutionHistoryItems 只返回本轮执行窗口内的 runtime 
       sender: "Build",
       content: "旧轮次结果",
       timestamp: "2026-04-20T08:59:00.000Z",
+      routingKind: "default",
     }),
     createAgentFinalMessage({
       id: "message-current",
       sender: "Build",
       content: "当前轮次结果",
       timestamp: "2026-04-20T09:03:00.000Z",
+      routingKind: "default",
     }),
   ];
   const runtimeSnapshot: AgentRuntimeSnapshot = {

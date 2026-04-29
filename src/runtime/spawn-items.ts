@@ -50,20 +50,17 @@ export function extractSpawnItemsFromContent(content: string): { items: SpawnIte
 
   return {
     items: rawItems.map((item, index) => {
-      if (typeof item === "string") {
-        return {
-          id: `item-${index + 1}`,
-          title: item.trim() || `item-${index + 1}`,
-        };
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new Error(`spawn items[${index}] 必须是包含 title 字段的对象。`);
       }
-
-      const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
-      const title = typeof record["title"] === "string" && record["title"].trim()
-        ? record["title"].trim()
-        : `item-${index + 1}`;
+      const record = item as Record<string, unknown>;
+      const title = typeof record["title"] === "string" ? record["title"].trim() : "";
+      if (!title) {
+        throw new Error(`spawn items[${index}] 缺少非空 title。`);
+      }
       const id = typeof record["id"] === "string" && record["id"].trim()
         ? record["id"].trim()
-        : `item-${index + 1}`;
+        : title;
       return { id, title };
     }),
   };

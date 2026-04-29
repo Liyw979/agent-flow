@@ -1,6 +1,7 @@
 import {
   getSpawnRules,
   getTopologyNodeRecords,
+  isActionRequiredTopologyTrigger,
   type RuntimeTopologyEdge,
   type RuntimeTopologyNode,
   type SpawnBundleInstantiation,
@@ -91,10 +92,10 @@ export function instantiateSpawnBundle(input: {
     return {
       source: sourceNodeInstance.id,
       target: targetNodeInstance.id,
-      triggerOn: edge.triggerOn,
+      trigger: edge.trigger,
       messageMode: edge.messageMode,
-      ...(edge.triggerOn === "continue" && typeof edge.maxContinueRounds === "number"
-        ? { maxContinueRounds: edge.maxContinueRounds }
+      ...(isActionRequiredTopologyTrigger(edge.trigger, edge.maxTriggerRounds) && typeof edge.maxTriggerRounds === "number"
+        ? { maxTriggerRounds: edge.maxTriggerRounds }
         : {}),
     };
   });
@@ -108,10 +109,11 @@ export function instantiateSpawnBundle(input: {
     edges.unshift({
       source: sourceNode.id,
       target: entryNode.id,
-      triggerOn: sourceToSpawnEdge.triggerOn,
+      trigger: sourceToSpawnEdge.trigger,
       messageMode: sourceToSpawnEdge.messageMode,
-      ...(sourceToSpawnEdge.triggerOn === "continue" && typeof sourceToSpawnEdge.maxContinueRounds === "number"
-        ? { maxContinueRounds: sourceToSpawnEdge.maxContinueRounds }
+      ...(isActionRequiredTopologyTrigger(sourceToSpawnEdge.trigger, sourceToSpawnEdge.maxTriggerRounds)
+        && typeof sourceToSpawnEdge.maxTriggerRounds === "number"
+        ? { maxTriggerRounds: sourceToSpawnEdge.maxTriggerRounds }
         : {}),
     });
   }
@@ -135,14 +137,19 @@ export function instantiateSpawnBundle(input: {
       && edge.target === reportNode.id)
     : undefined;
   if (reportSourceNode && reportNode) {
+    const reportTrigger = spawnToReportEdge?.trigger ?? rule.reportToTrigger;
+    if (!reportTrigger) {
+      throw new Error(`spawn rule ${rule.id} 缺少 reportToTrigger`);
+    }
+    const reportMaxTriggerRounds = spawnToReportEdge?.maxTriggerRounds ?? rule.reportToMaxTriggerRounds;
     edges.push({
       source: reportSourceNode.id,
       target: reportNode.id,
-      triggerOn: spawnToReportEdge?.triggerOn ?? rule.reportToTriggerOn ?? "complete",
+      trigger: reportTrigger,
       messageMode: spawnToReportEdge?.messageMode ?? rule.reportToMessageMode ?? "last",
-      ...((spawnToReportEdge?.triggerOn ?? rule.reportToTriggerOn) === "continue"
-        && typeof (spawnToReportEdge?.maxContinueRounds ?? rule.reportToMaxContinueRounds) === "number"
-        ? { maxContinueRounds: spawnToReportEdge?.maxContinueRounds ?? rule.reportToMaxContinueRounds }
+      ...(isActionRequiredTopologyTrigger(reportTrigger, reportMaxTriggerRounds)
+        && typeof reportMaxTriggerRounds === "number"
+        ? { maxTriggerRounds: reportMaxTriggerRounds }
         : {}),
     });
   }
@@ -189,6 +196,9 @@ export function validateSpawnRule(topology: TopologyRecord, rule: SpawnRule): vo
   }
   if (rule.reportToTemplateName && !knownTemplateNames.has(rule.reportToTemplateName) && !knownNodeIds.has(rule.reportToTemplateName)) {
     throw new Error(`spawn rule report target 不存在：${rule.reportToTemplateName}`);
+  }
+  if (rule.reportToTemplateName && !rule.reportToTrigger) {
+    throw new Error(`spawn rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`);
   }
   const knownRoles = new Set(rule.spawnedAgents.map((agent) => agent.role));
   if (!knownRoles.has(rule.entryRole)) {

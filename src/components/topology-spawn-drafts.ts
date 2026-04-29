@@ -1,4 +1,12 @@
-import type { SpawnRule, TopologyNodeRecord, TopologyRecord } from "@shared/types";
+import {
+  DEFAULT_TOPOLOGY_TRIGGER,
+  type SpawnRule,
+  type TopologyNodeRecord,
+  type TopologyRecord,
+} from "@shared/types";
+
+const DEBATE_TURN_TRIGGER = "<respond>";
+const DEBATE_SUMMARY_TRIGGER = "<finalize>";
 
 interface DebateSpawnDraftInput {
   teamName: string;
@@ -153,13 +161,14 @@ export function upsertDebateSpawnDraft(
       { role: "summary", templateName: input.summaryTemplateName },
     ],
     edges: [
-      { sourceRole: "pro", targetRole: "con", triggerOn: "continue", messageMode: "last" },
-      { sourceRole: "con", targetRole: "pro", triggerOn: "continue", messageMode: "last" },
-      { sourceRole: "pro", targetRole: "summary", triggerOn: "complete", messageMode: "last" },
-      { sourceRole: "con", targetRole: "summary", triggerOn: "complete", messageMode: "last" },
+      { sourceRole: "pro", targetRole: "con", trigger: DEBATE_TURN_TRIGGER, messageMode: "last" },
+      { sourceRole: "con", targetRole: "pro", trigger: DEBATE_TURN_TRIGGER, messageMode: "last" },
+      { sourceRole: "pro", targetRole: "summary", trigger: DEBATE_SUMMARY_TRIGGER, messageMode: "last" },
+      { sourceRole: "con", targetRole: "summary", trigger: DEBATE_SUMMARY_TRIGGER, messageMode: "last" },
     ],
     exitWhen: "one_side_agrees",
     reportToTemplateName: input.reportToTemplateName,
+    reportToTrigger: DEFAULT_TOPOLOGY_TRIGGER,
   };
 
   const nextEdges = topology.edges.filter(
@@ -167,7 +176,7 @@ export function upsertDebateSpawnDraft(
   ).concat({
     source: input.sourceTemplateName,
     target: spawnNodeId,
-    triggerOn: "transfer" as const,
+    trigger: DEFAULT_TOPOLOGY_TRIGGER,
     messageMode: "last" as const,
   });
 

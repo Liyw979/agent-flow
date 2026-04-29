@@ -180,6 +180,23 @@ export class LangGraphRuntime {
       }
 
       if (inflight.size === 0) {
+        const shouldPauseAfterFinishedDecision = currentDecision?.type === "finished"
+          && (
+            currentDecision.finishReason === "wait_pending_decision_agents"
+            || (
+              currentDecision.finishReason === "no_runnable_agents"
+              && Object.keys(currentState.activeHandoffBatchBySource).length > 0
+            )
+          );
+        if (shouldPauseAfterFinishedDecision) {
+          return {
+            graphState: currentState,
+            pendingInput: null,
+            lastDecision: currentDecision,
+            lastError: null,
+          };
+        }
+
         if (!currentDecision || currentDecision.type === "finished") {
           currentState.taskStatus = "finished";
           currentState.finishReason = currentDecision?.finishReason ?? currentState.finishReason ?? "idle";

@@ -1,26 +1,38 @@
-import type { TopologyEdgeTrigger, TopologyRecord } from "@shared/types";
+import {
+  collectTopologyTriggerShapes,
+  DEFAULT_TOPOLOGY_TRIGGER,
+  type TopologyRecord,
+} from "@shared/types";
 
 interface TopologyIndex {
   handoffTargetsBySource: Record<string, string[]>;
-  approvedTargetsBySource: Record<string, string[]>;
   actionRequiredTargetsBySource: Record<string, string[]>;
 }
 
 export function compileTopology(topology: TopologyRecord): TopologyIndex {
+  const triggerRouteKindMap = new Map(
+    collectTopologyTriggerShapes({
+      edges: topology.edges,
+      endIncoming: topology.langgraph?.end?.incoming ?? [],
+    }).map((item) => [`${item.source}__${item.trigger}`, item.routeKind] as const),
+  );
   return {
-    handoffTargetsBySource: buildTargets(topology, "transfer"),
-    approvedTargetsBySource: buildTargets(topology, "complete"),
-    actionRequiredTargetsBySource: buildTargets(topology, "continue"),
+    handoffTargetsBySource: buildTargets(topology, DEFAULT_TOPOLOGY_TRIGGER),
+    actionRequiredTargetsBySource: buildTargets(topology, (_trigger, edge) =>
+      triggerRouteKindMap.get(`${edge.source}__${edge.trigger}`) === "action_required"),
   };
 }
 
 function buildTargets(
   topology: TopologyRecord,
-  triggerOn: TopologyEdgeTrigger,
+  matcher: string | ((trigger: string, edge: TopologyRecord["edges"][number]) => boolean),
 ): Record<string, string[]> {
   const result: Record<string, string[]> = {};
   for (const edge of topology.edges) {
-    if (edge.triggerOn !== triggerOn) {
+    const matched = typeof matcher === "string"
+      ? edge.trigger === matcher
+      : matcher(edge.trigger, edge);
+    if (!matched) {
       continue;
     }
     const current = result[edge.source] ?? [];

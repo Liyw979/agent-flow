@@ -32,6 +32,12 @@ interface AgentHistoryRange {
   endedAt?: string;
 }
 
+function hasActionRequiredFollowUp(messages: MessageRecord[], finalMessageId: string): boolean {
+  return messages.some((message) =>
+    message.kind === "action-required-request" && message.followUpMessageId === finalMessageId
+  );
+}
+
 function normalizeHistoryDetail(content: string | null | undefined) {
   const normalized = stripDecisionResponseMarkup(content ?? "")
     .replace(/\r\n?/gu, "\n")
@@ -122,7 +128,7 @@ function getFinalItemPresentation(input: {
     };
   }
 
-  if (input.status === "continue") {
+  if (input.status === "action_required") {
     return {
       label: "继续处理",
       tone: "failure" as const,
@@ -178,9 +184,9 @@ function buildFinalHistoryItems(input: {
     })
     .map((message) => {
       const status =
-        message.decision === "continue"
-          ? "continue"
-          : decisionAgent && finalLoopDecisionAgentName === input.agentId
+        hasActionRequiredFollowUp(input.messages, message.id)
+          ? "action_required"
+          : decisionAgent && message.status === "error" && finalLoopDecisionAgentName === input.agentId
             ? "final_failed_decision"
             : message.status;
       const presentation = getFinalItemPresentation({

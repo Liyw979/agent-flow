@@ -10,8 +10,8 @@ test("buildEffectiveTopology 不会因为 nodeRecords 只保存局部节点而�
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "QA"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "QA", triggerOn: "transfer", messageMode: "last" },
+      { source: "BA", target: "Build", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "QA", trigger: "<default>", messageMode: "last" },
     ],
     nodeRecords: [
       { id: "BA", kind: "agent", templateName: "BA", spawnEnabled: false },

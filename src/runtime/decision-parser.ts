@@ -1,12 +1,25 @@
+import { DEFAULT_TOPOLOGY_TRIGGER } from "@shared/types";
 import { extractTrailingDecisionSignalBlock } from "@shared/decision-response";
-import type { Decision } from "@shared/types";
 
-export interface ParsedDecision {
-  cleanContent: string;
-  decision: Decision;
-  opinion: string;
-  rawDecisionBlock: string;
+export interface AllowedDecisionTrigger {
+  trigger: string;
 }
+
+type ParsedDecisionBase = {
+  cleanContent: string;
+  opinion: string;
+};
+
+export type ParsedDecision =
+  | (ParsedDecisionBase & {
+      kind: "valid";
+      trigger: string;
+      rawDecisionBlock?: string;
+    })
+  | (ParsedDecisionBase & {
+      kind: "invalid";
+      validationError: string;
+    });
 
 export function stripStructuredSignals(content: string): string {
   return content
@@ -16,12 +29,21 @@ export function stripStructuredSignals(content: string): string {
     .trim();
 }
 
-export function parseDecision(content: string, decisionAgent: boolean): ParsedDecision {
-  const signalMatch = extractTrailingDecisionSignalBlock(content);
+export function parseDecision(
+  content: string,
+  decisionAgent: boolean,
+  allowedTriggers?: readonly AllowedDecisionTrigger[],
+): ParsedDecision {
+  const effectiveAllowedTriggers = allowedTriggers && allowedTriggers.length > 0
+    ? allowedTriggers
+    : [];
+  const allowedTriggerLiterals = effectiveAllowedTriggers.map((item) => item.trigger);
+  const signalMatch = extractTrailingDecisionSignalBlock(content, allowedTriggerLiterals);
   if (signalMatch) {
     return {
       cleanContent: stripStructuredSignals(signalMatch.body),
-      decision: signalMatch.kind === "complete" ? "complete" : "continue",
+      kind: "valid",
+      trigger: signalMatch.trigger,
       opinion: signalMatch.response,
       rawDecisionBlock: signalMatch.rawBlock,
     };
@@ -31,16 +53,18 @@ export function parseDecision(content: string, decisionAgent: boolean): ParsedDe
   if (!decisionAgent) {
     return {
       cleanContent,
-      decision: "complete",
+      kind: "valid",
+      trigger: DEFAULT_TOPOLOGY_TRIGGER,
       opinion: "",
-      rawDecisionBlock: "",
     };
   }
 
   return {
     cleanContent,
-    decision: "continue",
     opinion: cleanContent,
-    rawDecisionBlock: "",
+    kind: "invalid",
+    validationError: allowedTriggerLiterals.length > 0
+      ? `当前 Agent 必须返回以下 trigger 之一：${allowedTriggerLiterals.join(" / ")}`
+      : "当前 Agent 未配置任何可用 trigger",
   };
 }

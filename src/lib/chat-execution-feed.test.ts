@@ -10,7 +10,12 @@ import { formatActionRequiredRequestContent } from "@shared/chat-message-format"
 import { buildChatExecutionWindows, buildChatFeedItems } from "./chat-execution-feed";
 import { mergeTaskChatMessages } from "./chat-messages";
 
-function createMessage(overrides: Partial<MessageRecord> & { kind: MessageRecord["kind"] }): MessageRecord {
+function createMessage(
+  overrides: Partial<MessageRecord> & {
+    kind: MessageRecord["kind"];
+    routingKind?: "default" | "labeled" | "invalid";
+  },
+): MessageRecord {
   const id = overrides.id ?? "message-id";
   const taskId = overrides.taskId ?? "task-id";
   const content = overrides.content ?? "";
@@ -18,20 +23,31 @@ function createMessage(overrides: Partial<MessageRecord> & { kind: MessageRecord
   const timestamp = overrides.timestamp ?? "2026-04-25T08:00:00.000Z";
 
   switch (overrides.kind) {
-    case "agent-final":
-      return {
+    case "agent-final": {
+      const routingKind = overrides.routingKind ?? "default";
+      const base = {
         id,
         taskId,
         content,
         sender,
         timestamp,
-        kind: "agent-final",
+        kind: "agent-final" as const,
         status: overrides.status ?? "completed",
-        decision: overrides.decision ?? "complete",
-        decisionNote: overrides.decisionNote ?? "",
+        responseNote: overrides.responseNote ?? "",
         rawResponse: overrides.rawResponse ?? content,
         ...(overrides.senderDisplayName ? { senderDisplayName: overrides.senderDisplayName } : {}),
       };
+      return routingKind === "labeled"
+        ? {
+            ...base,
+            routingKind: "labeled" as const,
+            trigger: overrides.trigger ?? "<trigger>",
+          }
+        : {
+            ...base,
+            routingKind,
+          };
+    }
     case "agent-dispatch":
       return {
         id,
@@ -44,14 +60,14 @@ function createMessage(overrides: Partial<MessageRecord> & { kind: MessageRecord
         dispatchDisplayContent: overrides.dispatchDisplayContent ?? content,
         ...(overrides.senderDisplayName ? { senderDisplayName: overrides.senderDisplayName } : {}),
       };
-    case "continue-request":
+    case "action-required-request":
       return {
         id,
         taskId,
         content,
         sender,
         timestamp,
-        kind: "continue-request",
+        kind: "action-required-request",
         followUpMessageId: overrides.followUpMessageId ?? "follow-up-message-id",
         targetAgentIds: overrides.targetAgentIds ?? [],
         ...(overrides.senderDisplayName ? { senderDisplayName: overrides.senderDisplayName } : {}),
@@ -112,9 +128,9 @@ function createMessage(overrides: Partial<MessageRecord> & { kind: MessageRecord
 const topology: TopologyRecord = {
   nodes: ["Build", "UnitTest", "TaskReview"],
   edges: [
-    { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-    { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-    { source: "TaskReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+    { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+    { source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" },
+    { source: "TaskReview", target: "Build", trigger: "<continue>", messageMode: "last" },
   ],
 };
 
@@ -149,20 +165,21 @@ test("buildChatExecutionWindows 会把用户 @ 的目标变成执行窗口", () 
   );
 });
 
-test("buildChatExecutionWindows 会把 continue-request 指向的目标变成执行窗口", () => {
+test("buildChatExecutionWindows 会把 action-required-request 指向的目标变成执行窗口", () => {
   const messages = [
     createMessage({
       id: "review-final",
       sender: "TaskReview",
       kind: "agent-final",
       content: "请补充测试说明。",
-      decision: "continue",
+      routingKind: "labeled",
+      trigger: "<continue>",
       timestamp: "2026-04-25T08:00:10.000Z",
     }),
     createMessage({
       id: "review-request",
       sender: "TaskReview",
-      kind: "continue-request",
+      kind: "action-required-request",
       content: formatActionRequiredRequestContent("请补充测试说明。", ["Build"]),
       followUpMessageId: "review-final",
       targetAgentIds: ["Build"],

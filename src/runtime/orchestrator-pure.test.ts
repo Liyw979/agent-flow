@@ -9,22 +9,6 @@ import type {
   TopologyRecord,
 } from "@shared/types";
 
-type TestMessageInput = {
-  id?: string;
-  taskId?: string;
-  sender: string;
-  content: string;
-  timestamp?: string;
-  kind?: MessageRecord["kind"];
-  targetAgentIds?: string[];
-  agentFinalStatus?: "completed";
-  taskCompletedStatus?: "failed";
-  finishReason?: string;
-  decision?: "complete" | "continue";
-  senderDisplayName?: string;
-  followUpMessageId?: string;
-};
-
 import {
   buildDownstreamForwardedContextFromMessages,
   buildUserHistoryContent,
@@ -32,7 +16,7 @@ import {
 } from "./message-forwarding";
 import { resolveForwardingActiveAgentIdsFromState } from "./forwarding-active-agents";
 import {
-  resolveAgentStatusFromDecision,
+  resolveAgentStatusFromRouting,
   resolveActionRequiredRequestContinuationAction,
   shouldStopTaskForUnhandledActionRequiredRequest,
 } from "./gating-rules";
@@ -43,9 +27,12 @@ import {
 } from "./task-lifecycle-rules";
 import { buildTaskCompletionMessageContent } from "./task-completion-message";
 
+const TEST_TASK_ID = "task-1";
+const TEST_TIMESTAMP = "2026-04-16T00:00:00.000Z";
+
 function createTopologyForTest(input: {
   nodes: string[];
-  edges: Array<{ source: string; target: string; triggerOn: TopologyEdgeTrigger; messageMode?: "last" | "none" | "last-all" }>;
+  edges: Array<{ source: string; target: string; trigger: TopologyEdgeTrigger; messageMode: "last" | "none" | "last-all" }>;
 }): TopologyRecord {
   const nodeIds = new Set<string>();
   for (const agentId of input.nodes) {
@@ -61,137 +48,112 @@ function createTopologyForTest(input: {
     edges: input.edges.map((edge) => ({
       source: edge.source,
       target: edge.target,
-      triggerOn: edge.triggerOn,
-      messageMode: edge.messageMode ?? "last",
+      trigger: edge.trigger,
+      messageMode: edge.messageMode,
     })),
   };
 }
 
-function createMessage(input: TestMessageInput): MessageRecord {
-  const id = input.id ?? `${input.sender}:${input.content}`;
-  const taskId = input.taskId ?? "task-1";
-  const timestamp = input.timestamp ?? "2026-04-16T00:00:00.000Z";
-  const kind = input.kind ?? (input.sender === "user" ? "user" : "system-message");
-
-  switch (kind) {
-    case "user":
-      return {
-        id,
-        taskId,
-        sender: "user",
-        content: input.content,
-        timestamp,
-        kind: "user",
-        scope: "task",
-        taskTitle: "demo",
-        targetAgentIds: input.targetAgentIds ?? [],
-      };
-    case "agent-final": {
-      const message: MessageRecord = {
-        id,
-        taskId,
-        sender: input.sender,
-        content: input.content,
-        timestamp,
-        kind: "agent-final",
-        status: input.agentFinalStatus ?? "completed",
-        decision: input.decision ?? "complete",
-        decisionNote: "",
-        rawResponse: input.content,
-        ...(input.senderDisplayName ? { senderDisplayName: input.senderDisplayName } : {}),
-      };
-      return message;
-    }
-    case "agent-dispatch": {
-      const message: MessageRecord = {
-        id,
-        taskId,
-        sender: input.sender,
-        content: input.content,
-        timestamp,
-        kind: "agent-dispatch",
-        targetAgentIds: input.targetAgentIds ?? [],
-        dispatchDisplayContent: input.content,
-        ...(input.senderDisplayName ? { senderDisplayName: input.senderDisplayName } : {}),
-      };
-      return message;
-    }
-    case "continue-request": {
-      const message: MessageRecord = {
-        id,
-        taskId,
-        sender: input.sender,
-        content: input.content,
-        timestamp,
-        kind: "continue-request",
-        followUpMessageId: input.followUpMessageId ?? "follow-up-message-id",
-        targetAgentIds: input.targetAgentIds ?? [],
-        ...(input.senderDisplayName ? { senderDisplayName: input.senderDisplayName } : {}),
-      };
-      return message;
-    }
-    case "task-completed":
-      return {
-        id,
-        taskId,
-        sender: "system",
-        content: input.content,
-        timestamp,
-        kind: "task-completed",
-        status: "failed",
-      };
-    case "task-round-finished":
-      return {
-        id,
-        taskId,
-        sender: "system",
-        content: input.content,
-        timestamp,
-        kind: "task-round-finished",
-        finishReason: input.finishReason ?? "round_finished",
-      };
-    case "task-created":
-      return {
-        id,
-        taskId,
-        sender: "system",
-        content: input.content,
-        timestamp,
-        kind: "task-created",
-      };
-    case "system-message":
-      return {
-        id,
-        taskId,
-        sender: "system",
-        content: input.content,
-        timestamp,
-        kind: "system-message",
-      };
-  }
+function createUserMessage(input: {
+  content: string;
+  timestamp: string;
+  targetAgentIds: string[];
+}): MessageRecord {
+  return {
+    id: `user:${input.content}`,
+    taskId: TEST_TASK_ID,
+    sender: "user",
+    content: input.content,
+    timestamp: input.timestamp,
+    kind: "user",
+    scope: "task",
+    taskTitle: "demo",
+    targetAgentIds: input.targetAgentIds,
+  };
 }
 
-function createAgent(input: Partial<TaskAgentRecord> & Pick<TaskAgentRecord, "id" | "status">): TaskAgentRecord {
+function createAgentFinalMessage(input: {
+  sender: string;
+  content: string;
+  timestamp: string;
+  routingKind: "default" | "invalid";
+}): MessageRecord {
   return {
-    taskId: input.taskId ?? "task-1",
+    id: `${input.sender}:${input.content}`,
+    taskId: TEST_TASK_ID,
+    sender: input.sender,
+    content: input.content,
+    timestamp: input.timestamp,
+    kind: "agent-final",
+    status: "completed",
+    routingKind: input.routingKind,
+    responseNote: "",
+    rawResponse: input.content,
+  };
+}
+
+function createAgentDispatchMessage(input: {
+  sender: string;
+  content: string;
+  timestamp: string;
+  targetAgentIds: string[];
+}): MessageRecord {
+  return {
+    id: `${input.sender}:${input.content}`,
+    taskId: TEST_TASK_ID,
+    sender: input.sender,
+    content: input.content,
+    timestamp: input.timestamp,
+    kind: "agent-dispatch",
+    targetAgentIds: input.targetAgentIds,
+    dispatchDisplayContent: input.content,
+  };
+}
+
+function createActionRequiredRequestMessage(input: {
+  sender: string;
+  content: string;
+  timestamp: string;
+  targetAgentIds: string[];
+  followUpMessageId: string;
+}): MessageRecord {
+  return {
+    id: `${input.sender}:${input.content}`,
+    taskId: TEST_TASK_ID,
+    sender: input.sender,
+    content: input.content,
+    timestamp: input.timestamp,
+    kind: "action-required-request",
+    followUpMessageId: input.followUpMessageId,
+    targetAgentIds: input.targetAgentIds,
+  };
+}
+
+function createAgent(input: {
+  id: string;
+  status: TaskAgentRecord["status"];
+  runCount: number;
+}): TaskAgentRecord {
+  return {
+    taskId: TEST_TASK_ID,
     id: input.id,
-    opencodeSessionId: input.opencodeSessionId ?? null,
-    opencodeAttachBaseUrl: input.opencodeAttachBaseUrl ?? null,
+    opencodeSessionId: `session:${input.id}`,
+    opencodeAttachBaseUrl: "http://127.0.0.1:43127",
     status: input.status,
-    runCount: input.runCount ?? 0,
+    runCount: input.runCount,
   };
 }
 
 test("下游结构化 prompt 的 Initial Task 继续使用首条用户任务，而不是最新追问", () => {
   const messages = [
-    createMessage({
-      sender: "user",
+    createUserMessage({
       content: "@Build 初始任务：实现加法工具",
+      timestamp: TEST_TIMESTAMP,
       targetAgentIds: ["Build"],
     }),
-    createMessage({
-      sender: "user",
+    createUserMessage({
       content: "@Build 追问：顺便补一份使用说明",
+      timestamp: TEST_TIMESTAMP,
       targetAgentIds: ["Build"],
     }),
   ];
@@ -209,17 +171,18 @@ test("下游结构化 prompt 的 Initial Task 继续使用首条用户任务，�
   assert.equal(forwarded.agentMessage, "Build 已完成实现，等待下游继续处理。");
 });
 
-test("边配置为 none 时，下游只收到 continue，不再携带上游最后一条正文", () => {
+test("边配置为 none 时，下游只收到原始标签正文，不再携带上游最后一条正文", () => {
   const messages = [
-    createMessage({
-      sender: "user",
+    createUserMessage({
       content: "@Build 初始任务：实现加法工具",
+      timestamp: TEST_TIMESTAMP,
       targetAgentIds: ["Build"],
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "Build",
       content: "我已经写完加法工具，并补了测试。",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
   ];
 
@@ -233,55 +196,63 @@ test("边配置为 none 时，下游只收到 continue，不再携带上游最�
   );
 
   assert.equal(forwarded.userMessage, "初始任务：实现加法工具");
-  assert.equal(forwarded.agentMessage, "continue");
+  assert.equal(forwarded.agentMessage, "[no-forwarded-message]");
 });
 
 test("边配置为 last-all 时，只转发当前激活 agent 的最后消息", () => {
   const messages = [
-    createMessage({
-      sender: "user",
+    createUserMessage({
       content: "@Build 初始任务：实现加法工具",
+      timestamp: TEST_TIMESTAMP,
       targetAgentIds: ["Build"],
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "agent-1",
       content: "agent-1 的历史消息",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "bgent-1",
       content: "bgent-1 的历史消息",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "agent-2",
       content: "agent-2 的历史消息",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "bgent-2",
       content: "bgent-2 的历史消息",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "agent-3",
       content: "agent-3 的上一条消息",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "bgent-3",
       content: "bgent-3 的上一条消息",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "agent-3",
       content: "agent-3 的最后一条消息",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "bgent-3",
       content: "bgent-3 的最后一条消息",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
   ];
 
@@ -347,25 +318,28 @@ test("spawn 组里的 last-all 参与者会包含当前 finding 的来源 agent"
 
 test("spawn 组里的 last-all 转发会包含来源 agent 与同组 agent 的最后消息", () => {
   const messages = [
-    createMessage({
-      sender: "user",
+    createUserMessage({
       content: "@线索发现 请持续挖掘当前代码中的可疑漏洞点。",
+      timestamp: TEST_TIMESTAMP,
       targetAgentIds: ["线索发现"],
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "线索发现",
       content: "线索发现发现了 safe4 的可疑点。",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "漏洞挑战-3",
       content: "漏洞挑战-3 认为证据还不够支撑中危结论。",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "漏洞论证-3",
       content: "漏洞论证-3 补充了接口可达性与异常触发路径。",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
   ];
   const activeAgentIds = resolveForwardingActiveAgentIdsFromState(
@@ -431,9 +405,9 @@ test("群聊消息保留寻址 @Agent，但下游转发读取时会去掉该寻�
     "BA",
   );
   const messages = [
-    createMessage({
-      sender: "user",
+    createUserMessage({
       content: storedUserContent,
+      timestamp: TEST_TIMESTAMP,
       targetAgentIds: ["BA"],
     }),
   ];
@@ -447,15 +421,16 @@ test("群聊消息保留寻址 @Agent，但下游转发读取时会去掉该寻�
 
 test("单目标消息也只通过 targetAgentIds 数组表达目标", () => {
   const messages = [
-    createMessage({
-      sender: "user",
+    createUserMessage({
       content: "@Build 初始任务：实现加法工具",
+      timestamp: TEST_TIMESTAMP,
       targetAgentIds: ["Build"],
     }),
-    createMessage({
+    createActionRequiredRequestMessage({
       sender: "TaskReview",
       content: "请补充实现依据。\n\n@Build",
-      kind: "continue-request",
+      timestamp: TEST_TIMESTAMP,
+      followUpMessageId: "follow-up-task-review",
       targetAgentIds: ["Build"],
     }),
   ];
@@ -464,10 +439,10 @@ test("单目标消息也只通过 targetAgentIds 数组表达目标", () => {
   assert.deepEqual(getPersistedCompletionSeedAgentIds({
     topology: createTopologyForTest({
       nodes: ["Build", "TaskReview"],
-      edges: [{ source: "TaskReview", target: "Build", triggerOn: "continue" }],
+      edges: [{ source: "TaskReview", target: "Build", trigger: "<continue>", messageMode: "last" }],
     }),
     agents: [
-      createAgent({ id: "Build", status: "idle" }),
+      createAgent({ id: "Build", status: "idle", runCount: 0 }),
       createAgent({ id: "TaskReview", status: "completed", runCount: 1 }),
     ],
     messages,
@@ -478,10 +453,10 @@ test("旧运行数据里悬空 idle Agent 不会阻止持久化补偿逻辑判�
   const topology = createTopologyForTest({
     nodes: ["BA", "Build", "CodeReview", "IntegrationTest", "TaskReview", "UnitTest"],
     edges: [
-      { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
+      { source: "BA", target: "Build", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "CodeReview", trigger: "<default>", messageMode: "last" },
     ],
   });
   const agents = [
@@ -493,9 +468,11 @@ test("旧运行数据里悬空 idle Agent 不会阻止持久化补偿逻辑判�
     createAgent({ id: "IntegrationTest", status: "idle", runCount: 0 }),
   ];
   const messages = [
-    createMessage({
+    createAgentFinalMessage({
       sender: "Build",
       content: "所有参与的 Agent 都已完成。",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
   ];
 
@@ -518,9 +495,9 @@ test("最新一条仍是用户 @Agent 追问时，持久化补偿逻辑不会提
     createAgent({ id: "UnitTest", status: "completed", runCount: 1 }),
   ];
   const messages = [
-    createMessage({
-      sender: "user",
+    createUserMessage({
       content: "@UnitTest 你的指责呢",
+      timestamp: TEST_TIMESTAMP,
       targetAgentIds: ["UnitTest"],
     }),
   ];
@@ -539,7 +516,7 @@ test("spawn 运行时实例刚被 dispatch 但尚未完成时，持久化补偿�
   const topology = createTopologyForTest({
     nodes: ["线索发现", "疑点辩论"],
     edges: [
-      { source: "线索发现", target: "疑点辩论", triggerOn: "transfer", messageMode: "last" },
+      { source: "线索发现", target: "疑点辩论", trigger: "<default>", messageMode: "last" },
     ],
   });
   const runtimeAgentId = "漏洞论证-1";
@@ -548,16 +525,16 @@ test("spawn 运行时实例刚被 dispatch 但尚未完成时，持久化补偿�
     createAgent({ id: runtimeAgentId, status: "idle", runCount: 0 }),
   ];
   const messages = [
-    createMessage({
+    createAgentFinalMessage({
       sender: "线索发现",
       content: "线索发现发现了一个可疑点。",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentDispatchMessage({
       sender: "线索发现",
       content: `@${runtimeAgentId}`,
       timestamp: "2026-04-16T00:00:01.000Z",
-      kind: "agent-dispatch",
       targetAgentIds: [runtimeAgentId],
     }),
   ];
@@ -576,7 +553,7 @@ test("spawn 运行时实例已写入 dispatch 消息但尚未落库为 task agen
   const topology = createTopologyForTest({
     nodes: ["线索发现", "疑点辩论"],
     edges: [
-      { source: "线索发现", target: "疑点辩论", triggerOn: "transfer", messageMode: "last" },
+      { source: "线索发现", target: "疑点辩论", trigger: "<default>", messageMode: "last" },
     ],
   });
   const runtimeAgentId = "漏洞论证-1";
@@ -584,16 +561,16 @@ test("spawn 运行时实例已写入 dispatch 消息但尚未落库为 task agen
     createAgent({ id: "线索发现", status: "completed", runCount: 1 }),
   ];
   const messages = [
-    createMessage({
+    createAgentFinalMessage({
       sender: "线索发现",
       content: "线索发现发现了一个可疑点。",
-      kind: "agent-final",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentDispatchMessage({
       sender: "线索发现",
       content: `@${runtimeAgentId}`,
       timestamp: "2026-04-16T00:00:01.000Z",
-      kind: "agent-dispatch",
       targetAgentIds: [runtimeAgentId],
     }),
   ];
@@ -608,54 +585,53 @@ test("spawn 运行时实例已写入 dispatch 消息但尚未落库为 task agen
   assert.equal(shouldFinish, false);
 });
 
-test("decisionAgent 仍处于 continue 状态时，持久化补偿逻辑不会把中途流程误判为 finished", () => {
+test("decisionAgent 仍处于 action_required 状态时，持久化补偿逻辑不会把中途流程误判为 finished", () => {
   const topology = createTopologyForTest({
     nodes: ["Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      { source: "Build", target: "CodeReview", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" },
+      { source: "CodeReview", target: "Build", trigger: "<continue>", messageMode: "last" },
     ],
   });
   const agents = [
     createAgent({ id: "Build", status: "completed", runCount: 2 }),
-    createAgent({ id: "CodeReview", status: "continue", runCount: 1 }),
+    createAgent({ id: "CodeReview", status: "action_required", runCount: 1 }),
     createAgent({ id: "UnitTest", status: "completed", runCount: 1 }),
     createAgent({ id: "TaskReview", status: "completed", runCount: 1 }),
   ];
   const messages = [
-    createMessage({
+    createAgentFinalMessage({
       sender: "Build",
       content: "Build 首轮实现完成。",
-      kind: "agent-final",
       timestamp: "2026-04-24T15:36:15.000Z",
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentDispatchMessage({
       sender: "Build",
       content: "@CodeReview @UnitTest @TaskReview",
-      kind: "agent-dispatch",
       targetAgentIds: ["CodeReview", "UnitTest", "TaskReview"],
       timestamp: "2026-04-24T15:36:16.000Z",
     }),
-    createMessage({
+    createActionRequiredRequestMessage({
       sender: "CodeReview",
       content: "还需要继续修改。\n\n@Build",
-      kind: "continue-request",
+      followUpMessageId: "follow-up-code-review",
       targetAgentIds: ["Build"],
       timestamp: "2026-04-24T15:36:29.000Z",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "UnitTest",
       content: "测试通过。",
-      kind: "agent-final",
       timestamp: "2026-04-24T15:37:20.000Z",
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentFinalMessage({
       sender: "TaskReview",
       content: "可以验收。",
-      kind: "agent-final",
       timestamp: "2026-04-24T15:37:21.000Z",
+      routingKind: "default",
     }),
   ];
 
@@ -673,12 +649,12 @@ test("最新一条是 agent-dispatch 时，持久化补偿逻辑不会把重新�
   const topology = createTopologyForTest({
     nodes: ["Build", "CodeReview", "UnitTest", "TaskReview"],
     edges: [
-      { source: "Build", target: "CodeReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "UnitTest", triggerOn: "transfer", messageMode: "last" },
-      { source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" },
-      { source: "CodeReview", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "UnitTest", target: "Build", triggerOn: "continue", messageMode: "last" },
-      { source: "TaskReview", target: "Build", triggerOn: "continue", messageMode: "last" },
+      { source: "Build", target: "CodeReview", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
+      { source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" },
+      { source: "CodeReview", target: "Build", trigger: "<continue>", messageMode: "last" },
+      { source: "UnitTest", target: "Build", trigger: "<continue>", messageMode: "last" },
+      { source: "TaskReview", target: "Build", trigger: "<continue>", messageMode: "last" },
     ],
   });
   const agents = [
@@ -688,16 +664,15 @@ test("最新一条是 agent-dispatch 时，持久化补偿逻辑不会把重新�
     createAgent({ id: "TaskReview", status: "completed", runCount: 1 }),
   ];
   const messages = [
-    createMessage({
+    createAgentFinalMessage({
       sender: "Build",
       content: "Build 已根据 UnitTest 意见修复完成。",
-      kind: "agent-final",
       timestamp: "2026-04-24T15:37:17.000Z",
+      routingKind: "default",
     }),
-    createMessage({
+    createAgentDispatchMessage({
       sender: "Build",
       content: "@CodeReview @TaskReview",
-      kind: "agent-dispatch",
       targetAgentIds: ["CodeReview", "TaskReview"],
       timestamp: "2026-04-24T15:37:20.000Z",
     }),
@@ -716,7 +691,7 @@ test("最新一条是 agent-dispatch 时，持久化补偿逻辑不会把重新�
 test("没有消息和运行痕迹时，持久化补偿逻辑只会把 Build 当默认入口 seed", () => {
   const topology = createTopologyForTest({
     nodes: ["BA", "Build", "TaskReview"],
-    edges: [{ source: "Build", target: "TaskReview", triggerOn: "transfer", messageMode: "last" }],
+    edges: [{ source: "Build", target: "TaskReview", trigger: "<default>", messageMode: "last" }],
   });
   const seedAgentIds = getPersistedCompletionSeedAgentIds({
     topology,
@@ -734,19 +709,9 @@ test("没有消息和运行痕迹时，持久化补偿逻辑只会把 Build 当�
 test("过期 decisionAgent 回复不应被当成有效回流继续触发修复", () => {
   const action = resolveActionRequiredRequestContinuationAction({
     continuation: null,
-    fallbackActionWhenNoBatch: "ignore",
   });
 
   assert.equal(action, "ignore");
-});
-
-test("没有 batch continuation 但允许 direct fallback 时，会继续触发 fallback decisionAgent", () => {
-  const action = resolveActionRequiredRequestContinuationAction({
-    continuation: null,
-    fallbackActionWhenNoBatch: "trigger_fallback_decision",
-  });
-
-  assert.equal(action, "trigger_fallback_decision");
 });
 
 test("decisionAgent 已经形成有效回流动作时，不应直接结束 Task", () => {
@@ -759,23 +724,23 @@ test("decisionAgent 已经形成有效回流动作时，不应直接结束 Task"
 });
 
 test("decisionAgent 给出需要修复时应标记为 action_required 而不是 failed", () => {
-  const status = resolveAgentStatusFromDecision({
-    decision: "continue",
+  const status = resolveAgentStatusFromRouting({
+    routingKind: "labeled",
     decisionAgent: true,
+    enteredActionRequired: true,
   });
 
-  assert.equal(status, "continue");
+  assert.equal(status, "action_required");
 });
 
-test("非判定 Agent 返回 continue 时应直接抛错暴露问题", () => {
-  assert.throws(
-    () =>
-      resolveAgentStatusFromDecision({
-        decision: "continue",
-        decisionAgent: false,
-      }),
-    /非判定 Agent 不应返回 continue/u,
-  );
+test("decisionAgent 缺少强制标签时应标记为 failed", () => {
+  const status = resolveAgentStatusFromRouting({
+    routingKind: "invalid",
+    decisionAgent: true,
+    enteredActionRequired: false,
+  });
+
+  assert.equal(status, "failed");
 });
 
 test("非拓扑驱动的单次执行后，仍有未完成 Agent 时任务进入 finished", () => {

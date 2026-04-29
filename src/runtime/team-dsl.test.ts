@@ -13,9 +13,17 @@ import {
 } from "./team-dsl";
 
 const BA_PROMPT = "你是 BA。";
-const CODE_DECISION_PROMPT = "你是 CodeReview。";
-const UNIT_TEST_PROMPT = "你是 UnitTest。";
-const TASK_DECISION_PROMPT = "你是 TaskReview。";
+const CODE_DECISION_PROMPT = "你是 CodeReview。必须输出 <continue> 或 <complete>。";
+const UNIT_TEST_PROMPT = "你是 UnitTest。必须输出 <continue> 或 <complete>。";
+const TASK_DECISION_PROMPT = "你是 TaskReview。必须输出 <continue> 或 <complete>。";
+
+function promptWithTriggers(prompt: string, ...triggers: Array<`<${string}>`>): string {
+  const normalizedTriggers = [...new Set(triggers)];
+  if (normalizedTriggers.length === 0) {
+    return prompt;
+  }
+  return `${prompt}\n允许输出 trigger：${normalizedTriggers.join("、")}`;
+}
 
 function agentNode(id: string, prompt: string, writable: boolean) {
   return {
@@ -37,28 +45,28 @@ function spawnNode(id: string, graph: TeamDslDefinition) {
 function link(
   from: string,
   to: string,
-  trigger_type: "transfer" | "complete" | "continue",
+  trigger: `<${string}>`,
   message_type: "none" | "last" | "last-all",
-  maxContinueRounds?: number,
+  maxTriggerRounds?: number,
 ) {
   return {
     from,
     to,
-    trigger_type,
+    trigger,
     message_type,
-    ...(typeof maxContinueRounds === "number" ? { maxContinueRounds } : {}),
+    ...(typeof maxTriggerRounds === "number" ? { maxTriggerRounds } : {}),
   };
 }
 
 function endLink(
   from: string,
-  trigger_type: "transfer" | "complete" | "continue",
+  trigger: `<${string}>`,
   message_type: "none" | "last" | "last-all",
 ) {
   return {
     from,
     to: "__end__" as const,
-    trigger_type,
+    trigger,
     message_type,
   };
 }
@@ -74,13 +82,13 @@ function createDevelopmentGraphDsl() {
       agentNode("TaskReview", TASK_DECISION_PROMPT, false),
     ],
     links: [
-      link("BA", "Build", "transfer", "last"),
-      link("Build", "CodeReview", "transfer", "last"),
-      link("Build", "UnitTest", "transfer", "last"),
-      link("Build", "TaskReview", "transfer", "last"),
-      link("CodeReview", "Build", "continue", "last"),
-      link("UnitTest", "Build", "continue", "last"),
-      link("TaskReview", "Build", "continue", "last"),
+      link("BA", "Build", "<default>", "last"),
+      link("Build", "CodeReview", "<default>", "last"),
+      link("Build", "UnitTest", "<default>", "last"),
+      link("Build", "TaskReview", "<default>", "last"),
+      link("CodeReview", "Build", "<continue>", "last"),
+      link("UnitTest", "Build", "<continue>", "last"),
+      link("TaskReview", "Build", "<continue>", "last"),
     ],
   };
 }
@@ -91,12 +99,12 @@ test("compileTeamDsl 支持把递归式图 DSL 编译成 agents + topology", () 
     nodes: [
       agentNode("Build", "", true),
       agentNode("BA", BA_PROMPT, false),
-      agentNode("SecurityResearcher", "你负责漏洞挖掘。", false),
+      agentNode("SecurityResearcher", promptWithTriggers("你负责漏洞挖掘。", "<continue>"), false),
     ],
     links: [
-      link("BA", "Build", "transfer", "last"),
-      link("Build", "SecurityResearcher", "transfer", "last"),
-      link("SecurityResearcher", "Build", "continue", "last"),
+      link("BA", "Build", "<default>", "last"),
+      link("Build", "SecurityResearcher", "<default>", "last"),
+      link("SecurityResearcher", "Build", "<continue>", "last"),
     ],
   });
 
@@ -109,14 +117,14 @@ test("compileTeamDsl 支持把递归式图 DSL 编译成 agents + topology", () 
     })),
     [
       { id: "Build", prompt: "", templateName: "Build", isWritable: true },
-      { id: "BA", prompt: BA_PROMPT, templateName: null, isWritable: false },
-      { id: "SecurityResearcher", prompt: "你负责漏洞挖掘。", templateName: null, isWritable: false },
+      { id: "BA", prompt: BA_PROMPT, templateName: "BA", isWritable: false },
+      { id: "SecurityResearcher", prompt: promptWithTriggers("你负责漏洞挖掘。", "<continue>"), templateName: "SecurityResearcher", isWritable: false },
     ],
   );
   assert.deepEqual(compiled.topology.edges, [
-    { source: "BA", target: "Build", triggerOn: "transfer", messageMode: "last" },
-    { source: "Build", target: "SecurityResearcher", triggerOn: "transfer", messageMode: "last" },
-    { source: "SecurityResearcher", target: "Build", triggerOn: "continue", messageMode: "last" },
+    { source: "BA", target: "Build", trigger: "<default>", messageMode: "last" },
+    { source: "Build", target: "SecurityResearcher", trigger: "<default>", messageMode: "last" },
+    { source: "SecurityResearcher", target: "Build", trigger: "<continue>", messageMode: "last" },
   ]);
   assert.deepEqual(compiled.topology.nodeRecords, [
     {
@@ -136,7 +144,7 @@ test("compileTeamDsl 支持把递归式图 DSL 编译成 agents + topology", () 
       id: "SecurityResearcher",
       kind: "agent",
       templateName: "SecurityResearcher",
-      prompt: "你负责漏洞挖掘。",
+      prompt: promptWithTriggers("你负责漏洞挖掘。", "<continue>"),
     },
   ]);
 });
@@ -163,7 +171,7 @@ test("compileTeamDsl 不应把多个显式 writable 压缩成单个 Agent", () =
       agentNode("BA", BA_PROMPT, true),
     ],
     links: [
-      link("BA", "Build", "transfer", "last"),
+      link("BA", "Build", "<default>", "last"),
     ],
   });
 
@@ -227,7 +235,7 @@ test("compileTeamDsl 会拒绝省略 agent.writable 的拓扑节点", () => {
   );
 });
 
-test("compileTeamDsl 会拒绝 tuple 形式的 links，要求显式 from to trigger_type message_type", () => {
+test("compileTeamDsl 会拒绝 tuple 形式的 links，要求显式 from to trigger message_type", () => {
   assert.throws(
     () =>
       compileTeamDsl({
@@ -247,10 +255,10 @@ test("compileTeamDsl 会拒绝 tuple 形式的 links，要求显式 from to trig
           },
         ],
         links: [
-          ["Build", "BA", "transfer", "last"],
+          ["Build", "BA", "<default>", "last"],
         ],
       }),
-    /from.*to.*trigger_type.*message_type/u,
+    /from、to、trigger、message_type/u,
   );
 });
 
@@ -258,25 +266,25 @@ test("compileTeamDsl 支持在拓扑文件里直接连接 __end__", () => {
   const definition: TeamDslDefinition = {
     entry: "Source",
     nodes: [
-      agentNode("Source", "你负责 source。", false),
+      agentNode("Source", promptWithTriggers("你负责 source。", "<continue>", "<complete>"), false),
       spawnNode(
         "Debate",
         {
           entry: "DecisionAgent",
           nodes: [
-            agentNode("DecisionAgent", "你是 decisionAgent。", false),
+            agentNode("DecisionAgent", promptWithTriggers("你是 decisionAgent。", "<complete>"), false),
             agentNode("Summary", "你是 summary。", false),
           ],
           links: [
-            link("DecisionAgent", "Summary", "complete", "last"),
+            link("DecisionAgent", "Summary", "<complete>", "last"),
           ],
         },
       ),
     ],
     links: [
-      link("Source", "Debate", "continue", "last-all"),
-      link("Debate", "Source", "transfer", "none"),
-      endLink("Source", "complete", "none"),
+      link("Source", "Debate", "<continue>", "last-all"),
+      link("Debate", "Source", "<default>", "none"),
+      endLink("Source", "<complete>", "none"),
     ],
   };
   const compiled = compileTeamDsl(definition);
@@ -285,10 +293,77 @@ test("compileTeamDsl 支持在拓扑文件里直接连接 __end__", () => {
     id: "__end__",
     sources: ["Source"],
     incoming: [
-      { source: "Source", triggerOn: "complete" },
+      { source: "Source", trigger: "<complete>" },
     ],
   });
   assert.equal(compiled.topology.edges.some((edge) => edge.target === "__end__"), false);
+});
+
+test("compileTeamDsl 支持在 decision 边上声明自定义 trigger", () => {
+  const compiled = compileTeamDsl({
+    entry: "漏洞论证",
+    nodes: [
+      agentNode("漏洞论证", promptWithTriggers("你负责漏洞论证。", "<abcd>"), false),
+      agentNode("漏洞挑战", "你负责漏洞挑战。", false),
+    ],
+    links: [
+      {
+        from: "漏洞论证",
+        to: "漏洞挑战",
+        trigger: "<abcd>",
+        message_type: "last",
+      },
+    ],
+  });
+
+  assert.deepEqual(compiled.topology.edges, [
+    {
+      source: "漏洞论证",
+      target: "漏洞挑战",
+      trigger: "<abcd>",
+      messageMode: "last",
+    },
+  ]);
+});
+
+test("compileTeamDsl 允许同一 source 把同一个自定义 trigger 路由到多个下游", () => {
+  const compiled = compileTeamDsl({
+    entry: "漏洞论证",
+    nodes: [
+      agentNode("漏洞论证", promptWithTriggers("你负责漏洞论证。", "<dup>"), false),
+      agentNode("漏洞挑战", "你负责漏洞挑战。", false),
+      agentNode("讨论总结", "你负责讨论总结。", false),
+    ],
+    links: [
+      {
+        from: "漏洞论证",
+        to: "漏洞挑战",
+        trigger: "<dup>",
+        message_type: "last",
+      },
+      {
+        from: "漏洞论证",
+        to: "讨论总结",
+        trigger: "<dup>",
+        message_type: "last-all",
+      },
+    ],
+  });
+
+  assert.deepEqual(compiled.topology.edges, [
+    {
+      source: "漏洞论证",
+      target: "漏洞挑战",
+      trigger: "<dup>",
+      messageMode: "last",
+    },
+    {
+      source: "漏洞论证",
+      target: "讨论总结",
+      trigger: "<dup>",
+      messageMode: "last-all",
+    },
+  ]);
 });
 
 test("compileTeamDsl 会拒绝引用未声明节点的 graph.links", () => {
@@ -298,7 +373,7 @@ test("compileTeamDsl 会拒绝引用未声明节点的 graph.links", () => {
         entry: "Build",
         nodes: [agentNode("Build", "", true)],
         links: [
-          link("Build", "TaskReview", "transfer", "last"),
+          link("Build", "TaskReview", "<default>", "last"),
         ],
       }),
     /TaskReview/,
@@ -367,21 +442,22 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出论证挑战多轮 spaw
     {
       source: "线索发现",
       target: "疑点辩论",
-      triggerOn: "continue",
+      trigger: "<continue>",
       messageMode: "last-all",
-      maxContinueRounds: 999,
+      maxTriggerRounds: 999,
     },
     {
       source: "线索发现",
       target: "线索完备性评估",
-      triggerOn: "complete",
+      trigger: "<complete>",
       messageMode: "last",
     },
     {
       source: "线索完备性评估",
       target: "线索发现",
-      triggerOn: "continue",
+      trigger: "<continue>",
       messageMode: "last",
+      maxTriggerRounds: 4,
     },
   ]);
   assert.deepEqual(compiled.topology.spawnRules?.[0]?.spawnedAgents, [
@@ -391,20 +467,20 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出论证挑战多轮 spaw
   ]);
   assert.equal(compiled.topology.spawnRules?.[0]?.sourceTemplateName, "线索发现");
   assert.equal(compiled.topology.spawnRules?.[0]?.reportToTemplateName, "线索发现");
-  assert.equal(compiled.topology.spawnRules?.[0]?.reportToTriggerOn, "transfer");
+  assert.equal(compiled.topology.spawnRules?.[0]?.reportToTrigger, "<default>");
   assert.equal(compiled.topology.spawnRules?.[0]?.reportToMessageMode, "none");
   assert.deepEqual(compiled.topology.langgraph?.end, {
     id: "__end__",
     sources: ["线索完备性评估"],
     incoming: [
-      { source: "线索完备性评估", triggerOn: "complete" },
+      { source: "线索完备性评估", trigger: "<complete>" },
     ],
   });
   assert.deepEqual(compiled.topology.spawnRules?.[0]?.edges, [
-    { sourceRole: "漏洞论证", targetRole: "漏洞挑战", triggerOn: "continue", messageMode: "last" },
-    { sourceRole: "漏洞挑战", targetRole: "漏洞论证", triggerOn: "continue", messageMode: "last" },
-    { sourceRole: "漏洞论证", targetRole: "讨论总结", triggerOn: "complete", messageMode: "last-all" },
-    { sourceRole: "漏洞挑战", targetRole: "讨论总结", triggerOn: "complete", messageMode: "last-all" },
+    { sourceRole: "漏洞论证", targetRole: "漏洞挑战", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
+    { sourceRole: "漏洞挑战", targetRole: "漏洞论证", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
+    { sourceRole: "漏洞论证", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last-all" },
+    { sourceRole: "漏洞挑战", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last-all" },
   ]);
 });
 
@@ -414,38 +490,38 @@ test("compileTeamDsl 会拒绝在 spawn 子图里直接连接 __end__", () => {
       compileTeamDsl({
         entry: "Source",
         nodes: [
-          agentNode("Source", "你负责 source。", false),
+          agentNode("Source", promptWithTriggers("你负责 source。", "<default>"), false),
           spawnNode(
             "Debate",
             {
               entry: "DecisionAgent",
               nodes: [
-                agentNode("DecisionAgent", "你是 decisionAgent。", false),
+                agentNode("DecisionAgent", promptWithTriggers("你是 decisionAgent。", "<complete>"), false),
               ],
               links: [
-                endLink("DecisionAgent", "complete", "none"),
+                endLink("DecisionAgent", "<complete>", "none"),
               ],
             },
           ),
         ],
         links: [
-          link("Source", "Debate", "transfer", "last-all"),
+          link("Source", "Debate", "<default>", "last-all"),
         ],
       }),
     /只有根图可以直接连接 __end__/u,
   );
 });
 
-test("__end__ 边支持复用 complete / continue 作为条件分支", () => {
+test("__end__ 边支持复用示例 trigger label 作为条件分支", () => {
   const compiled = compileTeamDsl({
     entry: "Source",
     nodes: [
-      agentNode("Source", "你负责 source。", false),
+      agentNode("Source", promptWithTriggers("你负责 source。", "<continue>", "<complete>"), false),
       agentNode("Debate", "你负责 debate。", false),
     ],
     links: [
-      link("Source", "Debate", "continue", "last-all"),
-      endLink("Source", "complete", "none"),
+      link("Source", "Debate", "<continue>", "last-all"),
+      endLink("Source", "<complete>", "none"),
     ],
   });
 
@@ -453,27 +529,53 @@ test("__end__ 边支持复用 complete / continue 作为条件分支", () => {
     id: "__end__",
     sources: ["Source"],
     incoming: [
-      { source: "Source", triggerOn: "complete" },
+      { source: "Source", trigger: "<complete>" },
     ],
   });
 });
 
-test("compileTeamDsl 会拒绝省略 __end__ 边的 trigger_type", () => {
+test("compileTeamDsl 支持为 __end__ 边声明自定义 trigger", () => {
+  const compiled = compileTeamDsl({
+    entry: "漏洞论证",
+    nodes: [
+      agentNode("漏洞论证", promptWithTriggers("你负责漏洞论证。", "<done>"), false),
+    ],
+    links: [
+      {
+        from: "漏洞论证",
+        to: "__end__",
+        trigger: "<done>",
+        message_type: "none",
+      },
+    ],
+  });
+
+  assert.deepEqual(compiled.topology.langgraph?.end, {
+    id: "__end__",
+    sources: ["漏洞论证"],
+    incoming: [
+      { source: "漏洞论证", trigger: "<done>" },
+    ],
+  });
+});
+
+test("compileTeamDsl 会拒绝省略 __end__ 边的 trigger", () => {
   assert.throws(
     () =>
       compileTeamDsl({
         entry: "Source",
         nodes: [
-          agentNode("Source", "你负责 source。", false),
+          agentNode("Source", promptWithTriggers("你负责 source。", "<default>"), false),
         ],
         links: [
           {
             from: "Source",
             to: "__end__",
+            message_type: "none",
           },
         ],
       }),
-    /trigger_type/u,
+    /trigger/u,
   );
 });
 
@@ -483,13 +585,13 @@ test("compileTeamDsl 会拒绝省略 __end__ 边的 message_type", () => {
       compileTeamDsl({
         entry: "Source",
         nodes: [
-          agentNode("Source", "你负责 source。", false),
+          agentNode("Source", promptWithTriggers("你负责 source。", "<complete>"), false),
         ],
         links: [
           {
             from: "Source",
             to: "__end__",
-            trigger_type: "complete",
+            trigger: "<complete>",
           },
         ],
       }),
@@ -506,41 +608,41 @@ test("compileTeamDsl 支持在 links 上显式声明边级消息传递策略", (
       agentNode("Judge", "你负责 judge。", false),
     ],
     links: [
-      link("Source", "Debate", "transfer", "last-all"),
-      link("Debate", "Judge", "transfer", "last"),
-      link("Judge", "Source", "transfer", "none"),
+      link("Source", "Debate", "<default>", "last-all"),
+      link("Debate", "Judge", "<default>", "last"),
+      link("Judge", "Source", "<default>", "none"),
     ],
   });
 
   assert.deepEqual(compiled.topology.edges, [
-    { source: "Source", target: "Debate", triggerOn: "transfer", messageMode: "last-all" },
-    { source: "Debate", target: "Judge", triggerOn: "transfer", messageMode: "last" },
-    { source: "Judge", target: "Source", triggerOn: "transfer", messageMode: "none" },
+    { source: "Source", target: "Debate", trigger: "<default>", messageMode: "last-all" },
+    { source: "Debate", target: "Judge", trigger: "<default>", messageMode: "last" },
+    { source: "Judge", target: "Source", trigger: "<default>", messageMode: "none" },
   ]);
 });
 
-test("compileTeamDsl 会保留 continue 边上的 maxContinueRounds 配置", () => {
+test("compileTeamDsl 会保留示例回流 label 边上的 maxTriggerRounds 配置", () => {
   const compiled = compileTeamDsl({
     entry: "线索发现",
     nodes: [
-      agentNode("线索发现", "你负责线索发现。", false),
+      agentNode("线索发现", promptWithTriggers("你负责线索发现。", "<continue>"), false),
       spawnNode(
         "疑点辩论",
         {
           entry: "漏洞挑战",
           nodes: [
-            agentNode("漏洞挑战", "你负责漏洞挑战。", false),
+            agentNode("漏洞挑战", promptWithTriggers("你负责漏洞挑战。", "<complete>"), false),
             agentNode("讨论总结", "你负责讨论总结。", true),
           ],
           links: [
-            link("漏洞挑战", "讨论总结", "complete", "last"),
-            link("讨论总结", "线索发现", "transfer", "none"),
+            link("漏洞挑战", "讨论总结", "<complete>", "last"),
+            link("讨论总结", "线索发现", "<default>", "none"),
           ],
         },
       ),
     ],
     links: [
-      link("线索发现", "疑点辩论", "continue", "last-all", 999),
+      link("线索发现", "疑点辩论", "<continue>", "last-all", 999),
     ],
   });
 
@@ -548,14 +650,14 @@ test("compileTeamDsl 会保留 continue 边上的 maxContinueRounds 配置", () 
     {
       source: "线索发现",
       target: "疑点辩论",
-      triggerOn: "continue",
+      trigger: "<continue>",
       messageMode: "last-all",
-      maxContinueRounds: 999,
+      maxTriggerRounds: 999,
     },
   ]);
 });
 
-test("compileTeamDsl 会保留 spawn 子图回到外层的 continue 边 maxContinueRounds 配置", () => {
+test("compileTeamDsl 会保留 spawn 子图回到外层的示例回流 label 边 maxTriggerRounds 配置", () => {
   const compiled = compileTeamDsl({
     entry: "线索发现",
     nodes: [
@@ -565,22 +667,22 @@ test("compileTeamDsl 会保留 spawn 子图回到外层的 continue 边 maxConti
         {
           entry: "讨论总结",
           nodes: [
-            agentNode("讨论总结", "你负责讨论总结。", true),
+            agentNode("讨论总结", promptWithTriggers("你负责讨论总结。", "<continue>"), true),
           ],
           links: [
-            link("讨论总结", "线索发现", "continue", "none", 7),
+            link("讨论总结", "线索发现", "<continue>", "none", 7),
           ],
         },
       ),
     ],
     links: [
-      link("线索发现", "疑点辩论", "transfer", "last-all"),
+      link("线索发现", "疑点辩论", "<default>", "last-all"),
     ],
   });
 
-  assert.equal(compiled.topology.spawnRules?.[0]?.reportToTriggerOn, "continue");
+  assert.equal(compiled.topology.spawnRules?.[0]?.reportToTrigger, "<continue>");
   assert.equal(compiled.topology.spawnRules?.[0]?.reportToMessageMode, "none");
-  assert.equal(compiled.topology.spawnRules?.[0]?.reportToMaxContinueRounds, 7);
+  assert.equal(compiled.topology.spawnRules?.[0]?.reportToMaxTriggerRounds, 7);
 });
 
 test("compileTeamDsl 会拒绝旧的 all message_type", () => {
@@ -589,14 +691,14 @@ test("compileTeamDsl 会拒绝旧的 all message_type", () => {
       compileTeamDsl({
         entry: "线索发现",
         nodes: [
-          agentNode("线索发现", "你负责线索发现。", false),
+          agentNode("线索发现", promptWithTriggers("你负责线索发现。", "<default>"), false),
           agentNode("疑点辩论", "你负责辩论。", false),
         ],
         links: [
           {
             from: "线索发现",
             to: "疑点辩论",
-            trigger_type: "transfer",
+            trigger: "<default>",
             message_type: "all",
           },
         ],
@@ -605,20 +707,123 @@ test("compileTeamDsl 会拒绝旧的 all message_type", () => {
   );
 });
 
-test("compileTeamDsl 会拒绝非法 maxContinueRounds，而不是偷偷取整或补底", () => {
+test("compileTeamDsl 会拒绝非法 maxTriggerRounds，而不是偷偷取整或补底", () => {
+  assert.throws(
+    () =>
+      compileTeamDsl({
+        entry: "线索发现",
+        nodes: [
+          agentNode("线索发现", promptWithTriggers("你负责线索发现。", "<continue>"), false),
+          agentNode("疑点辩论", "你负责辩论。", false),
+        ],
+        links: [
+          link("线索发现", "疑点辩论", "<continue>", "last-all", 0),
+        ],
+      }),
+    /maxTriggerRounds 必须是大于等于 1 的整数/u,
+  );
+});
+
+test("compileTeamDsl 会拒绝空白包裹的 <default> 搭配 maxTriggerRounds", () => {
+  assert.throws(
+    () =>
+      compileTeamDsl({
+        entry: "Judge",
+        nodes: [
+          agentNode("Judge", "你负责普通流转。", false),
+          agentNode("Build", "", true),
+        ],
+        links: [
+          {
+            from: "Judge",
+            to: "Build",
+            trigger: " <default> ",
+            message_type: "last",
+            maxTriggerRounds: 3,
+          },
+        ],
+      }),
+    /只有 action-required trigger 才允许声明 maxTriggerRounds/u,
+  );
+});
+
+test("compileTeamDsl 会拒绝同一 source 把同一个 trigger 同时用于 labeled 和 action_required", () => {
+  assert.throws(
+    () =>
+      compileTeamDsl({
+        entry: "Judge",
+        nodes: [
+          agentNode("Judge", promptWithTriggers("你负责判定。", "<same>"), false),
+          agentNode("Build", "", true),
+          agentNode("Summary", "你负责总结。", false),
+        ],
+        links: [
+          link("Judge", "Build", "<same>", "last", 2),
+          link("Judge", "Summary", "<same>", "last"),
+        ],
+      }),
+    /同一 source 不允许把同一个 trigger 同时用于 action_required 和 labeled/u,
+  );
+});
+
+test("compileTeamDsl 会拒绝 source prompt 未显式声明自定义 outgoing trigger", () => {
+  assert.throws(
+    () =>
+      compileTeamDsl({
+        entry: "Judge",
+        nodes: [
+          agentNode("Judge", "你负责判定。", false),
+          agentNode("Build", "", true),
+        ],
+        links: [
+          link("Judge", "Build", "<revise>", "last"),
+        ],
+      }),
+    /Judge 的 prompt 必须显式包含以下 trigger：<revise>/u,
+  );
+});
+
+test("compileTeamDsl 会拒绝 spawn 子图 agent 未在 prompt 里声明回到外层的 trigger", () => {
   assert.throws(
     () =>
       compileTeamDsl({
         entry: "线索发现",
         nodes: [
           agentNode("线索发现", "你负责线索发现。", false),
-          agentNode("疑点辩论", "你负责辩论。", false),
+          spawnNode(
+            "疑点辩论",
+            {
+              entry: "讨论总结",
+              nodes: [
+                agentNode("讨论总结", "你负责讨论总结。", true),
+              ],
+              links: [
+                link("讨论总结", "线索发现", "<continue>", "none"),
+              ],
+            },
+          ),
         ],
         links: [
-          link("线索发现", "疑点辩论", "continue", "last-all", 0),
+          link("线索发现", "疑点辩论", "<default>", "last-all"),
         ],
       }),
-    /maxContinueRounds 必须是大于等于 1 的整数/u,
+    /讨论总结 的 prompt 必须显式包含以下 trigger：<continue>/u,
+  );
+});
+
+test("compileTeamDsl 会拒绝根图 agent 未在 prompt 里声明指向 __end__ 的自定义 trigger", () => {
+  assert.throws(
+    () =>
+      compileTeamDsl({
+        entry: "漏洞论证",
+        nodes: [
+          agentNode("漏洞论证", "你负责漏洞论证。", false),
+        ],
+        links: [
+          endLink("漏洞论证", "<done>", "none"),
+        ],
+      }),
+    /漏洞论证 的 prompt 必须显式包含以下 trigger：<done>/u,
   );
 });
 
@@ -661,7 +866,7 @@ test("matchesAppliedTeamDslAgents 会把 agent 一致但拓扑不同识别为只
     matchesAppliedTeamDslTopology(
       {
         nodes: ["Build", "BA", "CodeReview", "UnitTest", "TaskReview"],
-        edges: [{ source: "Build", target: "BA", triggerOn: "transfer", messageMode: "last" }],
+        edges: [{ source: "Build", target: "BA", trigger: "<default>", messageMode: "last" }],
       },
       compiled,
     ),

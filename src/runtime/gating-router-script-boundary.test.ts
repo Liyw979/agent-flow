@@ -18,7 +18,7 @@ test("gating-router 状态流转回归场景优先迁移到 scheduler script 测
   assert.equal(
     source.includes("action_required 边支持单独配置更小的回流上限"),
     false,
-    "gating-router.test.ts 不应该再保留可迁移到 script 的 maxContinueRounds 场景",
+    "gating-router.test.ts 不应该再保留可迁移到 script 的 maxTriggerRounds 场景",
   );
   assert.equal(
     source.includes("同一 decisionAgent 连续 4 次回流后，只要第 5 次改为通过，流程仍然允许继续"),

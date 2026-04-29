@@ -10,9 +10,9 @@ import {
 test("orderAgentsForFrontend 会严格按 JSON topology.nodes 排序成员", () => {
   const ordered = orderAgentsForFrontend(
     [
-      { id: "Build", prompt: "" },
-      { id: "TaskReview", prompt: "" },
-      { id: "BA", prompt: "" },
+      { id: "Build", prompt: "", isWritable: false },
+      { id: "TaskReview", prompt: "", isWritable: false },
+      { id: "BA", prompt: "", isWritable: false },
     ],
     {
       nodes: ["BA", "Build", "TaskReview"],
@@ -25,9 +25,9 @@ test("orderAgentsForFrontend 会严格按 JSON topology.nodes 排序成员", () 
 test("buildAvailableAgentIdsForFrontend 会按 JSON topology.nodes 输出可 @ 的成员顺序", () => {
   const available = buildAvailableAgentIdsForFrontend(
     [
-      { id: "Build", prompt: "" },
-      { id: "TaskReview", prompt: "" },
-      { id: "BA", prompt: "" },
+      { id: "Build", prompt: "", isWritable: false },
+      { id: "TaskReview", prompt: "", isWritable: false },
+      { id: "BA", prompt: "", isWritable: false },
     ],
     {
       nodes: ["BA", "Build", "TaskReview"],
@@ -41,9 +41,9 @@ test("resolveDefaultSelectedAgentIdForFrontend 会回到 JSON 中的第一个 ag
   const selected = resolveDefaultSelectedAgentIdForFrontend({
     selectedAgentId: null,
     workspaceAgents: [
-      { id: "Build", prompt: "" },
-      { id: "TaskReview", prompt: "" },
-      { id: "BA", prompt: "" },
+      { id: "Build", prompt: "", isWritable: false },
+      { id: "TaskReview", prompt: "", isWritable: false },
+      { id: "BA", prompt: "", isWritable: false },
     ],
     taskAgents: [
       { taskId: "task-1", id: "Build", opencodeSessionId: null, opencodeAttachBaseUrl: null, status: "running", runCount: 1 },

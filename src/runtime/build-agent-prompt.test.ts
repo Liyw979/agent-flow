@@ -3,24 +3,16 @@ import assert from "node:assert/strict";
 
 import { buildAgentSystemPrompt } from "./agent-system-prompt";
 import { buildSubmitMessageBody } from "./opencode-request-body";
-import {
-  DECISION_COMPLETE_LABEL,
-  DECISION_CONTINUE_LABEL,
-} from "../shared/decision-response";
+
+const REVIEW_TRIGGERS = ["<revise>", "<approved>"] as const;
 
 test("Decision agents keep the response contract in the system prompt", () => {
-  const prompt = buildAgentSystemPrompt();
+  const prompt = buildAgentSystemPrompt(REVIEW_TRIGGERS);
 
   assert.doesNotMatch(prompt, /\[From BA Agent\]/);
   assert.doesNotMatch(prompt, /\[@/);
-  assert.match(
-    prompt,
-    new RegExp(DECISION_CONTINUE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-  );
-  assert.match(
-    prompt,
-    new RegExp(DECISION_COMPLETE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-  );
+  assert.match(prompt, /<revise>/);
+  assert.match(prompt, /<approved>/);
 });
 
 test("Build agent request body omits system", () => {
@@ -37,23 +29,17 @@ test("Decision agent request body keeps system", () => {
   const body = buildSubmitMessageBody({
     agent: "TaskReview",
     content: "Decision the delivery",
-    system: buildAgentSystemPrompt(),
+    system: buildAgentSystemPrompt(REVIEW_TRIGGERS),
   });
 
   assert.equal(typeof body["system"], "string");
   assert.doesNotMatch(String(body["system"]), /\[From Build Agent\]/);
-  assert.match(
-    String(body["system"]),
-    new RegExp(DECISION_CONTINUE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-  );
-  assert.match(
-    String(body["system"]),
-    new RegExp(DECISION_COMPLETE_LABEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-  );
+  assert.match(String(body["system"]), /<revise>/);
+  assert.match(String(body["system"]), /<approved>/);
 });
 
 test("Decision agents build a system prompt", () => {
-  const systemPrompt = buildAgentSystemPrompt();
+  const systemPrompt = buildAgentSystemPrompt(REVIEW_TRIGGERS);
 
   assert.equal(typeof systemPrompt, "string");
   assert.doesNotMatch(String(systemPrompt), /\[From Build Agent\]/);

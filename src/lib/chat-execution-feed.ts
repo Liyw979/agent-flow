@@ -56,7 +56,7 @@ type ChatFeedItem =
 function isVisibleChatExecutionTrigger(message: MessageRecord) {
   return message.kind === "user"
     || message.kind === "agent-dispatch"
-    || message.kind === "continue-request";
+    || message.kind === "action-required-request";
 }
 
 function getVisibleChatExecutionTargets(message: MessageRecord): string[] {

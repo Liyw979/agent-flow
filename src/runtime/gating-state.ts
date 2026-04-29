@@ -10,6 +10,8 @@ import type {
 
 export interface GraphActionRequiredRequest {
   sourceMessageId: string;
+  trigger: string;
+  targetAgentIds: string[];
   opinion: string;
   agentContextContent: string;
 }
@@ -20,7 +22,7 @@ export interface GatingSourceRoundState {
 }
 
 export interface GatingHandoffDispatchBatchState {
-  dispatchKind: "handoff" | "approved";
+  dispatchKind: "handoff" | "labeled";
   sourceAgentId: string;
   sourceContent: string;
   targets: string[];
@@ -46,7 +48,7 @@ export interface GraphSourceRoundState {
 }
 
 export interface GraphHandoffBatchState {
-  dispatchKind: "handoff" | "approved";
+  dispatchKind: "handoff" | "labeled";
   sourceAgentId: string;
   sourceContent: string;
   targets: string[];
@@ -85,16 +87,17 @@ export function createEmptyGraphTaskState(input: {
   taskId: string;
   topology: TopologyRecord;
 }): GraphTaskState {
+  const topology = input.topology;
   return {
     taskId: input.taskId,
-    topology: input.topology,
+    topology,
     runtimeNodes: [],
     runtimeEdges: [],
     spawnBundles: [],
     spawnActivations: [],
     taskStatus: "pending",
     finishReason: null,
-    agentStatusesByName: Object.fromEntries(input.topology.nodes.map((name) => [name, "idle"])),
+    agentStatusesByName: Object.fromEntries(topology.nodes.map((name) => [name, "idle"])),
     agentContextByName: {},
     completedEdges: [],
     edgeTriggerVersion: {},
@@ -127,11 +130,7 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
               ? {
                   id: state.topology.langgraph.end.id,
                   sources: [...state.topology.langgraph.end.sources],
-                  ...(state.topology.langgraph.end.incoming
-                    ? {
-                        incoming: state.topology.langgraph.end.incoming.map((edge) => ({ ...edge })),
-                      }
-                    : {}),
+                  incoming: state.topology.langgraph.end.incoming.map((edge) => ({ ...edge })),
                 }
               : null,
           },
@@ -203,6 +202,8 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
         agentId,
         {
           sourceMessageId: request.sourceMessageId,
+          trigger: request.trigger,
+          targetAgentIds: [...request.targetAgentIds],
           opinion: request.opinion,
           agentContextContent: request.agentContextContent,
         },

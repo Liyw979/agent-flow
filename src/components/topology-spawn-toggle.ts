@@ -1,4 +1,5 @@
 import {
+  DEFAULT_TOPOLOGY_TRIGGER,
   normalizeTopologyEdgeTrigger,
   type SpawnRule,
   type TopologyEdge,
@@ -6,7 +7,10 @@ import {
   type TopologyRecord,
 } from "@shared/types";
 
-type DownstreamMode = "spawn" | "transfer" | "complete" | "continue";
+type DownstreamMode =
+  | "spawn"
+  | typeof DEFAULT_TOPOLOGY_TRIGGER
+  | TopologyEdge["trigger"];
 
 function getNodeRecords(topology: TopologyRecord): TopologyNodeRecord[] {
   if (topology.nodeRecords && topology.nodeRecords.length > 0) {
@@ -65,11 +69,12 @@ function buildSpawnRuleFromReachable(topology: TopologyRecord, sourceNodeId: str
     edges: targetTemplates.slice(0, -1).map((item, index) => ({
       sourceRole: index === 0 ? "entry" : item.nodeId,
       targetRole: targetTemplates[index + 1]?.nodeId ?? "entry",
-      triggerOn: "transfer" as const,
+      trigger: "<default>" as const,
       messageMode: "last" as const,
     })),
     exitWhen: "one_side_agrees",
     reportToTemplateName: reportTarget,
+    reportToTrigger: DEFAULT_TOPOLOGY_TRIGGER,
   };
 }
 
@@ -128,9 +133,13 @@ export function getDownstreamMode(input: {
     (edge) =>
       edge.source === input.sourceNodeId &&
       edge.target === input.targetNodeId,
-  )?.triggerOn;
+  )?.trigger;
 
-  return trigger ? normalizeTopologyEdgeTrigger(trigger) : null;
+  const normalizedTrigger = trigger ? normalizeTopologyEdgeTrigger(trigger) : null;
+  if (normalizedTrigger) {
+    return normalizedTrigger;
+  }
+  return null;
 }
 
 export function setSpawnEnabledForDownstream(input: {
@@ -144,7 +153,7 @@ export function setSpawnEnabledForDownstream(input: {
         .concat({
           source: input.sourceNodeId,
           target: input.targetNodeId,
-          triggerOn: "transfer" as const,
+          trigger: "<default>" as const,
           messageMode: "last" as const,
         })
         .map((edge) => ({ ...edge }))
@@ -191,7 +200,7 @@ export function setDownstreamMode(input: {
       : clearedEdges.concat({
           source: input.sourceNodeId,
           target: input.targetNodeId,
-          triggerOn: normalizeTopologyEdgeTrigger(input.mode),
+          trigger: normalizeTopologyEdgeTrigger(input.mode),
           messageMode: "last" as const,
         });
 

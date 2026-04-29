@@ -24,8 +24,8 @@ function createSystemMessage(id: string, sender: "system" | "BA", content: strin
     timestamp,
     kind: "agent-final",
     status: "completed",
-    decision: "complete",
-    decisionNote: "",
+    routingKind: "default",
+    responseNote: "",
     rawResponse: content,
   };
 }

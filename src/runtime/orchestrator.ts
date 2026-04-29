@@ -8,14 +8,22 @@ import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import {
   type AgentTeamEvent,
+  type AgentRoutingKind,
   type AgentRuntimeSnapshot,
   type AgentRecord,
+  assertNoAmbiguousTopologyTriggerRoutes,
   BUILD_AGENT_ID,
   createDefaultTopology,
+  DEFAULT_TOPOLOGY_TRIGGER,
   DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
+  isActionRequiredTopologyTrigger,
+  LANGGRAPH_END_NODE_ID,
   normalizeActionRequiredMaxRounds,
+  collectTopologyTriggerShapes,
   createTopologyLangGraphRecord,
+  getTopologyEdgeId,
   normalizeTopologyEdgeTrigger,
+  resolveTriggerRoutingKindForSource,
   type DeleteTaskPayload,
   type GetTaskRuntimePayload,
   type InitializeTaskPayload,
@@ -43,6 +51,7 @@ import { buildAgentSystemPrompt } from "./agent-system-prompt";
 import {
   parseDecision as parseDecisionPure,
   stripStructuredSignals as stripStructuredSignalsPure,
+  type AllowedDecisionTrigger,
   type ParsedDecision,
 } from "./decision-parser";
 import {
@@ -53,7 +62,7 @@ import {
 import { OpenCodeRunner } from "./opencode-runner";
 import { StoreService } from "./store";
 import {
-  resolveAgentStatusFromDecision,
+  resolveAgentStatusFromRouting,
 } from "./gating-rules";
 import {
   buildDownstreamForwardedContextFromMessages,
@@ -131,12 +140,10 @@ type AgentExecutionPrompt =
       mode: "raw";
       content: string;
       from?: string;
-      allowDirectFallbackWhenNoBatch?: boolean;
     }
   | {
       mode: "control";
       content: string;
-      allowDirectFallbackWhenNoBatch?: boolean;
     }
   | {
       mode: "structured";
@@ -145,7 +152,6 @@ type AgentExecutionPrompt =
       agentMessage?: string;
       omitSourceAgentSectionLabel?: boolean;
       gitDiffSummary?: string;
-      allowDirectFallbackWhenNoBatch?: boolean;
     };
 
 interface AgentRunBehaviorOptions {
@@ -685,12 +691,12 @@ export class Orchestrator {
       return;
     }
 
-    if (latestTask.status === "continue") {
+    if (latestTask.status === "action_required") {
       return;
     }
 
     const nextTaskStatus = resolveStandaloneTaskStatusAfterAgentRun({
-      latestAgentStatus: result.status === "failed" ? "failed" : result.agentStatus,
+      latestAgentStatus: result.agentStatus,
       agentStatuses: this.store.listTaskAgents(task.cwd, task.id),
     });
 
@@ -794,14 +800,6 @@ export class Orchestrator {
     return {
       done: /\bTASK_DONE\b/i.test(content),
     };
-  }
-
-  protected parseDecision(content: string, decisionAgent: boolean): ParsedDecision {
-    return parseDecisionPure(content, decisionAgent);
-  }
-
-  private stripStructuredSignals(content: string): string {
-    return stripStructuredSignalsPure(content);
   }
 
   protected async buildProjectGitDiffSummary(cwd: string): Promise<string> {
@@ -948,32 +946,92 @@ export class Orchestrator {
   private resolveAgentContextContent(
     parsedDecision: ParsedDecision,
     rawFinalMessage: string,
+    allowedTriggers?: readonly string[],
   ): string {
     const candidates = [
       parsedDecision.cleanContent.trim(),
       parsedDecision.opinion.trim(),
-      this.stripStructuredSignals(stripDecisionResponseMarkup(rawFinalMessage)).trim(),
+      stripStructuredSignalsPure(stripDecisionResponseMarkup(rawFinalMessage, allowedTriggers)).trim(),
     ];
 
     return candidates.find((item) => item.length > 0) ?? "";
+  }
+
+  private resolveAllowedDecisionTriggers(input: {
+    state: GraphTaskState | null;
+    topology: Pick<TopologyRecord, "edges"> & Partial<Pick<TopologyRecord, "langgraph">>;
+    runtimeAgentId: string;
+    executableAgentId: string;
+  }): AllowedDecisionTrigger[] {
+    const effectiveTopology = input.state ? buildEffectiveTopology(input.state) : input.topology;
+    const sourceAgentIds = [...new Set([input.runtimeAgentId, input.executableAgentId])];
+    const allowed: AllowedDecisionTrigger[] = [];
+    const push = (trigger: AllowedDecisionTrigger) => {
+      if (allowed.some((item) => item.trigger === trigger.trigger)) {
+        return;
+      }
+      allowed.push(trigger);
+    };
+
+    for (const trigger of collectTopologyTriggerShapes({
+      edges: effectiveTopology.edges,
+      endIncoming: effectiveTopology.langgraph?.end?.incoming ?? [],
+    })) {
+      if (!sourceAgentIds.includes(trigger.source)) {
+        continue;
+      }
+      push({
+        trigger: trigger.trigger,
+      });
+    }
+
+    return allowed;
   }
 
   private buildDispatchMessageContent(targetAgentIds: string[], content: string): string {
     return formatAgentDispatchContent(content, targetAgentIds);
   }
 
-  private extractAgentDisplayContent(content: string): string {
+  private extractAgentDisplayContent(content: string, options?: { preferTrailingDeliverySection?: boolean }): string {
     const trimmed = content.trim();
     if (!trimmed) {
       return "";
     }
-    return trimmed
+
+    const trailingSection = options?.preferTrailingDeliverySection
+      ? this.extractTrailingTopLevelSection(trimmed)
+      : trimmed;
+    return trailingSection
       .replace(/\n(?:---|\*\*\*)(?:\s*\n?)*$/u, "")
       .trim();
   }
 
+  private extractTrailingTopLevelSection(content: string): string {
+    const headingPattern = /(^|\n)(#{1,2}\s+[^\n]+)\n/g;
+    let lastHeadingIndex = -1;
+    let match: RegExpExecArray | null = headingPattern.exec(content);
+    while (match) {
+      const prefix = match[1] ?? "";
+      lastHeadingIndex = match.index + prefix.length;
+      match = headingPattern.exec(content);
+    }
+
+    if (lastHeadingIndex < 0) {
+      return content;
+    }
+
+    const trailingSection = content.slice(lastHeadingIndex).trim();
+    return trailingSection || content;
+  }
+
   protected createDisplayContent(parsedDecision: ParsedDecision): string {
-    const cleanContent = this.extractAgentDisplayContent(parsedDecision.cleanContent);
+    const preferTrailingDeliverySection = parsedDecision.kind === "invalid";
+    const cleanContent = this.extractAgentDisplayContent(parsedDecision.cleanContent, {
+      preferTrailingDeliverySection,
+    });
+    if (parsedDecision.kind === "invalid") {
+      return [cleanContent, parsedDecision.validationError].filter(Boolean).join("\n\n");
+    }
     if (cleanContent) {
       return cleanContent;
     }
@@ -983,10 +1041,34 @@ export class Orchestrator {
       return opinion;
     }
 
-    if (parsedDecision.decision === "continue") {
-      return "（该 Agent 已给出需要响应的结论，但未返回可展示的结果正文。）";
-    }
     return "";
+  }
+
+  private resolveParsedDecisionValue(input: {
+    parsedDecision: ParsedDecision;
+    decisionAgent: boolean;
+    topology: Pick<TopologyRecord, "edges"> & Partial<Pick<TopologyRecord, "langgraph">>;
+    sourceAgentIds: string[];
+  }): AgentRoutingKind {
+    if (input.parsedDecision.kind === "invalid") {
+      return "invalid";
+    }
+    if (!input.decisionAgent) {
+      return "default";
+    }
+
+    for (const sourceAgentId of input.sourceAgentIds) {
+      const resolved = resolveTriggerRoutingKindForSource(
+        input.topology,
+        sourceAgentId,
+        input.parsedDecision.trigger,
+      );
+      if (resolved) {
+        return "labeled";
+      }
+    }
+
+    return "invalid";
   }
 
   private getTaskRuntimeTarget(task: Pick<TaskRecord, "id" | "cwd">): OpenCodeRuntimeTarget {
@@ -1249,43 +1331,45 @@ export class Orchestrator {
     );
     const validTopologyNames = new Set([...validNames, ...spawnNodeIds]);
     const seenEdges = new Set<string>();
-    const seenPairs = new Set<string>();
-    const edges = topology.edges
+    const normalizedEdges = topology.edges
       .map((edge) => {
-        const triggerOn = normalizeTopologyEdgeTrigger(edge.triggerOn);
+        const trigger = normalizeTopologyEdgeTrigger(edge.trigger);
         return {
           ...edge,
-          triggerOn,
+          trigger,
         };
       })
-      .filter((edge) => validTopologyNames.has(edge.source) && validTopologyNames.has(edge.target))
+      .filter((edge) =>
+        validTopologyNames.has(edge.source)
+        && (validTopologyNames.has(edge.target) || edge.target === LANGGRAPH_END_NODE_ID)
+      )
       .filter((edge) => {
-        const key = `${edge.source}__${edge.target}__${edge.triggerOn}`;
+        const key = getTopologyEdgeId(edge);
         if (seenEdges.has(key)) {
           return false;
         }
         seenEdges.add(key);
         return true;
-      })
-      .filter((edge) => {
-        const pairKey = `${edge.source}__${edge.target}`;
-        if (seenPairs.has(pairKey)) {
-          return false;
-        }
-        seenPairs.add(pairKey);
-        return true;
-      })
+      });
+    const endIncomingFromEdges = normalizedEdges
+      .filter((edge) => edge.target === LANGGRAPH_END_NODE_ID)
+      .map((edge) => ({
+        source: edge.source,
+        trigger: edge.trigger,
+      }));
+    const edges = normalizedEdges
+      .filter((edge) => edge.target !== LANGGRAPH_END_NODE_ID)
       .map((edge) => ({
         source: edge.source,
         target: edge.target,
-        triggerOn: edge.triggerOn,
+        trigger: edge.trigger,
         messageMode: edge.messageMode,
-        ...(edge.triggerOn === "continue"
+        ...(isActionRequiredTopologyTrigger(edge.trigger, edge.maxTriggerRounds)
           ? {
-              maxContinueRounds:
-                edge.maxContinueRounds === undefined
+              maxTriggerRounds:
+                edge.maxTriggerRounds === undefined
                   ? DEFAULT_ACTION_REQUIRED_MAX_ROUNDS
-                  : normalizeActionRequiredMaxRounds(edge.maxContinueRounds),
+                  : normalizeActionRequiredMaxRounds(edge.maxTriggerRounds),
             }
           : {}),
       }));
@@ -1336,23 +1420,59 @@ export class Orchestrator {
           && rule.spawnedAgents.every((agent) => agent.role && validNames.has(agent.templateName))
         );
       },
-    ).map((rule) => ({
-      ...rule,
-      spawnNodeName: rule.spawnNodeName
-        || rawNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id
-        || rule.id,
-      spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
-      edges: rule.edges.map((edge) => ({ ...edge })),
-    }));
-    const endIncoming = topology.langgraph?.end?.incoming?.filter((edge) => validTopologyNames.has(edge.source))
-      ?? topology.langgraph?.end?.sources
-        .filter((source) => validTopologyNames.has(source))
-        .map((source) => ({ source }));
+    ).map((rule) => {
+      if (rule.reportToTemplateName && !rule.reportToTrigger) {
+        throw new Error(`spawn rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`);
+      }
+      const normalizedBase = {
+        id: rule.id,
+        spawnNodeName: rule.spawnNodeName
+          || rawNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id
+          || rule.id,
+        ...(rule.sourceTemplateName ? { sourceTemplateName: rule.sourceTemplateName } : {}),
+        entryRole: rule.entryRole,
+        spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
+        edges: rule.edges.map((edge) => {
+          const trigger = normalizeTopologyEdgeTrigger(edge.trigger);
+          return {
+            ...edge,
+            trigger,
+            ...(isActionRequiredTopologyTrigger(trigger, edge.maxTriggerRounds) && edge.maxTriggerRounds !== undefined
+              ? { maxTriggerRounds: normalizeActionRequiredMaxRounds(edge.maxTriggerRounds) }
+              : {}),
+          };
+        }),
+        exitWhen: rule.exitWhen,
+      };
+      if (!rule.reportToTemplateName || !rule.reportToTrigger) {
+        return normalizedBase;
+      }
+      const normalizedReportTrigger = normalizeTopologyEdgeTrigger(rule.reportToTrigger);
+      return {
+        ...normalizedBase,
+        reportToTemplateName: rule.reportToTemplateName,
+        reportToTrigger: normalizedReportTrigger,
+        ...(rule.reportToMessageMode ? { reportToMessageMode: rule.reportToMessageMode } : {}),
+        ...(isActionRequiredTopologyTrigger(normalizedReportTrigger, rule.reportToMaxTriggerRounds)
+          && rule.reportToMaxTriggerRounds !== undefined
+          ? { reportToMaxTriggerRounds: normalizeActionRequiredMaxRounds(rule.reportToMaxTriggerRounds) }
+          : {}),
+      };
+    });
+    const explicitEndIncoming = (topology.langgraph?.end?.incoming ?? []).filter(
+      (edge) => validTopologyNames.has(edge.source) && typeof edge.trigger === "string",
+    );
+    const explicitStartTarget = resolvePrimaryTopologyStartTarget(topology);
+    const endIncoming = [...explicitEndIncoming, ...endIncomingFromEdges];
     const langgraph = createTopologyLangGraphRecord({
       nodes,
       edges,
-      startTargets: topology.langgraph?.start.targets ?? [resolvePrimaryTopologyStartTarget(topology)],
-      ...(endIncoming ? { endIncoming } : {}),
+      startTargets: topology.langgraph?.start.targets ?? (explicitStartTarget ? [explicitStartTarget] : []),
+      endIncoming,
+    });
+    assertNoAmbiguousTopologyTriggerRoutes({
+      edges,
+      endIncoming: langgraph.end?.incoming ?? [],
     });
 
     return {
@@ -1413,7 +1533,7 @@ export class Orchestrator {
     const topology = this.store.getTopology(cwd);
     const batchSize = batch.jobs.length;
 
-    if (batch.jobs.every((job) => job.kind === "transfer" || job.kind === "complete")) {
+    if (batch.jobs.every((job) => job.kind === "transfer" || job.kind === "dispatch")) {
       const sourceAgentId = batch.sourceAgentId ?? "System";
       if (!this.shouldSuppressDuplicateDispatchMessage(cwd, taskId, sourceAgentId, batch.triggerTargets)) {
         const triggerMessage: MessageRecord = {
@@ -1423,11 +1543,11 @@ export class Orchestrator {
           timestamp: new Date().toISOString(),
           content: this.buildDispatchMessageContent(
             batch.triggerTargets,
-            batch.displayContent ?? batch.sourceContent ?? "",
+            batch.displayContent,
           ),
           kind: "agent-dispatch",
           targetAgentIds: [...batch.triggerTargets],
-          dispatchDisplayContent: batch.displayContent ?? "",
+          dispatchDisplayContent: batch.displayContent,
           senderDisplayName: this.resolveMessageSenderDisplayName(state, sourceAgentId),
         };
         this.store.insertMessage(cwd, triggerMessage);
@@ -1457,13 +1577,13 @@ export class Orchestrator {
           buildEffectiveTopology(state),
           batch.sourceAgentId,
           job.agentId,
-          job.kind === "raw" ? "transfer" : job.kind,
+          batch.routingKind === "default" ? DEFAULT_TOPOLOGY_TRIGGER : batch.trigger,
         )
         : "last";
       const forwardedContext = batch.sourceAgentId
         ? buildDownstreamForwardedContextFromMessages(
           taskMessages,
-          batch.sourceContent ?? "",
+          batch.sourceContent,
           {
             includeInitialTask,
             messageMode,
@@ -1476,46 +1596,40 @@ export class Orchestrator {
         prompt = {
           mode: "raw",
           from: "User",
-          content: batch.sourceContent ?? "",
-          allowDirectFallbackWhenNoBatch:
-            this.getOutgoingEdges(topology, job.agentId, "continue").length > 0,
+          content: batch.sourceContent,
         };
-      } else if (job.kind === "continue_request") {
-        if (!batch.sourceMessageId.trim()) {
-          throw new Error(`${batch.sourceAgentId ?? "DecisionAgent"} 的 continue-request 缺少 followUpMessageId`);
+      } else if (job.kind === "action_required_request") {
+        const followUpContent = job.sourceContent.trim();
+        const remediationDisplayContent = job.displayContent.trim();
+        if (!followUpContent || !remediationDisplayContent) {
+          throw new Error(`${job.sourceAgentId} 的 action_required 派发缺少可转发正文`);
         }
-        const continueContent =
-          batch.sourceContent?.trim()
-          || "请直接回应当前内容，给出你的判断、补充、澄清、反驳或修改方案。";
         prompt = withOptionalString(withOptionalString({
           mode: "structured",
-          from: batch.sourceAgentId ?? "DecisionAgent",
-          agentMessage: continueContent,
-          allowDirectFallbackWhenNoBatch: true,
+          from: job.sourceAgentId,
+          agentMessage: followUpContent,
         }, "userMessage",
           initialUserContent
-          && !contentContainsNormalizedPure(continueContent, initialUserContent)
+          && !contentContainsNormalizedPure(followUpContent, initialUserContent)
             ? initialUserContent
             : undefined,
         ), "gitDiffSummary", this.shouldAttachGitDiffSummary(topology, executableAgentId) ? gitDiffSummary : undefined);
         const remediationMessage: MessageRecord = {
           id: randomUUID(),
           taskId,
-          sender: batch.sourceAgentId ?? "DecisionAgent",
+          sender: job.sourceAgentId,
           timestamp: new Date().toISOString(),
           content: formatActionRequiredRequestContent(
-            continueContent,
+            remediationDisplayContent,
             [job.agentId],
           ),
-          kind: "continue-request",
-          followUpMessageId: batch.sourceMessageId,
+          kind: "action-required-request",
+          followUpMessageId: job.sourceMessageId,
           targetAgentIds: [job.agentId],
           ...withOptionalString(
             {},
             "senderDisplayName",
-            batch.sourceAgentId
-              ? this.resolveMessageSenderDisplayName(state, batch.sourceAgentId)
-              : "DecisionAgent",
+            this.resolveMessageSenderDisplayName(state, job.sourceAgentId),
           ),
         };
         this.store.insertMessage(cwd, remediationMessage);
@@ -1527,7 +1641,7 @@ export class Orchestrator {
       } else if (messageMode === "none") {
         prompt = {
           mode: "control",
-          content: forwardedContext?.agentMessage ?? "continue",
+          content: forwardedContext?.agentMessage ?? "<default>",
         };
       } else {
         prompt = withOptionalString(
@@ -1579,9 +1693,31 @@ export class Orchestrator {
     this.updateTaskStatusIfActive(task.cwd, task.id, "running", null);
     const currentAgent = this.store.listTaskAgents(task.cwd, task.id).find((item) => item.id === runtimeAgentId);
     if (!currentAgent) {
+      const missingAgentMessage: MessageRecord = {
+        id: randomUUID(),
+        taskId: task.id,
+        content: `[${runtimeAgentId}] 执行失败：Task ${task.id} 缺少 Agent ${runtimeAgentId}`,
+        sender: "system",
+        timestamp: new Date().toISOString(),
+        kind: "system-message",
+      };
+      this.store.insertMessage(cwd, missingAgentMessage);
+      this.updateTaskStatusIfActive(task.cwd, task.id, "failed", null);
+      this.emit({
+        type: "message-created",
+        cwd,
+        payload: missingAgentMessage,
+      });
       return {
         agentId: runtimeAgentId,
+        messageId: missingAgentMessage.id,
         status: "failed",
+        decisionAgent: false,
+        routingKind: "invalid",
+        agentStatus: "failed",
+        agentContextContent: "",
+        opinion: "",
+        signalDone: false,
         errorMessage: `Task ${task.id} 缺少 Agent ${runtimeAgentId}`,
       };
     }
@@ -1619,12 +1755,20 @@ export class Orchestrator {
         runtimeAgentId,
         executableAgentId,
       });
+      const allowedDecisionTriggers = decisionAgent
+        ? this.resolveAllowedDecisionTriggers({
+            state,
+            topology,
+            runtimeAgentId,
+            executableAgentId,
+          })
+        : [];
       const response = await this.opencodeRunner.run({
         runtimeTarget: this.getTaskRuntimeTarget(currentTask),
         sessionId: agentSessionId,
         content: dispatchedContent,
         agent: executableAgentId,
-        ...(decisionAgent ? { system: buildAgentSystemPrompt() } : {}),
+        ...(decisionAgent ? { system: buildAgentSystemPrompt(allowedDecisionTriggers.map((item) => item.trigger)) } : {}),
       });
 
       if (response.status === "error") {
@@ -1632,46 +1776,84 @@ export class Orchestrator {
           response.rawMessage.error || response.finalMessage || `${runtimeAgentId} 返回错误状态`,
         );
       }
-      const parsedDecision = this.parseDecision(response.finalMessage, decisionAgent);
-      const agentStatus = resolveAgentStatusFromDecision({
-        decision: parsedDecision.decision,
+      const parsedDecision = parseDecisionPure(
+        response.finalMessage,
         decisionAgent,
+        allowedDecisionTriggers,
+      );
+      const effectiveTopology = state ? buildEffectiveTopology(state) : topology;
+      const resolvedDecision = this.resolveParsedDecisionValue({
+        parsedDecision,
+        decisionAgent,
+        topology: effectiveTopology,
+        sourceAgentIds: [runtimeAgentId, executableAgentId],
       });
       const agentContextContent = this.resolveAgentContextContent(
         parsedDecision,
         response.finalMessage,
+        allowedDecisionTriggers.map((item) => item.trigger),
       );
       const displayContent = this.createDisplayContent(parsedDecision);
       if (!displayContent) {
         throw new Error(`${runtimeAgentId} 未返回可展示的结果正文`);
       }
-      const taskMessage: MessageRecord = {
+      const baseTaskMessage = {
         id: response.messageId,
         taskId: task.id,
         content: displayContent,
         sender: runtimeAgentId,
         timestamp: response.timestamp,
-        kind: "agent-final",
-        status: "completed",
-        decision: parsedDecision.decision,
-        decisionNote: parsedDecision.opinion,
+        kind: "agent-final" as const,
+        status: response.status,
+        responseNote: parsedDecision.opinion ?? "",
         rawResponse: response.finalMessage,
         senderDisplayName: this.resolveMessageSenderDisplayName(state, runtimeAgentId),
       };
+      let taskMessage: MessageRecord;
+      if (resolvedDecision === "labeled" && parsedDecision.kind === "valid") {
+        taskMessage = {
+          ...baseTaskMessage,
+          routingKind: "labeled",
+          trigger: parsedDecision.trigger,
+        };
+      } else if (resolvedDecision === "default") {
+        taskMessage = {
+          ...baseTaskMessage,
+          routingKind: "default",
+        };
+      } else {
+        taskMessage = {
+          ...baseTaskMessage,
+          routingKind: "invalid",
+        };
+      }
       this.store.insertMessage(cwd, taskMessage);
 
       const actionRequiredTargets =
-        parsedDecision.decision === "continue"
-          ? this.getOutgoingEdges(topology, runtimeAgentId, "continue")
+        parsedDecision.kind === "valid"
+        && resolvedDecision === "labeled"
+        && resolveTriggerRoutingKindForSource(effectiveTopology, runtimeAgentId, parsedDecision.trigger) === "action_required"
+          ? this.getOutgoingEdgesForTrigger(
+            effectiveTopology,
+            runtimeAgentId,
+            parsedDecision.trigger,
+          )
           : [];
+      const agentStatus = resolveAgentStatusFromRouting({
+        routingKind: resolvedDecision,
+        decisionAgent,
+        enteredActionRequired: actionRequiredTargets.length > 0,
+      });
       this.store.updateTaskAgentStatus(task.cwd, task.id, runtimeAgentId, agentStatus);
-      if (parsedDecision.decision === "continue" && actionRequiredTargets.length > 0) {
+      if (actionRequiredTargets.length > 0) {
         this.updateTaskStatusIfActive(
           task.cwd,
           task.id,
-          concurrentBatchSize > 1 ? "running" : "continue",
+          concurrentBatchSize > 1 ? "running" : "action_required",
           null,
         );
+      } else if (agentStatus === "failed") {
+        this.updateTaskStatusIfActive(task.cwd, task.id, "failed", null);
       } else {
         this.updateTaskStatusIfActive(task.cwd, task.id, "running", null);
       }
@@ -1700,33 +1882,44 @@ export class Orchestrator {
       });
 
       const signal = this.parseSignal(response.finalMessage);
-      if (parsedDecision.decision === "continue") {
-        return {
-          agentId: runtimeAgentId,
-          messageId: taskMessage.id,
-          status: "completed",
-          decisionAgent: true,
-          decision: "continue",
-          agentStatus: "continue",
-          agentContextContent,
-          opinion: parsedDecision.opinion,
-          allowDirectFallbackWhenNoBatch: prompt.allowDirectFallbackWhenNoBatch ?? false,
-          signalDone: signal.done,
-        };
-      }
-      return {
+      const baseGraphAgentResult = {
         agentId: runtimeAgentId,
         messageId: taskMessage.id,
-        status: "completed",
+        status: "completed" as const,
         decisionAgent,
-        decision: "complete",
-        agentStatus: "completed",
+        agentStatus,
         agentContextContent,
         opinion: parsedDecision.opinion,
-        allowDirectFallbackWhenNoBatch: prompt.allowDirectFallbackWhenNoBatch ?? false,
         signalDone: signal.done,
       };
+      if (resolvedDecision === "labeled" && parsedDecision.kind === "valid") {
+        const labeledResult: GraphAgentResult = {
+          ...baseGraphAgentResult,
+          routingKind: "labeled",
+          trigger: parsedDecision.trigger,
+        };
+        return labeledResult;
+      }
+      if (resolvedDecision === "default") {
+        const defaultResult: GraphAgentResult = {
+          ...baseGraphAgentResult,
+          routingKind: "default",
+        };
+        return defaultResult;
+      }
+      const invalidResult: GraphAgentResult = {
+        ...baseGraphAgentResult,
+        routingKind: "invalid",
+      };
+      return invalidResult;
     } catch (error) {
+      const topology = this.store.getTopology(cwd);
+      const decisionAgent = resolveExecutionDecisionAgent({
+        state,
+        topology,
+        runtimeAgentId,
+        executableAgentId,
+      });
       this.store.updateTaskAgentStatus(task.cwd, task.id, runtimeAgentId, "failed");
       const failedMessage: MessageRecord = {
         id: randomUUID(),
@@ -1761,7 +1954,14 @@ export class Orchestrator {
 
       return {
         agentId: runtimeAgentId,
+        messageId: failedMessage.id,
         status: "failed",
+        decisionAgent,
+        routingKind: "invalid",
+        agentStatus: "failed",
+        agentContextContent: "",
+        opinion: "",
+        signalDone: false,
         errorMessage: error instanceof Error ? error.message : String(error),
       };
     }
@@ -1829,13 +2029,13 @@ export class Orchestrator {
     return new Date(nextMs).toISOString();
   }
 
-  private getOutgoingEdges(
+  private getOutgoingEdgesForTrigger(
     topology: TopologyRecord,
     sourceAgentId: string,
-    triggerOn: "transfer" | "complete" | "continue",
+    trigger: string,
   ) {
     return topology.edges.filter(
-      (edge) => edge.source === sourceAgentId && edge.triggerOn === triggerOn,
+      (edge) => edge.source === sourceAgentId && edge.trigger === trigger,
     );
   }
 
@@ -1843,14 +2043,13 @@ export class Orchestrator {
     topology: TopologyRecord,
     sourceAgentId: string,
     targetAgentId: string,
-    triggerOn: "transfer" | "complete" | "continue_request",
+    trigger: string,
   ) {
-    const normalizedTriggerOn = triggerOn === "continue_request" ? "continue" : triggerOn;
     const edge = topology.edges.find(
       (item) =>
         item.source === sourceAgentId
         && item.target === targetAgentId
-        && item.triggerOn === normalizedTriggerOn,
+        && item.trigger === trigger,
     );
     if (edge) {
       return edge.messageMode;
@@ -1862,7 +2061,7 @@ export class Orchestrator {
         (item) =>
           item.source === sourceAgentId
           && item.target === targetNode.templateName
-          && item.triggerOn === normalizedTriggerOn,
+          && item.trigger === trigger,
       );
       if (inheritedEdge) {
         return inheritedEdge.messageMode;
@@ -1870,7 +2069,7 @@ export class Orchestrator {
     }
 
     throw new Error(
-      `拓扑边不存在，无法解析 messageMode：${sourceAgentId} -> ${targetAgentId} (${normalizedTriggerOn})`,
+      `拓扑边不存在，无法解析 messageMode：${sourceAgentId} -> ${targetAgentId} (${trigger})`,
     );
   }
 

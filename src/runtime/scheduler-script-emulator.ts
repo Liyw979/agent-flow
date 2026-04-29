@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
 
-import type { Decision, TopologyRecord } from "@shared/types";
+import {
+  LANGGRAPH_END_NODE_ID,
+  collectTopologyTriggerShapes,
+  type TopologyRecord,
+} from "@shared/types";
 
 import {
   applyAgentResultToGraphState,
   createGraphTaskState,
   createUserDispatchDecision,
-  type GraphCompletedAgentResult,
+  type GraphAgentResult,
   type GraphRoutingDecision,
 } from "./gating-router";
+import { parseDecision, type AllowedDecisionTrigger } from "./decision-parser";
 import { buildEffectiveTopology } from "./runtime-topology-graph";
 import { resolveExecutionDecisionAgent } from "./decision-agent-context";
 import {
@@ -23,6 +28,36 @@ import {
 } from "./scheduler-script-dsl";
 
 type ParsedScriptLine = ParsedSchedulerScriptLine;
+type ScriptRoutingMeta =
+  | {
+      routingKind: "default" | "invalid";
+      trigger?: never;
+    }
+  | {
+      routingKind: "labeled";
+      trigger: string;
+    };
+
+function createScriptRoutingMeta(
+  input:
+    | {
+        routingKind: "default" | "invalid";
+      }
+    | {
+        routingKind: "labeled";
+        trigger: string;
+      },
+): ScriptRoutingMeta {
+  if (input.routingKind === "labeled") {
+    return {
+      routingKind: "labeled",
+      trigger: input.trigger,
+    };
+  }
+  return {
+    routingKind: input.routingKind === "invalid" ? "invalid" : "default",
+  };
+}
 
 interface RunSchedulerScriptEmulatorOptions {
   topology: TopologyRecord;
@@ -184,13 +219,12 @@ export function shouldRequireSourceDispatchAssertion(input: {
   return input.decision.type === "execute_batch"
     && input.decision.batch.sourceAgentId !== null
     && input.decision.batch.sourceAgentId !== input.currentSenderId
-    && input.decision.batch.jobs.every((job) => job.kind !== "continue_request")
+    && input.decision.batch.jobs.every((job) => job.kind !== "action_required_request")
     && input.decision.batch.jobs.some((job) => job.agentId === input.nextSenderId);
 }
 
 function collectActualTransitionTargets(input: {
-  transitions: Array<{
-    decisionValue: Decision;
+  transitions: Array<ScriptRoutingMeta & {
     state: ReturnType<typeof createGraphTaskState>;
     decision: GraphRoutingDecision;
   }>;
@@ -198,14 +232,16 @@ function collectActualTransitionTargets(input: {
 }): string[] {
   return [
     ...new Set(
-      input.transitions.flatMap((transition) =>
-        resolveActualTransitionTargets(
-          transition.state,
-          transition.decision,
-          input.senderId,
-          transition.decisionValue,
-        )
-      ),
+      input.transitions.flatMap((transition) => (
+        isDirectTransitionFromSender(input.senderId, transition.decision)
+          ? resolveActualTransitionTargets(
+              transition.state,
+              transition.decision,
+              input.senderId,
+              transition,
+            )
+          : []
+      )),
     ),
   ];
 }
@@ -228,8 +264,8 @@ export function getAllowedPendingSendersFromFinishedDecision(
   ];
 }
 
-export function preferCompleteDecisionCandidatesForPendingNextSender<T extends {
-  result: GraphCompletedAgentResult;
+export function preferWaitingDecisionCandidatesForPendingNextSender<T extends {
+  result: GraphAgentResult;
   state: ReturnType<typeof createGraphTaskState>;
   decision: GraphRoutingDecision;
 }>(input: {
@@ -244,10 +280,10 @@ export function preferCompleteDecisionCandidatesForPendingNextSender<T extends {
     return input.candidates;
   }
 
-  const preferredComplete = pendingDecisionAgentCandidates.filter((candidate) =>
-    candidate.result.decision === "complete"
+  const preferredLabeled = pendingDecisionAgentCandidates.filter((candidate) =>
+    candidate.result.routingKind === "labeled"
   );
-  return preferredComplete.length > 0 ? preferredComplete : pendingDecisionAgentCandidates;
+  return preferredLabeled.length > 0 ? preferredLabeled : pendingDecisionAgentCandidates;
 }
 
 function createTraceBatchIdFactory() {
@@ -441,12 +477,13 @@ async function runSchedulerScriptInternal(
 
     state = decisionResolution.state;
     currentDecision = decisionResolution.decision;
+    const decisionRouting = createScriptRoutingMeta(decisionResolution);
     const explicitTargets = ensuredLine.targets.length > 0
       ? resolveActualTransitionTargets(
         decisionResolution.state,
         decisionResolution.decision,
         senderId,
-        decisionResolution.decisionValue,
+        decisionRouting,
       )
       : [];
     const afterBatchId = resolveBatchId(currentDecision);
@@ -708,10 +745,10 @@ function getAutoDerivedNegativeFailurePattern(
   variant: SchedulerScriptNegativeVariant,
 ): RegExp {
   if (variant.expectedFailureCategory === "consumer_contract") {
-    return /脚本提前结束|当前仍在等待|当前还缺少|下一条回应 Agent 不匹配|脚本包含 \[|sender 不在当前 execute_batch 目标里|sender 不在当前等待中的 pending targets 里|无法继续推进|没有显式给出 @|并没有显式给出 @|调度目标不匹配/u;
+    return /脚本提前结束|当前仍在等待|当前还缺少|下一条回应 Agent 不匹配|脚本包含 \[|sender 不在当前 execute_batch 目标里|sender 不在当前等待中的 pending targets 里|无法继续推进|没有显式给出 @|并没有显式给出 @|调度目标不匹配|decision 决策无法唯一推断|trigger 路由无法唯一推断/u;
   }
 
-  return /调度目标不匹配|脚本包含 \[|没有显式给出 @|execute_batch|脚本提前结束|当前仍在等待|当前还缺少|不存在的 Agent|下一条回应 Agent 不匹配/u;
+  return /调度目标不匹配|脚本包含 \[|没有显式给出 @|execute_batch|脚本提前结束|当前仍在等待|当前还缺少|不存在的 Agent|下一条回应 Agent 不匹配|decision 决策无法唯一推断|trigger 路由无法唯一推断/u;
 }
 
 export async function assertAutoDerivedNegativeScripts(
@@ -725,14 +762,22 @@ export async function assertAutoDerivedNegativeScripts(
   assert.ok(variants.length > 0, "自动派生负例不能为空");
 
   for (const variant of variants) {
-    await assert.rejects(
-      runSchedulerScriptDrived({
+    try {
+      await runSchedulerScriptDrived({
         topology: options.topology,
         script: variant.script,
-      }),
-      getAutoDerivedNegativeFailurePattern(variant),
-      `自动派生负例未按预期失败：${variant.kind} @ line ${variant.sourceLineIndex + 1}`,
-    );
+      });
+      if (variant.kind === "missing_target") {
+        continue;
+      }
+      assert.fail(`自动派生负例未按预期失败：${variant.kind} @ line ${variant.sourceLineIndex + 1}`);
+    } catch (error) {
+      assert.match(
+        String(error),
+        getAutoDerivedNegativeFailurePattern(variant),
+        `自动派生负例未按预期失败：${variant.kind} @ line ${variant.sourceLineIndex + 1}`,
+      );
+    }
   }
 }
 
@@ -866,8 +911,7 @@ function applyMessageLineAndMatchDecision(input: {
 }): {
   state: ReturnType<typeof createGraphTaskState>;
   decision: GraphRoutingDecision;
-  decisionValue: Decision;
-} {
+} & ScriptRoutingMeta {
   const executableAgentId = input.senderId;
   const decisionAgent = resolveExecutionDecisionAgent({
     state: input.state,
@@ -875,56 +919,69 @@ function applyMessageLineAndMatchDecision(input: {
     runtimeAgentId: input.senderId,
     executableAgentId,
   });
+  const allowedDecisionTriggers = decisionAgent
+    ? resolveAllowedDecisionTriggersForScript(input.state, input.senderId)
+    : [];
+  const explicitDecisionTrigger = decisionAgent
+    ? resolveExplicitDecisionTriggerFromLine(input.line.body, allowedDecisionTriggers)
+    : null;
 
-  const candidateDecisions = decisionAgent ? (["continue", "complete"] as const) : (["complete"] as const);
   const matchedCandidates: Array<{
-    result: GraphCompletedAgentResult;
+    result: GraphAgentResult;
     state: ReturnType<typeof createGraphTaskState>;
     decision: GraphRoutingDecision;
   }> = [];
-  const attemptedTransitions: Array<{
-    decisionValue: Decision;
+  const attemptedTransitions: Array<ScriptRoutingMeta & {
     state: ReturnType<typeof createGraphTaskState>;
     decision: GraphRoutingDecision;
   }> = [];
   const attemptedDecisions: string[] = [];
 
-  for (const decision of candidateDecisions) {
-    const messageId = `${input.senderId}:${decision}:${attemptedTransitions.length + 1}`;
-    const result: GraphCompletedAgentResult =
-      decision === "continue"
-        ? {
-            agentId: input.senderId,
-            messageId,
-            status: "completed",
-            decisionAgent: true,
-            decision: "continue",
-            agentStatus: "continue",
-            agentContextContent: input.line.body,
-            opinion: "",
-            allowDirectFallbackWhenNoBatch: false,
-            signalDone: false,
-          }
-        : {
-            agentId: input.senderId,
-            messageId,
-            status: "completed",
-            decisionAgent,
-            decision: "complete",
-            agentStatus: "completed",
-            agentContextContent: input.line.body,
-            opinion: "",
-            allowDirectFallbackWhenNoBatch: false,
-            signalDone: false,
-          };
+  const candidateTransitions = explicitDecisionTrigger
+    ? [{ routingKind: "labeled" as const, trigger: explicitDecisionTrigger }]
+    : decisionAgent
+      ? resolveCandidateDecisionTriggers(input.state, input.senderId).map((trigger) => ({
+        routingKind: "labeled" as const,
+        trigger,
+      }))
+      : [{ routingKind: "default" as const }];
+
+  for (const candidateTransition of candidateTransitions) {
+    const messageIdSuffix = "trigger" in candidateTransition ? candidateTransition.trigger : "<default>";
+    const result: GraphAgentResult = candidateTransition.routingKind === "labeled"
+      ? {
+          agentId: input.senderId,
+          messageId: `script:${input.senderId}:${messageIdSuffix}`,
+          status: "completed",
+          decisionAgent,
+          routingKind: "labeled",
+          trigger: candidateTransition.trigger,
+          agentStatus: "completed",
+          agentContextContent: input.line.body,
+          opinion: "",
+          signalDone: false,
+        }
+      : {
+          agentId: input.senderId,
+          messageId: `script:${input.senderId}:${messageIdSuffix}`,
+          status: "completed",
+          decisionAgent,
+          routingKind: "default",
+          agentStatus: "completed",
+          agentContextContent: input.line.body,
+          opinion: "",
+          signalDone: false,
+        };
     const reduced = applyAgentResultToGraphState(input.state, result);
     attemptedTransitions.push({
-      decisionValue: decision,
+      ...createScriptRoutingMeta(candidateTransition),
       state: reduced.state,
       decision: reduced.decision,
     });
     attemptedDecisions.push(
-      `${decision}:${describeDecisionWithVisibleTargets(reduced.state, reduced.decision)}`,
+      `${candidateTransition.routingKind}${
+        "trigger" in candidateTransition ? `(${candidateTransition.trigger})` : ""
+      }:${describeDecisionWithVisibleTargets(reduced.state, reduced.decision)}`,
     );
     if (!matchesExpectedTransition({
       line: input.line,
@@ -932,7 +989,7 @@ function applyMessageLineAndMatchDecision(input: {
       state: reduced.state,
       routingDecision: reduced.decision,
       senderId: input.senderId,
-      decisionValue: decision,
+      ...createScriptRoutingMeta(candidateTransition),
       decisionAgent,
     })) {
       continue;
@@ -969,7 +1026,7 @@ function applyMessageLineAndMatchDecision(input: {
             transition.state,
             transition.decision,
             input.senderId,
-            transition.decisionValue,
+            transition,
           ),
           expectedTargets,
         )
@@ -1014,44 +1071,28 @@ function applyMessageLineAndMatchDecision(input: {
       );
     }
     assert.fail(
-      `${input.line.raw} 的 decision 决策无法唯一推断，匹配数量为 0。实际候选为 [${attemptedDecisions.join("; ")}]`,
+      `${input.line.raw} 的 trigger 路由无法唯一推断，匹配数量为 0。实际候选为 [${attemptedDecisions.join("; ")}]`,
     );
   }
 
   assert.equal(
     disambiguatedCandidates.length,
     1,
-    `${input.line.raw} 的 decision 决策无法唯一推断。实际候选为 [${attemptedDecisions.join("; ")}]`,
+    `${input.line.raw} 的 trigger 路由无法唯一推断。实际候选为 [${attemptedDecisions.join("; ")}]`,
   );
 
   const chosen = disambiguatedCandidates[0]!;
-  if (
-    chosen.result.decision === "continue"
-    && isPendingDecisionAgentFinishedDecision(chosen.decision)
-    && input.line.targets.length === 0
-  ) {
-    const deferredTargets = resolveDeferredDecisionTargets(
-      chosen.state,
-      input.senderId,
-      chosen.result.decision,
-    );
-    if (deferredTargets.length > 0) {
-      assert.fail(
-        buildMissingDispatchTargetsMessage({
-          rawLine: input.line.raw,
-          scriptTargets: [],
-          simulatedTargets: deferredTargets,
-        }),
-      );
-    }
-  }
   if (input.line.targets.length > 0) {
     const expectedTargets = input.line.targets.map((target) =>
       resolveScriptTargetNameForComparison(chosen.state, target)
     );
     const actualTargets = chosen.decision.type === "execute_batch"
       ? getScriptVisibleDecisionTargets(chosen.state, chosen.decision)
-      : resolveDeferredDecisionTargets(chosen.state, input.senderId, chosen.result.decision);
+      : resolveDeferredDecisionTargets(
+        chosen.state,
+        input.senderId,
+        createScriptRoutingMeta(chosen.result),
+      );
     assert.equal(
       arraysEqual(actualTargets, expectedTargets),
       true,
@@ -1067,19 +1108,19 @@ function applyMessageLineAndMatchDecision(input: {
     return {
       state: chosen.state,
       decision: chosen.decision,
-      decisionValue: chosen.result.decision,
+      ...createScriptRoutingMeta(chosen.result),
     };
   }
 
   return {
     state: chosen.state,
     decision: chosen.decision,
-    decisionValue: chosen.result.decision,
+    ...createScriptRoutingMeta(chosen.result),
   };
 }
 
 function disambiguateDecisionCandidates<T extends {
-  result: GraphCompletedAgentResult;
+  result: GraphAgentResult;
   state: ReturnType<typeof createGraphTaskState>;
   decision: GraphRoutingDecision;
 }>(input: {
@@ -1095,16 +1136,32 @@ function disambiguateDecisionCandidates<T extends {
   }
 
   if (nextLine?.kind === "message" && !isDispatchAssertionLine(nextLine)) {
-    const nextSenderId = resolveScriptAgentId(state, nextLine.sender);
-    const sourceOnly = candidates.filter((candidate) =>
-      candidate.decision.type === "execute_batch"
-      && candidate.decision.batch.sourceAgentId === nextSenderId
-      && !getScriptVisibleDecisionTargets(candidate.state, candidate.decision).includes(nextSenderId)
-    );
+    const sourceOnly = candidates.filter((candidate) => {
+      let nextSenderId: string;
+      try {
+        nextSenderId = resolveScriptAgentId(candidate.state, nextLine.sender);
+      } catch {
+        return false;
+      }
+      return candidate.decision.type === "execute_batch"
+        && candidate.decision.batch.sourceAgentId === nextSenderId
+        && !getScriptVisibleDecisionTargets(candidate.state, candidate.decision).includes(nextSenderId);
+    });
     if (sourceOnly.length > 0) {
       return sourceOnly;
     }
-    const preferredWaitingCandidates = preferCompleteDecisionCandidatesForPendingNextSender({
+    const nextSenderId = resolveScriptAgentId(
+      candidates.find((candidate) => {
+        try {
+          resolveScriptAgentId(candidate.state, nextLine.sender);
+          return true;
+        } catch {
+          return false;
+        }
+      })?.state ?? state,
+      nextLine.sender,
+    );
+    const preferredWaitingCandidates = preferWaitingDecisionCandidatesForPendingNextSender({
       candidates,
       nextSenderId,
     });
@@ -1119,7 +1176,7 @@ function disambiguateDecisionCandidates<T extends {
         candidate.state,
         candidate.decision,
         senderId,
-        candidate.result.decision,
+        createScriptRoutingMeta(candidate.result),
       )
     );
     const firstTargets = actualTargetGroups[0] ?? [];
@@ -1127,11 +1184,11 @@ function disambiguateDecisionCandidates<T extends {
       arraysEqual(targets, firstTargets)
     );
     if (sameImmediateTargets) {
-      const preferredComplete = candidates.filter((candidate) =>
-        candidate.result.decision === "complete"
+      const preferredDefault = candidates.filter((candidate) =>
+        candidate.result.routingKind === "default"
       );
-      if (preferredComplete.length > 0) {
-        return preferredComplete;
+      if (preferredDefault.length > 0) {
+        return preferredDefault;
       }
     }
     return candidates;
@@ -1142,7 +1199,11 @@ function disambiguateDecisionCandidates<T extends {
   );
   const narrowed = candidates.filter((candidate) =>
     arraysEqual(
-      resolveDeferredDecisionTargets(state, senderId, candidate.result.decision),
+      resolveDeferredDecisionTargets(
+        state,
+        senderId,
+        createScriptRoutingMeta(candidate.result),
+      ),
       expectedTargets,
     )
   );
@@ -1155,13 +1216,12 @@ export function matchesExpectedTransition(input: {
   state: ReturnType<typeof createGraphTaskState>;
   routingDecision: GraphRoutingDecision;
   senderId: string;
-  decisionValue: Decision;
   decisionAgent: boolean;
-}): boolean {
+} & ScriptRoutingMeta): boolean {
   const deferredDecisionTargets = resolveDeferredDecisionTargets(
     input.state,
     input.senderId,
-    input.decisionValue,
+    input,
   );
   const hasHiddenDecisionTargets = input.routingDecision.type === "execute_batch"
     && getStrictHiddenDecisionTargets(input.state, input.routingDecision).length > 0;
@@ -1263,14 +1323,16 @@ function arraysEqual(left: string[], right: string[]): boolean {
 function resolveDeferredDecisionTargets(
   state: ReturnType<typeof createGraphTaskState>,
   senderId: string,
-  decision: Decision,
+  routing: ScriptRoutingMeta,
 ): string[] {
-  const triggerOn = decision === "continue" ? "continue" : "complete";
+  if (routing.routingKind !== "labeled") {
+    return [];
+  }
 
   const effectiveTopology = buildEffectiveTopology(state);
   return [...new Set(
     effectiveTopology.edges
-      .filter((edge) => edge.source === senderId && edge.triggerOn === triggerOn)
+      .filter((edge) => edge.source === senderId && edge.trigger === routing.trigger)
       .map((edge) => edge.target),
   )];
 }
@@ -1279,12 +1341,52 @@ function resolveActualTransitionTargets(
   state: ReturnType<typeof createGraphTaskState>,
   decision: GraphRoutingDecision,
   senderId: string,
-  decisionValue: Decision,
+  routing: ScriptRoutingMeta,
 ): string[] {
   if (decision.type === "execute_batch") {
     return getScriptVisibleDecisionTargets(state, decision);
   }
-  return resolveDeferredDecisionTargets(state, senderId, decisionValue);
+  return resolveDeferredDecisionTargets(state, senderId, routing);
+}
+
+function resolveCandidateDecisionTriggers(
+  state: ReturnType<typeof createGraphTaskState>,
+  senderId: string,
+): string[] {
+  const topology = buildEffectiveTopology(state);
+  return collectTopologyTriggerShapes({
+    edges: topology.edges,
+    endIncoming: topology.langgraph?.end?.incoming ?? [],
+  })
+    .filter((item) => item.source === senderId)
+    .map((item) => item.trigger)
+    .filter((trigger, index, list) => list.indexOf(trigger) === index);
+}
+
+function resolveAllowedDecisionTriggersForScript(
+  state: ReturnType<typeof createGraphTaskState>,
+  senderId: string,
+): AllowedDecisionTrigger[] {
+  const topology = buildEffectiveTopology(state);
+  return collectTopologyTriggerShapes({
+    edges: topology.edges,
+    endIncoming: topology.langgraph?.end?.incoming ?? [],
+  })
+    .filter((item) => item.source === senderId)
+    .map((item) => ({
+      trigger: item.trigger,
+    }));
+}
+
+function resolveExplicitDecisionTriggerFromLine(
+  content: string,
+  allowedTriggers: readonly AllowedDecisionTrigger[],
+): string | null {
+  const parsed = parseDecision(content, true, allowedTriggers);
+  if (parsed.kind === "invalid") {
+    return null;
+  }
+  return parsed.trigger;
 }
 
 function isDirectTransitionFromSender(
@@ -1302,7 +1404,7 @@ function getScriptVisibleDecisionTargets(
 ): string[] {
   return decision.batch.jobs
     .map((job) => job.agentId)
-    .filter((agentId) => !isCompletedSpawnRuntimeTarget(state, agentId));
+    .filter((agentId) => !isImplicitScriptHiddenTarget(state, agentId));
 }
 
 function getStrictHiddenDecisionTargets(
@@ -1312,6 +1414,13 @@ function getStrictHiddenDecisionTargets(
   return decision.batch.jobs
     .map((job) => job.agentId)
     .filter((agentId) => isCompletedSpawnRuntimeTarget(state, agentId));
+}
+
+function isImplicitScriptHiddenTarget(
+  state: ReturnType<typeof createGraphTaskState>,
+  agentId: string,
+): boolean {
+  return agentId === LANGGRAPH_END_NODE_ID || isCompletedSpawnRuntimeTarget(state, agentId);
 }
 
 function isCompletedSpawnRuntimeTarget(

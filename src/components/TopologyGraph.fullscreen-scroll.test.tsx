@@ -29,10 +29,10 @@ function createAgentFinalMessage(input: {
     content: input.content,
     timestamp: input.timestamp,
     kind: "agent-final",
-    decision: "complete",
-    decisionNote: "",
-    rawResponse: input.content,
     status: "completed",
+    routingKind: "default",
+    responseNote: "",
+    rawResponse: input.content,
   };
 }
 
@@ -71,6 +71,7 @@ const workspace: WorkspaceSnapshot = {
     {
       id: AGENT_ID,
       prompt: "负责提交构建结果。",
+      isWritable: true,
     },
   ],
   topology,

@@ -1,11 +1,12 @@
-import {
-  DECISION_COMPLETE_LABEL,
-  DECISION_CONTINUE_LABEL,
-} from "../shared/decision-response";
+export function buildAgentSystemPrompt(allowedTriggers: readonly string[]): string {
+  const normalizedTriggers = [...new Set(allowedTriggers.map((item) => item.trim()).filter(Boolean))];
+  if (normalizedTriggers.length === 0) {
+    throw new Error("decisionAgent 缺少可用 trigger，无法构造系统提示词。");
+  }
 
-export function buildAgentSystemPrompt(): string {
-  return `
-      回复必须以<xxx>标签开头
-      如果当前分支还需要继续处理，请使用${DECISION_CONTINUE_LABEL}\n你的建议、挑战或补充。
-      如果当前分支已经完成判定，请使用${DECISION_COMPLETE_LABEL}\n你的结束结论。`;
+  return [
+    "回复必须使用当前允许的 trigger 之一作为标签。",
+    `允许的 trigger：${normalizedTriggers.join(" / ")}`,
+    "先输出 trigger 标签，再输出正文。",
+  ].join("\n");
 }

@@ -9,21 +9,38 @@ function createAgentFinalMessage(input: {
   sender: string;
   timestamp: string;
   content: string;
-  decision?: "complete" | "continue";
-  status?: "completed";
-}): MessageRecord {
-  return {
+  status?: "completed" | "error";
+} & (
+  | {
+      routingKind: "default" | "invalid";
+      trigger?: never;
+    }
+  | {
+      routingKind: "labeled";
+      trigger: string;
+    }
+)): MessageRecord {
+  const base = {
     id: input.id,
     taskId: "task-1",
     sender: input.sender,
     timestamp: input.timestamp,
     content: input.content,
-    kind: "agent-final",
+    kind: "agent-final" as const,
     status: input.status ?? "completed",
-    decision: input.decision ?? "complete",
-    decisionNote: "",
+    responseNote: "",
     rawResponse: input.content,
   };
+  return input.routingKind === "labeled"
+    ? {
+        ...base,
+        routingKind: "labeled" as const,
+        trigger: input.trigger,
+      }
+    : {
+        ...base,
+        routingKind: input.routingKind,
+      };
 }
 
 function createTaskRoundFinishedMessage(input: {
@@ -86,6 +103,8 @@ test("task-round-finished 与更晚的 agent-final 必须纠正滞后的 task/ag
       sender: "CodeReview",
       timestamp: "2026-04-21T03:48:00.819Z",
       content: "<complete>通过</complete>",
+      routingKind: "labeled",
+      trigger: "<complete>",
     }),
     createTaskRoundFinishedMessage({
       id: "message-2",
@@ -156,7 +175,7 @@ test("旧的 task-round-finished 后面出现新的用户消息时，补偿逻�
   assert.equal(reconciled.task.completedAt, null);
 });
 
-test("reconcileTaskSnapshotFromMessages 在 agents 缺失时不会抛出 input.agents.map", () => {
+test("reconcileTaskSnapshotFromMessages 在 agents 为空数组时不会抛出 input.agents.map", () => {
   const task: TaskRecord = {
     id: "task-1",
     title: "demo",
@@ -172,7 +191,7 @@ test("reconcileTaskSnapshotFromMessages 在 agents 缺失时不会抛出 input.a
   assert.doesNotThrow(() =>
     reconcileTaskSnapshotFromMessages({
       task,
-      agents: undefined as unknown as TaskAgentRecord[],
+      agents: [],
       messages: [],
     }),
   );

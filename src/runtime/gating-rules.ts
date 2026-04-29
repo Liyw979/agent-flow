@@ -1,23 +1,15 @@
-import type { AgentStatus, Decision } from "@shared/types";
+import type { AgentRoutingKind, AgentStatus } from "@shared/types";
+import type { GatingBatchContinuation, GatingRepairBatchContinuation } from "./gating-scheduler";
 
 type ActionRequiredRequestContinuationInput = {
-  continuation: {
-    pendingTargets: string[];
-    repairDecisionAgentId: string | null;
-    redispatchTargets: string[];
-  } | null;
-  fallbackActionWhenNoBatch?: Extract<
-    ActionRequiredRequestContinuationAction,
-    "ignore" | "trigger_fallback_decision"
-  >;
+  continuation: GatingBatchContinuation | GatingRepairBatchContinuation | null;
 };
 
 type ActionRequiredRequestContinuationAction =
   | "ignore"
   | "wait_pending_decision_agents"
   | "trigger_repair_decision"
-  | "redispatch_decision_agents"
-  | "trigger_fallback_decision";
+  | "redispatch_decision_agents";
 
 export function shouldStopTaskForUnhandledActionRequiredRequest(input: {
   completeTaskOnFinish: boolean;
@@ -30,15 +22,17 @@ export function shouldStopTaskForUnhandledActionRequiredRequest(input: {
   return input.continuationAction === "ignore";
 }
 
-export function resolveAgentStatusFromDecision(input: {
-  decision: Decision;
+export function resolveAgentStatusFromRouting(input: {
+  routingKind: AgentRoutingKind;
   decisionAgent: boolean;
-}): Extract<AgentStatus, "completed" | "continue"> {
-  if (input.decision === "continue") {
-    if (!input.decisionAgent) {
-      throw new Error("非判定 Agent 不应返回 continue");
-    }
-    return "continue";
+  enteredActionRequired: boolean;
+}): AgentStatus {
+  if (input.routingKind === "invalid") {
+    return "failed";
+  }
+
+  if (input.enteredActionRequired) {
+    return input.decisionAgent ? "action_required" : "failed";
   }
 
   return "completed";
@@ -48,20 +42,17 @@ export function resolveActionRequiredRequestContinuationAction(
   input: ActionRequiredRequestContinuationInput,
 ): ActionRequiredRequestContinuationAction {
   if (!input.continuation) {
-    return input.fallbackActionWhenNoBatch ?? "ignore";
+    return "ignore";
   }
 
-  if (input.continuation.pendingTargets.length > 0) {
-    return "wait_pending_decision_agents";
+  switch (input.continuation.kind) {
+    case "pending_targets":
+      return "wait_pending_decision_agents";
+    case "repair":
+      return "trigger_repair_decision";
+    case "redispatch":
+      return "redispatch_decision_agents";
+    case "settled":
+      return "ignore";
   }
-
-  if (input.continuation.repairDecisionAgentId) {
-    return "trigger_repair_decision";
-  }
-
-  if (input.continuation.redispatchTargets.length > 0) {
-    return "redispatch_decision_agents";
-  }
-
-  return "ignore";
 }
