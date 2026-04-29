@@ -87,6 +87,78 @@ function getFinalRawMessageFromMergedMessage(message: ChatMessageItem): MessageR
   return null;
 }
 
+function getRuntimeExecutionStartedAtHint(runtimeSnapshot: AgentRuntimeSnapshot): string {
+  const timestamps = [
+    runtimeSnapshot.updatedAt ?? "",
+    ...runtimeSnapshot.activities.map((activity) => activity.timestamp),
+  ].filter((timestamp) => timestamp.length > 0);
+
+  if (timestamps.length === 0) {
+    return "";
+  }
+
+  return timestamps.reduce((earliest, current) => (current < earliest ? current : earliest));
+}
+
+function resolveRuntimeOnlyExecutionAnchor(
+  mergedMessages: ChatMessageItem[],
+  startedAtHint: string,
+): {
+  anchorMessageId: string;
+  anchorTimestamp: string;
+} | null {
+  if (mergedMessages.length === 0) {
+    return null;
+  }
+
+  const anchorMessage = [...mergedMessages]
+    .reverse()
+    .find((message) => startedAtHint.length === 0 || message.timestamp <= startedAtHint)
+    ?? mergedMessages.at(-1)
+    ?? null;
+  if (!anchorMessage) {
+    return null;
+  }
+
+  return {
+    anchorMessageId: anchorMessage.id,
+    anchorTimestamp: anchorMessage.timestamp,
+  };
+}
+
+function buildRuntimeOnlyExecutionWindows(input: {
+  mergedMessages: ChatMessageItem[];
+  runtimeSnapshots: Record<string, AgentRuntimeSnapshot>;
+  visibleWindows: ChatExecutionWindow[];
+}): ChatExecutionWindow[] {
+  const visibleRunningAgentIds = new Set(
+    input.visibleWindows
+      .filter((window) => !window.finalMessageId)
+      .map((window) => window.agentId),
+  );
+
+  return Object.entries(input.runtimeSnapshots)
+    .filter(([, runtimeSnapshot]) => runtimeSnapshot.runtimeStatus === "running")
+    .filter(([agentId]) => !visibleRunningAgentIds.has(agentId))
+    .flatMap(([agentId, runtimeSnapshot]) => {
+      const startedAtHint = getRuntimeExecutionStartedAtHint(runtimeSnapshot);
+      const anchor = resolveRuntimeOnlyExecutionAnchor(input.mergedMessages, startedAtHint);
+      if (!anchor) {
+        return [];
+      }
+
+      return [{
+        id: `runtime:${agentId}:${runtimeSnapshot.sessionId ?? "no-session"}:${runtimeSnapshot.updatedAt ?? "no-update"}`,
+        agentId,
+        anchorMessageId: anchor.anchorMessageId,
+        triggerMessageId: "",
+        startedAt: startedAtHint && startedAtHint > anchor.anchorTimestamp
+          ? startedAtHint
+          : anchor.anchorTimestamp,
+      }];
+    });
+}
+
 export function buildChatExecutionWindows(
   messages: MessageRecord[],
   mergedMessages: ChatMessageItem[],
@@ -154,7 +226,15 @@ export function buildChatFeedItems(input: {
 }): ChatFeedItem[] {
   const orderedMessages = [...input.messages].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
   const mergedMessages = mergeTaskChatMessages(orderedMessages);
-  const executionWindows = buildChatExecutionWindows(orderedMessages, mergedMessages);
+  const visibleExecutionWindows = buildChatExecutionWindows(orderedMessages, mergedMessages);
+  const executionWindows = [
+    ...visibleExecutionWindows,
+    ...buildRuntimeOnlyExecutionWindows({
+      mergedMessages,
+      runtimeSnapshots: input.runtimeSnapshots,
+      visibleWindows: visibleExecutionWindows,
+    }),
+  ];
   const absorbedMergedMessageIds = new Set(
     executionWindows
       .map((window) => window.finalMessageId)

@@ -1,13 +1,13 @@
 import type { UiSnapshotPayload } from "@shared/types";
 
-export interface UiSnapshotRefreshAcceptanceInput {
+interface UiSnapshotRefreshAcceptanceInput {
   latestAcceptedRequestId: number;
   latestAcceptedPayload: UiSnapshotPayload | null;
   requestId: number;
   payload: UiSnapshotPayload;
 }
 
-export interface UiSnapshotRefreshAcceptance {
+interface UiSnapshotRefreshAcceptance {
   accepted: boolean;
   latestAcceptedRequestId: number;
   payload: UiSnapshotPayload | null;
@@ -32,10 +32,10 @@ function isTerminalTaskStatus(status: string) {
 }
 
 function isSemanticallyOlderUiSnapshot(
-  baseline: UiSnapshotPayload | null,
+  baseline: UiSnapshotPayload,
   candidate: UiSnapshotPayload,
 ) {
-  const baselineTask = baseline?.task;
+  const baselineTask = baseline.task;
   const candidateTask = candidate.task;
 
   if (!baselineTask) {
@@ -85,15 +85,99 @@ function isSemanticallyOlderUiSnapshot(
     ) {
       return true;
     }
+
+    const baselineSessionId = baselineAgent.opencodeSessionId ?? "";
+    const candidateSessionId = candidateAgent.opencodeSessionId ?? "";
+    if (baselineSessionId.trim().length > 0 && candidateSessionId.trim().length === 0) {
+      return true;
+    }
+
+    const baselineAttachBaseUrl = baselineAgent.opencodeAttachBaseUrl ?? "";
+    const candidateAttachBaseUrl = candidateAgent.opencodeAttachBaseUrl ?? "";
+    if (baselineAttachBaseUrl.trim().length > 0 && candidateAttachBaseUrl.trim().length === 0) {
+      return true;
+    }
   }
 
   return false;
 }
 
+function isSemanticallyNewerUiSnapshot(
+  baseline: UiSnapshotPayload,
+  candidate: UiSnapshotPayload,
+) {
+  const baselineTask = baseline.task;
+  const candidateTask = candidate.task;
+
+  if (!baselineTask || !candidateTask || baselineTask.task.id !== candidateTask.task.id) {
+    return false;
+  }
+
+  const baselineAgents = new Map(baselineTask.agents.map((agent) => [agent.id, agent]));
+  for (const candidateAgent of candidateTask.agents) {
+    const baselineAgent = baselineAgents.get(candidateAgent.id);
+    if (!baselineAgent) {
+      return true;
+    }
+
+    if (candidateAgent.runCount > baselineAgent.runCount) {
+      return true;
+    }
+
+    if (
+      candidateAgent.runCount === baselineAgent.runCount
+      && getAgentProgressRank(candidateAgent.status) > getAgentProgressRank(baselineAgent.status)
+    ) {
+      return true;
+    }
+
+    const baselineSessionId = baselineAgent.opencodeSessionId ?? "";
+    const candidateSessionId = candidateAgent.opencodeSessionId ?? "";
+    if (baselineSessionId.trim().length === 0 && candidateSessionId.trim().length > 0) {
+      return true;
+    }
+
+    const baselineAttachBaseUrl = baselineAgent.opencodeAttachBaseUrl ?? "";
+    const candidateAttachBaseUrl = candidateAgent.opencodeAttachBaseUrl ?? "";
+    if (baselineAttachBaseUrl.trim().length === 0 && candidateAttachBaseUrl.trim().length > 0) {
+      return true;
+    }
+  }
+
+  return candidateTask.messages.length > baselineTask.messages.length;
+}
+
 export function decideUiSnapshotRefreshAcceptance(
   input: UiSnapshotRefreshAcceptanceInput,
 ): UiSnapshotRefreshAcceptance {
-  if (input.requestId <= input.latestAcceptedRequestId) {
+  if (!input.latestAcceptedPayload) {
+    return {
+      accepted: true,
+      latestAcceptedRequestId: input.requestId,
+      payload: input.payload,
+    };
+  }
+
+  if (input.requestId < input.latestAcceptedRequestId) {
+    if (
+      isSemanticallyNewerUiSnapshot(input.latestAcceptedPayload, input.payload)
+      && !isSemanticallyOlderUiSnapshot(input.latestAcceptedPayload, input.payload)
+    ) {
+      return {
+        accepted: true,
+        latestAcceptedRequestId: input.latestAcceptedRequestId,
+        payload: input.payload,
+      };
+    }
+
+    return {
+      accepted: false,
+      latestAcceptedRequestId: input.latestAcceptedRequestId,
+      payload: null,
+    };
+  }
+
+  if (input.requestId === input.latestAcceptedRequestId) {
     return {
       accepted: false,
       latestAcceptedRequestId: input.latestAcceptedRequestId,
