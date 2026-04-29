@@ -1,4 +1,4 @@
-export type AttachSessionState =
+type AttachSessionState =
   | {
       kind: "present";
       sessionId: string;
