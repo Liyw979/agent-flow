@@ -127,19 +127,34 @@ function resolveRuntimeOnlyExecutionAnchor(
 }
 
 function buildRuntimeOnlyExecutionWindows(input: {
+  topology: Pick<TopologyRecord, "nodes">;
   mergedMessages: ChatMessageItem[];
   runtimeSnapshots: Record<string, AgentRuntimeSnapshot>;
   visibleWindows: ChatExecutionWindow[];
 }): ChatExecutionWindow[] {
+  const staticTopologyAgentIds = new Set(input.topology.nodes);
   const visibleRunningAgentIds = new Set(
     input.visibleWindows
       .filter((window) => !window.finalMessageId)
       .map((window) => window.agentId),
   );
+  const completedAgentIds = new Set(
+    input.visibleWindows
+      .filter((window) => Boolean(window.finalMessageId))
+      .map((window) => window.agentId),
+  );
+  for (const mergedMessage of input.mergedMessages) {
+    const finalRawMessage = getFinalRawMessageFromMergedMessage(mergedMessage);
+    if (finalRawMessage) {
+      completedAgentIds.add(finalRawMessage.sender);
+    }
+  }
 
   return Object.entries(input.runtimeSnapshots)
     .filter(([, runtimeSnapshot]) => runtimeSnapshot.runtimeStatus === "running")
+    .filter(([agentId]) => !staticTopologyAgentIds.has(agentId))
     .filter(([agentId]) => !visibleRunningAgentIds.has(agentId))
+    .filter(([agentId]) => !completedAgentIds.has(agentId))
     .flatMap(([agentId, runtimeSnapshot]) => {
       const startedAtHint = getRuntimeExecutionStartedAtHint(runtimeSnapshot);
       const anchor = resolveRuntimeOnlyExecutionAnchor(input.mergedMessages, startedAtHint);
@@ -221,7 +236,7 @@ export function buildChatExecutionWindows(
 
 export function buildChatFeedItems(input: {
   messages: MessageRecord[];
-  topology: Pick<TopologyRecord, "edges">;
+  topology: Pick<TopologyRecord, "edges" | "nodes">;
   runtimeSnapshots: Record<string, AgentRuntimeSnapshot>;
 }): ChatFeedItem[] {
   const orderedMessages = [...input.messages].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
@@ -230,6 +245,7 @@ export function buildChatFeedItems(input: {
   const executionWindows = [
     ...visibleExecutionWindows,
     ...buildRuntimeOnlyExecutionWindows({
+      topology: input.topology,
       mergedMessages,
       runtimeSnapshots: input.runtimeSnapshots,
       visibleWindows: visibleExecutionWindows,

@@ -353,6 +353,106 @@ test("buildChatFeedItems 会为只有 runtime snapshot 的 spawn agent 补出运
   );
 });
 
+test("buildChatFeedItems 不会为静态拓扑里的普通 agent 凭 runtime snapshot 额外补执行气泡", () => {
+  const messages = [
+    createMessage({
+      id: "build-final",
+      sender: "Build",
+      kind: "agent-final",
+      content: "已经开始处理。",
+      timestamp: "2026-04-29T10:01:00.000Z",
+    }),
+  ];
+  const runtimeSnapshot: AgentRuntimeSnapshot = {
+    taskId: "task-id",
+    agentId: "Build",
+    sessionId: "session-build",
+    status: "running",
+    runtimeStatus: "running",
+    messageCount: 1,
+    updatedAt: "2026-04-29T10:01:01.000Z",
+    headline: "Build 正在处理",
+    activeToolNames: [],
+    activities: [
+      {
+        id: "build-thinking",
+        kind: "thinking",
+        label: "思考",
+        detail: "Build 正在继续处理",
+        timestamp: "2026-04-29T10:01:01.000Z",
+      },
+    ],
+  };
+
+  const feedItems = buildChatFeedItems({
+    messages,
+    topology,
+    runtimeSnapshots: {
+      Build: runtimeSnapshot,
+    },
+  });
+
+  assert.deepEqual(
+    feedItems.map((item) =>
+      item.type === "message"
+        ? { type: item.type, sender: item.message.sender }
+        : { type: item.type, state: item.state, agentId: item.agentId }),
+    [
+      { type: "message", sender: "Build" },
+    ],
+  );
+});
+
+test("buildChatFeedItems 遇到已存在完成态消息的 spawn agent 时，不会再补伪造的运行中执行气泡", () => {
+  const messages = [
+    createMessage({
+      id: "challenge-final",
+      sender: "漏洞挑战-1",
+      kind: "agent-final",
+      content: "当前质疑已经完成。",
+      timestamp: "2026-04-29T10:02:00.000Z",
+    }),
+  ];
+  const runtimeSnapshot: AgentRuntimeSnapshot = {
+    taskId: "task-id",
+    agentId: "漏洞挑战-1",
+    sessionId: "session-challenge-1",
+    status: "running",
+    runtimeStatus: "running",
+    messageCount: 1,
+    updatedAt: "2026-04-29T10:02:01.000Z",
+    headline: "漏洞挑战-1 正在处理",
+    activeToolNames: [],
+    activities: [
+      {
+        id: "challenge-thinking",
+        kind: "thinking",
+        label: "思考",
+        detail: "这条 activity 已经滞后于聊天最终消息",
+        timestamp: "2026-04-29T10:02:01.000Z",
+      },
+    ],
+  };
+
+  const feedItems = buildChatFeedItems({
+    messages,
+    topology,
+    runtimeSnapshots: {
+      "漏洞挑战-1": runtimeSnapshot,
+    },
+  });
+
+  assert.deepEqual(
+    feedItems.map((item) =>
+      item.type === "message"
+        ? { type: item.type, sender: item.message.sender }
+        : { type: item.type, state: item.state, agentId: item.agentId }),
+    [
+      { type: "message", sender: "漏洞挑战-1" },
+    ],
+  );
+});
+
 test("buildChatFeedItems 运行中只会携带本轮执行窗口内的历史记录", () => {
   const runtimeSnapshot: AgentRuntimeSnapshot = {
     taskId: "task-id",
