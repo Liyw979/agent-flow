@@ -7,6 +7,7 @@ import type {
   TaskStatus,
   TopologyRecord,
 } from "@shared/types";
+import { getTopologyNodeRecords } from "@shared/types";
 
 export interface GraphActionRequiredRequest {
   sourceMessageId: string;
@@ -136,9 +137,7 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
           },
         }
       : {}),
-    ...(state.topology.nodeRecords
-      ? { nodeRecords: state.topology.nodeRecords.map((node) => ({ ...node })) }
-      : {}),
+    nodeRecords: getTopologyNodeRecords(state.topology).map((node) => ({ ...node })),
     ...(state.topology.spawnRules
       ? {
           spawnRules: state.topology.spawnRules.map((rule) => ({

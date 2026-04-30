@@ -9,14 +9,14 @@ function createVulnTopology(): TopologyRecord {
   return {
     nodes: ["线索发现", "漏洞论证模板", "漏洞挑战模板", "Summary模板"],
     nodeRecords: [
-      { id: "线索发现", kind: "agent", templateName: "线索发现" },
-      { id: "漏洞论证模板", kind: "agent", templateName: "漏洞论证模板" },
-      { id: "漏洞挑战模板", kind: "agent", templateName: "漏洞挑战模板" },
-      { id: "Summary模板", kind: "agent", templateName: "Summary模板" },
-      { id: "疑点辩论工厂", kind: "spawn", templateName: "漏洞论证模板", spawnRuleId: "finding-debate" },
+      { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
+      { id: "漏洞论证模板", kind: "agent", templateName: "漏洞论证模板", initialMessageRouting: { mode: "inherit" } },
+      { id: "漏洞挑战模板", kind: "agent", templateName: "漏洞挑战模板", initialMessageRouting: { mode: "inherit" } },
+      { id: "Summary模板", kind: "agent", templateName: "Summary模板", initialMessageRouting: { mode: "inherit" } },
+      { id: "疑点辩论工厂", kind: "spawn", templateName: "漏洞论证模板", spawnRuleId: "finding-debate", initialMessageRouting: { mode: "inherit" } },
     ],
     edges: [
-      { source: "线索发现", target: "疑点辩论工厂", trigger: "<default>", messageMode: "last-all" },
+      { source: "线索发现", target: "疑点辩论工厂", trigger: "<default>", messageMode: "last" },
       { source: "疑点辩论工厂", target: "线索发现", trigger: "<default>", messageMode: "none" },
     ],
     spawnRules: [
@@ -80,7 +80,7 @@ test("instantiateSpawnBundle 会为一个 finding 生成论证、挑战、summar
   );
   assert.deepEqual(bundle.edges, [
     {
-      messageMode: "last-all",
+      messageMode: "last",
       source: "线索发现",
       target: "漏洞论证模板-1",
       trigger: "<default>",
@@ -135,7 +135,7 @@ test("instantiateSpawnBundle 会继承 source -> spawn 的 messageMode 到 entry
     source: "线索发现",
     target: "漏洞论证模板-1",
     trigger: "<default>",
-    messageMode: "last-all",
+    messageMode: "last",
   });
 });
 
@@ -228,8 +228,8 @@ test("instantiateSpawnBundle 识别 source 节点时不会误把 spawn 节点当
     topology: {
       ...topology,
       nodeRecords: [
-        { id: "疑点辩论工厂", kind: "spawn", templateName: "漏洞论证模板", spawnRuleId: "finding-debate" },
-        ...(topology.nodeRecords ?? []).filter((node) => node.id !== "疑点辩论工厂"),
+        { id: "疑点辩论工厂", kind: "spawn", templateName: "漏洞论证模板", spawnRuleId: "finding-debate", initialMessageRouting: { mode: "inherit" } },
+        ...topology.nodeRecords.filter((node) => node.id !== "疑点辩论工厂"),
       ],
     },
     spawnRuleId: "finding-debate",
@@ -244,7 +244,7 @@ test("instantiateSpawnBundle 识别 source 节点时不会误把 spawn 节点当
     source: "线索发现",
     target: "漏洞论证模板-1",
     trigger: "<default>",
-    messageMode: "last-all",
+    messageMode: "last",
   });
 });
 

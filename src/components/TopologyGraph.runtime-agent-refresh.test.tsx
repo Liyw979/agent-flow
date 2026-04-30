@@ -14,9 +14,9 @@ const topology: TopologyRecord = {
   nodes: ["线索发现", "漏洞挑战"],
   edges: [],
   nodeRecords: [
-    { id: "线索发现", kind: "agent", templateName: "线索发现" },
-    { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战" },
-    { id: "疑点辩论", kind: "spawn", templateName: "漏洞挑战", spawnRuleId: "spawn-rule:疑点辩论" },
+    { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
+    { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战", initialMessageRouting: { mode: "inherit" } },
+    { id: "疑点辩论", kind: "spawn", templateName: "漏洞挑战", spawnRuleId: "spawn-rule:疑点辩论", initialMessageRouting: { mode: "inherit" } },
   ],
   spawnRules: [
     {

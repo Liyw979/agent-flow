@@ -5,7 +5,11 @@ import {
   decideUiSnapshotRefreshAcceptance,
   isSemanticallyNewerUiSnapshot,
 } from "./ui-snapshot-refresh-gate";
-import type { MessageRecord, UiSnapshotPayload } from "@shared/types";
+import {
+  buildTopologyNodeRecords,
+  type MessageRecord,
+  type UiSnapshotPayload,
+} from "@shared/types";
 
 function createSystemMessage(id: string, sender: "system" | "BA", content: string, timestamp: string): MessageRecord {
   if (sender === "system") {
@@ -106,6 +110,16 @@ function createUiSnapshotPayload(input: {
       topology: {
         nodes: ["BA", "Build", "UnitTest"],
         edges: [],
+        nodeRecords: buildTopologyNodeRecords({
+          nodes: ["BA", "Build", "UnitTest"],
+          spawnNodeIds: new Set(),
+          templateNameByNodeId: new Map(),
+          initialMessageRoutingByNodeId: new Map(),
+          spawnRuleIdByNodeId: new Map(),
+          spawnEnabledNodeIds: new Set(),
+          promptByNodeId: new Map(),
+          writableNodeIds: new Set(),
+        }),
       },
     },
   };

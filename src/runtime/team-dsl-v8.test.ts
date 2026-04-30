@@ -12,7 +12,7 @@ test("compileTeamDsl 支持 v8 递归式图 DSL，并保留 spawn 子图定义",
       source: "线索发现",
       target: "疑点辩论",
       trigger: "<continue>",
-      messageMode: "last-all",
+      messageMode: "last",
       maxTriggerRounds: 999,
     },
     {
@@ -36,4 +36,13 @@ test("compileTeamDsl 支持 v8 递归式图 DSL，并保留 spawn 子图定义",
     { role: "漏洞论证", templateName: "漏洞论证" },
     { role: "讨论总结", templateName: "讨论总结" },
   ]);
+  const summaryNode = compiled.topology.nodeRecords.find((node) => node.id === "讨论总结");
+  assert.ok(summaryNode);
+  assert.equal(summaryNode.kind, "agent");
+  assert.equal(summaryNode.templateName, "讨论总结");
+  assert.deepEqual(summaryNode.initialMessageRouting, {
+    mode: "list",
+    agentIds: ["漏洞论证", "漏洞挑战"],
+  });
+  assert.equal(summaryNode.writable, true);
 });

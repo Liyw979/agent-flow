@@ -39,8 +39,8 @@ test("extractDslAgentsFromTopology 不会把未显式配置 writable 的 Build �
     nodes: ["Build", "BA"],
     edges: [{ source: "BA", target: "Build", trigger: "<default>", messageMode: "last" }],
     nodeRecords: [
-      { id: "Build", kind: "agent", templateName: "Build" },
-      { id: "BA", kind: "agent", templateName: "BA", prompt: "你是 BA。" },
+      { id: "Build", kind: "agent", templateName: "Build", initialMessageRouting: { mode: "inherit" } },
+      { id: "BA", kind: "agent", templateName: "BA", prompt: "你是 BA。", initialMessageRouting: { mode: "inherit" } },
     ],
   });
 

@@ -66,6 +66,7 @@ finding格式要求:\
           {
             "type": "agent",
             "id": "讨论总结",
+            "initialMessage": ["漏洞论证", "漏洞挑战"],
             "prompt": "综合各个 Agent 的讨论内容，对当前 finding 是否属于可能导致安全问题做出结论，不要从实际运行、实际影响的角度，须先阅读当前项目代码，确认结论依赖的关键文件、函数、调用链、保护条件、输入约束与执行路径，已经被代码事实支撑。\
 须在当前代码仓的 `result/<章节>_<finding>_<结论>.md` 目录下写入讨论总结文件，再同步输出总结正文。\
 每个讨论单独一个文件；当前讨论必须新建新文件，不得覆盖、追加或复用已有讨论总结文件。\
@@ -112,8 +113,8 @@ finding格式要求:\
         "links": [
           { "from": "漏洞论证", "to": "漏洞挑战", "trigger": "<continue>", "message_type": "last", "maxTriggerRounds": 4 },
           { "from": "漏洞挑战", "to": "漏洞论证", "trigger": "<continue>", "message_type": "last", "maxTriggerRounds": 4 },
-          { "from": "漏洞论证", "to": "讨论总结", "trigger": "<complete>", "message_type": "last-all" },
-          { "from": "漏洞挑战", "to": "讨论总结", "trigger": "<complete>", "message_type": "last-all" },
+          { "from": "漏洞论证", "to": "讨论总结", "trigger": "<complete>", "message_type": "last" },
+          { "from": "漏洞挑战", "to": "讨论总结", "trigger": "<complete>", "message_type": "last" },
           { "from": "讨论总结", "to": "线索发现", "trigger": "<default>", "message_type": "none" }
         ]
       }
@@ -134,7 +135,7 @@ finding格式要求:\
       "from": "线索发现",
       "to": "疑点辩论",
       "trigger": "<continue>",
-      "message_type": "last-all",
+      "message_type": "last",
       "maxTriggerRounds": 999
     },
     { "from": "线索发现", "to": "线索完备性评估", "trigger": "<complete>", "message_type": "last" },

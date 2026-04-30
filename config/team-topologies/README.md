@@ -138,7 +138,7 @@
 
 ## 3. `links` 怎么写
 
-`links` 统一写成对象数组。普通业务边必须显式写出 `from`、`to`、`trigger`、`message_type`：
+`links` 统一写成对象数组，显式写出 `from`、`to`、`trigger`、`message_type`：
 
 ```json
 [
@@ -152,7 +152,7 @@
     "from": "上游节点",
     "to": "另一个下游节点",
     "trigger": "<default>",
-    "message_type": "last-all"
+    "message_type": "none"
   }
 ]
 ```
@@ -165,9 +165,6 @@
   边的终点节点 ID；必须能在当前层 `nodes` 中找到。
 - `trigger`
   触发条件，决定这条边什么时候会被调度。必须是尖括号包裹的字面值，例如 `<default>`、`<continue>`、`<complete>`、`<abcd>`。
-- `message_type`
-  消息传递策略，决定沿这条边派发下游时携带哪些上游内容。
-
 根图如果需要显式结束，也可以写 `__end__` 终止边：
 
 ```json
@@ -215,23 +212,26 @@
 当前分支已经完成判定，可以结束。
 ```
 
-`message_type` 当前支持三种值：
+`agent.initialMessage` 规则：
 
-- `last`
-  只传递上游最后一条正文。
-- `none`
-  不传递上游最后一条正文。
-- `last-all`
-  只传递当前激活链路里各个 Agent 最后一条历史正文，不再把整个 Task 的历史都塞给下游。
+- 这是 `agent` 节点上的可选字段，不属于 `link`。
+- 它不会替代 `links[].message_type` 的默认转发行为；运行时会先按 `message_type` 生成默认转发内容，再额外注入这里声明的来源消息。
+- 可以写单个字符串，例如 `"initialMessage": "线索发现"`。
+- 也可以写字符串数组，例如 `"initialMessage": ["线索发现", "漏洞讨论"]`。
+- 若写空数组 `[]`，表示 `initialMessageRouting.mode = none`，即不额外注入任何来源消息；它不会覆盖 `link.message_type = last` 的默认转发。
+- 运行时会按列表顺序，从这些 Agent 的首条可转发消息中生成 `[From <AgentId> Agent]` 段落。
+- 若列表中已经包含当前触发该目标的 source Agent，运行时会把该来源的多段不同内容聚合到同一个 `[From ... Agent]` 段落里，并只去掉完全重复的内容。
 
 示例：
 
 ```json
-[
-  { "from": "任务分析", "to": "Build", "trigger": "<default>", "message_type": "last" },
-  { "from": "Build", "to": "CodeReview", "trigger": "<default>", "message_type": "last" },
-  { "from": "CodeReview", "to": "Build", "trigger": "<continue>", "message_type": "last" }
-]
+{
+  "type": "agent",
+  "id": "线索完备性评估",
+  "prompt": "...",
+  "writable": false,
+  "initialMessage": ["线索发现", "漏洞讨论"]
+}
 ```
 
 含义：
@@ -276,13 +276,14 @@
 `vulnerability.json5` 展示了递归 `spawn` 的写法：
 
 - 根图入口是 `线索发现`
-- `线索发现 -> 疑点辩论` 不是无条件流转：有新的 finding 时，`线索发现` 返回 `<continue>` 这个字面值，并命中 `{ "from": "线索发现", "to": "疑点辩论", "trigger": "<continue>", "message_type": "last-all" }`
+- `线索发现 -> 疑点辩论` 不是无条件流转：有新的 finding 时，`线索发现` 返回 `<continue>` 这个字面值，并命中 `{ "from": "线索发现", "to": "疑点辩论", "trigger": "<continue>", "message_type": "last" }`
 - 没有新的 finding 时，`线索发现` 返回 `<complete>` 这个字面值，并命中 `{ "from": "线索发现", "to": "线索完备性评估", "trigger": "<complete>", "message_type": "last" }`
 - `线索完备性评估` 若返回 `<continue>`，会命中 `{ "from": "线索完备性评估", "to": "线索发现", "trigger": "<continue>", "message_type": "last" }`；若返回 `<complete>`，会命中 `{ "from": "线索完备性评估", "to": "__end__", "trigger": "<complete>", "message_type": "none" }`
 - 上述 `<continue>` / `<complete>` 在这里只是该拓扑选择使用的 label；同类流程也可以改成任意其他尖括号字面值。
 - `疑点辩论` 是 `spawn` 节点
 - `spawn.graph` 里定义漏洞论证、漏洞挑战、讨论总结的子图
 - 这类 `spawn` 子图当前按 `exitWhen = "all_completed"` 运行：当 `讨论总结` 同时存在来自 `漏洞挑战`、`漏洞论证` 的 `complete` 入边时，运行时会先确认这两个来源角色都已经给出本轮回应，再允许把流程推进到 `讨论总结`；因此单边首轮直接 `complete` 不会再触发总结
+- `讨论总结` 不再依赖 `message_type = last-all` 汇总双方消息；现在它通过 `agent.initialMessage = ["漏洞论证", "漏洞挑战"]` 显式声明需要额外注入的来源，运行时会在默认转发当前 source 的同时，再补入另一侧的首条可转发消息，并对重复来源去重
 - 在这份漏洞团队拓扑里，`讨论总结` 是显式 `writable: true` 的可写 Agent；每轮都必须先把讨论总结写入当前代码仓的 `result/` 目录，再同步输出总结正文
 - `讨论总结` 写入 `result/` 时要求每个讨论单独一个文件；当前讨论必须新建新文件，不得覆盖、追加或复用已有讨论总结文件，文件名至少要能区分不同讨论
 - `讨论总结` 的默认 prompt 不是只要一个简短结论，而是要求输出完整裁决报告：固定包含“结论概览、finding 描述、代码事实与证据链、正方观点与成立条件、反方观点与不成立理由、争议点裁决、当前已形成的稳定结论、仍未解决的不确定点、后续排查建议”等章节，并明确区分“代码已直接证明”的事实与“根据现有事实做出的推断”

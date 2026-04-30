@@ -1,5 +1,6 @@
 import {
   DEFAULT_TOPOLOGY_TRIGGER,
+  getTopologyNodeRecords,
   type SpawnRule,
   type TopologyNodeRecord,
   type TopologyRecord,
@@ -36,66 +37,49 @@ function ensureNodeRecord(records: TopologyNodeRecord[], node: TopologyNodeRecor
   return next;
 }
 
-function getFallbackNodeRecords(topology: TopologyRecord): TopologyNodeRecord[] {
-  if (topology.nodeRecords && topology.nodeRecords.length > 0) {
-    return topology.nodeRecords.map((node) => ({ ...node }));
-  }
-
-  return topology.nodes.map((name) => ({
-    id: name,
-    kind: "agent" as const,
-    templateName: name,
-  }));
-}
-
 export function getTopologyDisplayNodeIds(
   topology: Pick<TopologyRecord, "nodes" | "nodeRecords" | "spawnRules">,
   candidateNodeIds: string[],
 ): string[] {
   const candidateNodeIdSet = new Set(candidateNodeIds);
-  if (topology.nodeRecords && topology.nodeRecords.length > 0) {
-    const spawnAgentTemplateNames = new Set(
-      topology.spawnRules?.flatMap((rule) => rule.spawnedAgents.map((agent) => agent.templateName)) ?? [],
-    );
-    const latestRuntimeNodeIdByTemplate = new Map<string, string>();
-    const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const resolveRuntimeNodeIndex = (templateName: string, runtimeNodeId: string) => {
-      const match = new RegExp(`^${escapeRegExp(templateName)}-(\\d+)$`).exec(runtimeNodeId);
-      return match ? Number.parseInt(match[1] ?? "0", 10) : Number.MAX_SAFE_INTEGER;
-    };
+  const nodeRecords = getTopologyNodeRecords(topology as TopologyRecord);
+  const spawnAgentTemplateNames = new Set(
+    topology.spawnRules?.flatMap((rule) => rule.spawnedAgents.map((agent) => agent.templateName)) ?? [],
+  );
+  const latestRuntimeNodeIdByTemplate = new Map<string, string>();
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const resolveRuntimeNodeIndex = (templateName: string, runtimeNodeId: string) => {
+    const match = new RegExp(`^${escapeRegExp(templateName)}-(\\d+)$`).exec(runtimeNodeId);
+    return match ? Number.parseInt(match[1] ?? "0", 10) : Number.MAX_SAFE_INTEGER;
+  };
 
-    for (const templateName of spawnAgentTemplateNames) {
-      const runtimeNodeIds = candidateNodeIds
-        .filter((nodeId) => new RegExp(`^${escapeRegExp(templateName)}-(\\d+)$`).test(nodeId))
-        .sort((left, right) =>
-          resolveRuntimeNodeIndex(templateName, left) - resolveRuntimeNodeIndex(templateName, right));
-      const latestRuntimeNodeId = runtimeNodeIds.at(-1);
-      if (latestRuntimeNodeId) {
-        latestRuntimeNodeIdByTemplate.set(templateName, latestRuntimeNodeId);
-      }
+  for (const templateName of spawnAgentTemplateNames) {
+    const runtimeNodeIds = candidateNodeIds
+      .filter((nodeId) => new RegExp(`^${escapeRegExp(templateName)}-(\\d+)$`).test(nodeId))
+      .sort((left, right) =>
+        resolveRuntimeNodeIndex(templateName, left) - resolveRuntimeNodeIndex(templateName, right));
+    const latestRuntimeNodeId = runtimeNodeIds.at(-1);
+    if (latestRuntimeNodeId) {
+      latestRuntimeNodeIdByTemplate.set(templateName, latestRuntimeNodeId);
     }
-
-    const orderedTemplateNodeIds = topology.nodes.length > 0
-      ? topology.nodes
-      : topology.nodeRecords
-        .filter((node) => node.kind !== "spawn")
-        .map((node) => node.id);
-
-    return orderedTemplateNodeIds.flatMap((nodeId) => {
-      const latestRuntimeNodeId = latestRuntimeNodeIdByTemplate.get(nodeId);
-      if (latestRuntimeNodeId) {
-        return [latestRuntimeNodeId];
-      }
-      if (candidateNodeIdSet.has(nodeId)) {
-        return [nodeId];
-      }
-      return [];
-    });
   }
-  if (topology.nodes.length > 0) {
-    return topology.nodes.filter((nodeId) => candidateNodeIdSet.has(nodeId));
-  }
-  return candidateNodeIds;
+
+  const orderedTemplateNodeIds = topology.nodes.length > 0
+    ? topology.nodes
+    : nodeRecords
+      .filter((node) => node.kind !== "spawn")
+      .map((node) => node.id);
+
+  return orderedTemplateNodeIds.flatMap((nodeId) => {
+    const latestRuntimeNodeId = latestRuntimeNodeIdByTemplate.get(nodeId);
+    if (latestRuntimeNodeId) {
+      return [latestRuntimeNodeId];
+    }
+    if (candidateNodeIdSet.has(nodeId)) {
+      return [nodeId];
+    }
+    return [];
+  });
 }
 
 export function upsertDebateSpawnDraft(
@@ -109,7 +93,7 @@ export function upsertDebateSpawnDraft(
 
   const spawnRuleId = buildSpawnRuleId(teamName);
   const spawnNodeId = teamName;
-  let nodeRecords = getFallbackNodeRecords(topology);
+  let nodeRecords = getTopologyNodeRecords(topology).map((node) => ({ ...node }));
   for (const templateName of [
     input.sourceTemplateName,
     input.proTemplateName,
@@ -122,6 +106,7 @@ export function upsertDebateSpawnDraft(
         id: templateName,
         kind: "agent",
         templateName,
+        initialMessageRouting: { mode: "inherit" },
       });
     }
   }
@@ -129,6 +114,7 @@ export function upsertDebateSpawnDraft(
     id: spawnNodeId,
     kind: "spawn",
     templateName: input.proTemplateName,
+    initialMessageRouting: { mode: "inherit" },
     spawnRuleId,
   });
 

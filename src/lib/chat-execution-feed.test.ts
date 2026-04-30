@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MessageRecord, TopologyRecord } from "@shared/types";
+import {
+  buildTopologyNodeRecords,
+  type MessageRecord,
+  type TopologyRecord,
+} from "@shared/types";
 import { formatActionRequiredRequestContent } from "@shared/chat-message-format";
 import {
   buildChatExecutionWindows,
@@ -169,6 +173,16 @@ const topology: TopologyRecord = {
       messageMode: "last",
     },
   ],
+  nodeRecords: buildTopologyNodeRecords({
+    nodes: ["Build", "UnitTest", "TaskReview"],
+    spawnNodeIds: new Set(),
+    templateNameByNodeId: new Map(),
+    initialMessageRoutingByNodeId: new Map(),
+    spawnRuleIdByNodeId: new Map(),
+    spawnEnabledNodeIds: new Set(),
+    promptByNodeId: new Map(),
+    writableNodeIds: new Set(),
+  }),
 };
 
 const vulnerabilityTopology: TopologyRecord = {
@@ -178,7 +192,7 @@ const vulnerabilityTopology: TopologyRecord = {
       source: "线索发现",
       target: "漏洞挑战-1",
       trigger: "<default>",
-      messageMode: "last-all",
+      messageMode: "last",
     },
     {
       source: "漏洞挑战-1",
@@ -190,9 +204,19 @@ const vulnerabilityTopology: TopologyRecord = {
       source: "漏洞论证-1",
       target: "讨论总结-1",
       trigger: "<complete>",
-      messageMode: "last-all",
+      messageMode: "last",
     },
   ],
+  nodeRecords: buildTopologyNodeRecords({
+    nodes: ["线索发现", "漏洞挑战-1", "漏洞论证-1", "讨论总结-1"],
+    spawnNodeIds: new Set(),
+    templateNameByNodeId: new Map(),
+    initialMessageRoutingByNodeId: new Map(),
+    spawnRuleIdByNodeId: new Map(),
+    spawnEnabledNodeIds: new Set(),
+    promptByNodeId: new Map(),
+    writableNodeIds: new Set(),
+  }),
 };
 
 test("buildChatExecutionWindows 会把用户 @ 的目标变成执行窗口", () => {

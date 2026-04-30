@@ -1,4 +1,5 @@
 import {
+  buildTopologyNodeRecords,
   DEFAULT_TOPOLOGY_TRIGGER,
   LANGGRAPH_END_NODE_ID,
   LANGGRAPH_START_NODE_ID,
@@ -133,23 +134,20 @@ function buildNodeRecords(
       }
     }
   }
+  const spawnRuleIdByNodeId = new Map<string, string>();
+  for (const nodeId of spawnTargets) {
+    spawnRuleIdByNodeId.set(nodeId, `spawn-rule:${nodeId}`);
+  }
 
-  return nodes.map((node) => {
-    if (!spawnTargets.has(node)) {
-      return {
-        id: node,
-        kind: "agent" as const,
-        templateName: node,
-      };
-    }
-
-    return {
-      id: node,
-      kind: "spawn" as const,
-      templateName: node,
-      spawnEnabled: true,
-      spawnRuleId: `spawn-rule:${node}`,
-    };
+  return buildTopologyNodeRecords({
+    nodes,
+    spawnNodeIds: spawnTargets,
+    templateNameByNodeId: new Map(),
+    initialMessageRoutingByNodeId: new Map(),
+    spawnRuleIdByNodeId,
+    spawnEnabledNodeIds: spawnTargets,
+    promptByNodeId: new Map(),
+    writableNodeIds: new Set(),
   });
 }
 
@@ -304,13 +302,16 @@ export function createTopology(
 ): TopologyRecord {
   const nodes = collectNodes(input);
   const langgraph = buildLangGraphFromDownstream(input);
+  const edges = buildEdges(input);
+  const nodeRecords = buildNodeRecords(nodes, input);
+  const spawnRules = buildSpawnRules(input);
 
   const topology: TopologyRecord = {
     nodes,
-    edges: buildEdges(input),
+    edges,
+    nodeRecords,
     ...(langgraph ? { langgraph } : {}),
-    ...(buildNodeRecords(nodes, input).length > 0 ? { nodeRecords: buildNodeRecords(nodes, input) } : {}),
-    ...(buildSpawnRules(input).length > 0 ? { spawnRules: buildSpawnRules(input) } : {}),
+    ...(spawnRules.length > 0 ? { spawnRules } : {}),
   };
   return topology;
 }

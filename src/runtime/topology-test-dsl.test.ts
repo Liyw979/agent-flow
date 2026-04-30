@@ -50,13 +50,14 @@ test("createTopology 支持把 spawn 作为下游模式写进 DSL", () => {
     { source: "TaskReview", target: "Build", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
   ]);
   assert.deepEqual(topology.nodeRecords, [
-    { id: "Build", kind: "agent", templateName: "Build" },
+    { id: "Build", kind: "agent", templateName: "Build", initialMessageRouting: { mode: "inherit" } },
     {
       id: "TaskReview",
       kind: "spawn",
       templateName: "TaskReview",
       spawnEnabled: true,
       spawnRuleId: "spawn-rule:TaskReview",
+      initialMessageRouting: { mode: "inherit" },
     },
   ]);
   assert.deepEqual(topology.spawnRules, [

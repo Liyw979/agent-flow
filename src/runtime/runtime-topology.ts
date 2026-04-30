@@ -73,7 +73,7 @@ export function instantiateSpawnBundle(input: {
     );
     return {
       id: buildRuntimeNodeId(agent.templateName, input.item.id, input.instanceIndex),
-      kind: templateNode?.kind ?? "agent",
+      kind: templateNode?.kind === "spawn" ? "spawn" : "agent",
       templateName: agent.templateName,
       displayName: buildRuntimeNodeId(agent.templateName, input.item.id, input.instanceIndex),
       sourceNodeId: sourceNode.id,

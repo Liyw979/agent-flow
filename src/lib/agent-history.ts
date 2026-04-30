@@ -6,6 +6,7 @@ import type {
 } from "@shared/types";
 import { withOptionalValue } from "@shared/object-utils";
 import {
+  getTopologyNodeRecords,
   isAgentFinalMessageRecord,
   isAgentProgressMessageRecord,
   normalizeTopologyEdgeTrigger,
@@ -92,7 +93,8 @@ function getHistorySourceAgentIds(
   if (!runtimeTemplateName) {
     return [...resolved];
   }
-  const matchedNode = (topology.nodeRecords ?? []).find((node) => node.templateName === runtimeTemplateName);
+  const matchedNode = getTopologyNodeRecords(topology as TopologyRecord)
+    .find((node) => node.templateName === runtimeTemplateName);
   if (matchedNode) {
     resolved.add(matchedNode.templateName);
   }

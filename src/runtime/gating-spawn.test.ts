@@ -10,11 +10,11 @@ function createSpawnTopology(): TopologyRecord {
   return {
     nodes: ["线索发现", "漏洞疑点辩论", "漏洞论证模板", "漏洞挑战模板", "Summary模板"],
     nodeRecords: [
-      { id: "线索发现", kind: "agent", templateName: "线索发现" },
-      { id: "漏洞疑点辩论", kind: "spawn", templateName: "漏洞疑点辩论", spawnRuleId: "finding-debate" },
-      { id: "漏洞论证模板", kind: "agent", templateName: "漏洞论证模板" },
-      { id: "漏洞挑战模板", kind: "agent", templateName: "漏洞挑战模板" },
-      { id: "Summary模板", kind: "agent", templateName: "Summary模板" },
+      { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
+      { id: "漏洞疑点辩论", kind: "spawn", templateName: "漏洞疑点辩论", spawnRuleId: "finding-debate", initialMessageRouting: { mode: "inherit" } },
+      { id: "漏洞论证模板", kind: "agent", templateName: "漏洞论证模板", initialMessageRouting: { mode: "inherit" } },
+      { id: "漏洞挑战模板", kind: "agent", templateName: "漏洞挑战模板", initialMessageRouting: { mode: "inherit" } },
+      { id: "Summary模板", kind: "agent", templateName: "Summary模板", initialMessageRouting: { mode: "inherit" } },
     ],
     edges: [
       { source: "线索发现", target: "漏洞疑点辩论", trigger: "<default>", messageMode: "last" },

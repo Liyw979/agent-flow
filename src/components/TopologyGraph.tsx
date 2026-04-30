@@ -303,7 +303,7 @@ export function TopologyGraph({
     () =>
       getTopologyCanvasViewportMeasurementKey({
         topologyNodeCount: topology?.nodes.length ?? 0,
-        topologyNodeRecordCount: topology?.nodeRecords?.length ?? 0,
+        topologyNodeRecordCount: topology ? topology.nodeRecords.length : 0,
         hasRenderableCanvas: Boolean(topology && visibleNodeIds.length > 0),
       }),
     [topology, visibleNodeIds.length],

@@ -7,6 +7,8 @@ import {
   isDefaultTopologyTrigger,
   isActionRequiredTopologyTrigger,
   normalizeActionRequiredMaxRounds,
+  normalizeInitialMessageAgentIds,
+  parseInitialMessageRoutingFromDslInput,
   normalizeTopologyEdgeTrigger,
   type TopologyEdgeMessageMode,
   type TopologyLangGraphRecord,
@@ -21,6 +23,7 @@ export interface TeamDslAgentRecord {
   id: string;
   prompt: string;
   writable: boolean;
+  initialMessageRouting: TopologyNodeRecord["initialMessageRouting"];
 }
 
 interface GraphDslAgentNode {
@@ -28,6 +31,7 @@ interface GraphDslAgentNode {
   id: string;
   prompt: string;
   writable: boolean;
+  initialMessage?: string | string[];
 }
 
 interface GraphDslSpawnNode {
@@ -70,7 +74,7 @@ const GraphDslLinkSchema = z.object({
   from: z.string(),
   to: z.string(),
   trigger: z.string(),
-  message_type: z.enum(["none", "last", "last-all"]),
+  message_type: z.enum(["none", "last"]),
   maxTriggerRounds: z.number().finite().optional(),
 }).strict().superRefine((value, ctx) => {
   let normalizedTrigger: string;
@@ -98,9 +102,23 @@ const GraphDslAgentNodeSchema = z.object({
   id: z.string(),
   prompt: z.string(),
   writable: z.boolean(),
-}).strict();
+  initialMessage: z.union([z.string(), z.array(z.string())]).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.initialMessage === undefined) {
+    return;
+  }
+  try {
+    normalizeInitialMessageAgentIds(value.initialMessage);
+  } catch (error) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["initialMessage"],
+      message: error instanceof Error ? error.message : "非法 initialMessage。",
+    });
+  }
+});
 
-const GraphDslNodeSchema: z.ZodType<GraphDslNode> = z.lazy((): z.ZodType<GraphDslNode> =>
+const GraphDslNodeSchema = z.lazy(() =>
   z.union([
     GraphDslAgentNodeSchema,
     z.object({
@@ -159,11 +177,7 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
     ...(topology.langgraph
       ? { langgraph: normalizeComparableLangGraph(topology.langgraph) }
       : {}),
-    ...(topology.nodeRecords
-      ? {
-          nodeRecords: [...topology.nodeRecords].sort((left, right) => left.id.localeCompare(right.id)),
-        }
-      : {}),
+    nodeRecords: [...topology.nodeRecords].sort((left, right) => left.id.localeCompare(right.id)),
     ...(topology.spawnRules
       ? {
           spawnRules: [...topology.spawnRules].sort((left, right) => left.id.localeCompare(right.id)),
@@ -263,13 +277,13 @@ function assertTopologyAgentsDeclared(
 ): void {
   const known = new Set([
     ...compiledAgents.map((agent) => agent.id),
-    ...(topology.nodeRecords?.filter((node) => node.kind === "spawn").map((node) => node.id) ?? []),
+    ...topology.nodeRecords.filter((node) => node.kind === "spawn").map((node) => node.id),
   ]);
   const allNodes = new Set<string>([
     ...topology.nodes,
     ...(topology.langgraph?.start.targets ?? []),
     ...(topology.langgraph?.end?.sources ?? []),
-    ...(topology.nodeRecords?.map((node) => node.id) ?? []),
+    ...topology.nodeRecords.map((node) => node.id),
     ...(topology.spawnRules?.flatMap((rule) => [
       rule.spawnNodeName,
       rule.sourceTemplateName,
@@ -349,7 +363,7 @@ function formatGraphDslParseError(error: z.ZodError): string {
     issue.code === z.ZodIssueCode.invalid_type
     && issue.path[0] === "links"
     && issue.expected === "object"
-  ) {
+) {
     return `${formatZodIssuePath(issue.path)} 必须使用对象格式，并显式写出 from、to、trigger、message_type。`;
   }
   if (
@@ -497,28 +511,43 @@ function collectGraphDslNodeDefinitions(
       throw new Error(`DSL 节点名必须全局唯一：${node.id}`);
     }
 
-    if (node.type === "agent") {
+    const parsedNode =
+      node.type === "agent"
+        ? {
+            type: "agent" as const,
+            id: node.id,
+            prompt: node.prompt,
+            writable: node.writable,
+            initialMessageRouting: parseInitialMessageRoutingFromDslInput(
+              node.initialMessage,
+            ),
+          }
+        : node;
+
+    if (parsedNode.type === "agent") {
       context.agentDefinitions.set(node.id, {
-        id: node.id,
-        prompt: node.prompt,
-        writable: node.writable,
+        id: parsedNode.id,
+        prompt: parsedNode.prompt,
+        writable: parsedNode.writable,
+        initialMessageRouting: parsedNode.initialMessageRouting,
       });
-      context.nodeRecords.set(node.id, {
-        id: node.id,
+      context.nodeRecords.set(parsedNode.id, {
+        id: parsedNode.id,
         kind: "agent",
-        templateName: node.id,
+        templateName: parsedNode.id,
+        initialMessageRouting: parsedNode.initialMessageRouting,
       });
       continue;
     }
 
-    const spawnRuleId = `spawn-rule:${node.id}`;
-    const reportTarget = resolveSpawnReportTo(graph, node.id);
-    const sourceTemplateName = resolveSpawnSourceTemplateName(graph, node.id);
+    const spawnRuleId = `spawn-rule:${parsedNode.id}`;
+    const reportTarget = resolveSpawnReportTo(graph, parsedNode.id);
+    const sourceTemplateName = resolveSpawnSourceTemplateName(graph, parsedNode.id);
     const childAvailableExternalTargets = new Set([
       ...context.availableExternalTargets,
       ...localNames,
     ]);
-    const externalReportTarget = resolveGraphExternalReport(node.graph, childAvailableExternalTargets);
+    const externalReportTarget = resolveGraphExternalReport(parsedNode.graph, childAvailableExternalTargets);
     if (reportTarget && externalReportTarget) {
       throw new Error(`spawn 节点 ${node.id} 不能同时在外层和子图里声明回到外层的出口。`);
     }
@@ -527,31 +556,32 @@ function collectGraphDslNodeDefinitions(
     const reportToMessageMode = externalReportTarget?.messageMode ?? reportTarget?.messageMode;
     const reportToMaxTriggerRounds = externalReportTarget?.maxTriggerRounds ?? reportTarget?.maxTriggerRounds;
     if (reportToTemplateName && !reportToTrigger) {
-      throw new Error(`spawn 节点 ${node.id} 存在回到外层的目标时，必须显式声明 trigger。`);
+      throw new Error(`spawn 节点 ${parsedNode.id} 存在回到外层的目标时，必须显式声明 trigger。`);
     }
-    context.nodeRecords.set(node.id, {
-      id: node.id,
+    context.nodeRecords.set(parsedNode.id, {
+      id: parsedNode.id,
       kind: "spawn",
-      templateName: node.id,
+      templateName: parsedNode.id,
+      initialMessageRouting: { mode: "inherit" },
       spawnEnabled: true,
       spawnRuleId,
     });
-    collectGraphDslNodeDefinitions(node.graph, {
+    collectGraphDslNodeDefinitions(parsedNode.graph, {
       ...context,
       isRootGraph: false,
       availableExternalTargets: childAvailableExternalTargets,
     });
     context.spawnRules.set(spawnRuleId, {
       id: spawnRuleId,
-      spawnNodeName: node.id,
+      spawnNodeName: parsedNode.id,
       ...(sourceTemplateName ? { sourceTemplateName } : {}),
-      entryRole: node.graph.entry,
-      spawnedAgents: node.graph.nodes.map((childNode) => ({
+      entryRole: parsedNode.graph.entry,
+      spawnedAgents: parsedNode.graph.nodes.map((childNode) => ({
         role: childNode.id,
         templateName: childNode.id,
       })),
-      edges: node.graph.links
-        .filter((link) => node.graph.nodes.some((childNode) => childNode.id === link.to))
+      edges: parsedNode.graph.links
+        .filter((link) => parsedNode.graph.nodes.some((childNode) => childNode.id === link.to))
         .map((link) => ({
           sourceRole: link.from,
           targetRole: link.to,
@@ -583,7 +613,7 @@ function collectGraphDslEndLinks(graph: GraphDslGraph): GraphDslLink[] {
       list.findIndex((item) =>
         item.from === value.from
         && normalizeTopologyEdgeTrigger(item.trigger) === normalizeTopologyEdgeTrigger(value.trigger)
-        && item.message_type === value.message_type,
+        && item.message_type === value.message_type
       ) === index);
 }
 
@@ -626,8 +656,33 @@ function assertGraphAgentPromptsDeclareOutgoingTriggers(graph: GraphDslGraph): v
   }
 }
 
+function assertGraphInitialMessageSourcesExist(graph: GraphDslGraph): void {
+  const localAgentIds = new Set(
+    graph.nodes
+      .filter((node): node is GraphDslAgentNode => node.type === "agent")
+      .map((node) => node.id),
+  );
+  for (const node of graph.nodes) {
+    if (node.type === "agent") {
+      const routing = parseInitialMessageRoutingFromDslInput(node.initialMessage);
+      if (routing.mode === "list") {
+        for (const agentId of routing.agentIds) {
+          if (!localAgentIds.has(agentId)) {
+            throw new Error(
+              `DSL Agent ${node.id} 的 initialMessage 引用了不存在的来源 Agent：${agentId}`,
+            );
+          }
+        }
+      }
+      continue;
+    }
+    assertGraphInitialMessageSourcesExist(node.graph);
+  }
+}
+
 function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
   assertGraphAgentPromptsDeclareOutgoingTriggers(input);
+  assertGraphInitialMessageSourcesExist(input);
   const agentDefinitions = new Map<string, TeamDslAgentRecord>();
   const nodeRecords = new Map<string, TopologyNodeRecord>();
   const spawnRules = new Map<string, SpawnRule>();
@@ -657,14 +712,15 @@ function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
     };
   });
   const nonEndLinks = input.links.filter((link) => link.to !== LANGGRAPH_END_NODE_ID);
+  const topologyEdges = nonEndLinks.map((link) => mapGraphDslLinkToTopologyEdge(link));
   const endLinks = collectGraphDslEndLinks(input);
 
   const topology: TopologyRecord = {
     nodes: input.nodes.map((node) => node.id),
-    edges: nonEndLinks.map((link) => mapGraphDslLinkToTopologyEdge(link)),
+    edges: topologyEdges,
     langgraph: createTopologyLangGraphRecord({
       nodes: input.nodes.map((node) => node.id),
-      edges: nonEndLinks.map((link) => mapGraphDslLinkToTopologyEdge(link)),
+      edges: topologyEdges,
       startTargets: [input.entry],
       endIncoming: endLinks.map((link) => ({
         source: link.from,
