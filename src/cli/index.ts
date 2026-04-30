@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import net from "node:net";
 import process from "node:process";
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import type { TaskSnapshot, WorkspaceSnapshot } from "@shared/types";
@@ -29,7 +28,15 @@ import {
 } from "./task-attach-display";
 import { renderOpenCodeCleanupReport } from "./opencode-cleanup-report";
 import { ensureOpencodePreflightPassed } from "./opencode-preflight";
-import { buildUiUrl, UI_LOOPBACK_HOST } from "./ui-host-launch";
+import {
+  buildUiUrl,
+  type UiLoopbackBindHost,
+} from "./ui-host-launch";
+import {
+  canReserveLoopbackPortOnHosts,
+  reserveLoopbackPort,
+  resolveAvailableLoopbackBindHosts,
+} from "./loopback-bindings";
 import { startWebHost } from "./web-host";
 import { resolveWorkspaceCwdFromFilesystem } from "./workspace-cwd";
 
@@ -233,46 +240,32 @@ async function renderTaskMessages(
   }
 }
 
-async function reservePort(
-  host: string,
-  port: number,
-): Promise<{ port: number; close: () => Promise<void> } | null> {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    const close = async () => {
-      await new Promise<void>((closeResolve) => {
-        server.close(() => closeResolve());
-      });
+async function resolveUiHostBinding() {
+  const bindHosts = await resolveAvailableLoopbackBindHosts();
+  if (bindHosts.length === 0) {
+    fail("当前机器没有可用的 loopback 监听地址。");
+  }
+  if (await canReserveLoopbackPortOnHosts(DEFAULT_UI_PORT, bindHosts)) {
+    return {
+      bindHosts,
+      port: DEFAULT_UI_PORT,
     };
-    server.once("error", () => resolve(null));
-    server.listen(port, host, () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        void close().then(() => resolve(null));
-        return;
-      }
-      resolve({
-        port: address.port,
-        close,
-      });
-    });
-  });
-}
-
-async function resolveUiPort() {
-  const preferred = await reservePort(UI_LOOPBACK_HOST, DEFAULT_UI_PORT);
-  if (preferred) {
-    const port = preferred.port;
-    await preferred.close();
-    return port;
   }
-  const fallback = await reservePort(UI_LOOPBACK_HOST, 0);
-  if (!fallback) {
-    fail("无法为网页界面分配可用端口。");
+  for (const host of bindHosts) {
+    const reservation = await reserveLoopbackPort(host, 0);
+    if (!reservation.ok) {
+      continue;
+    }
+    const candidatePort = reservation.reservation.port;
+    await reservation.reservation.close();
+    if (await canReserveLoopbackPortOnHosts(candidatePort, bindHosts)) {
+      return {
+        bindHosts,
+        port: candidatePort,
+      };
+    }
   }
-  const port = fallback.port;
-  await fallback.close();
-  return port;
+  fail("无法为网页界面分配同时适用于 IPv4 和 IPv6 loopback 的端口。");
 }
 
 async function ensureUiHost(
@@ -281,6 +274,7 @@ async function ensureUiHost(
   taskId: string,
   webRoot: string,
   port: number,
+  bindHosts: readonly UiLoopbackBindHost[],
 ) : Promise<{ host: ActiveUiHost; port: number; url: string }> {
   const host = await startWebHost({
     orchestrator: context.orchestrator,
@@ -289,6 +283,7 @@ async function ensureUiHost(
     port,
     webRoot,
     userDataPath: context.userDataPath,
+    bindHosts: [...bindHosts],
   });
   return {
     host,
@@ -365,7 +360,8 @@ async function handleTaskUiCommand(
     newTaskId: diagnostics.taskId,
     content: command.message!.trim(),
   });
-  const uiPort = await resolveUiPort();
+  const uiHostBinding = await resolveUiHostBinding();
+  const uiPort = uiHostBinding.port;
   const uiUrl = buildUiUrl({
     port: uiPort,
     taskId: snapshot.task.id,
@@ -377,6 +373,7 @@ async function handleTaskUiCommand(
     snapshot.task.id,
     webRoot,
     uiPort,
+    uiHostBinding.bindHosts,
   );
   await open(url);
   if (streamingPlan.enabled) {

@@ -8,6 +8,8 @@ import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import {
   type AgentTeamEvent,
+  type AgentProgressActivityKind,
+  type AgentProgressMessageRecord,
   type AgentRoutingKind,
   type AgentRuntimeSnapshot,
   type AgentRecord,
@@ -56,14 +58,19 @@ import {
 } from "./decision-parser";
 import {
   OpenCodeClient,
-  type OpenCodeRuntimeTarget,
+  type OpenCodeExecutionResult,
+  type OpenCodeRuntimeActivity,
   type OpenCodeShutdownReport,
+  type OpenCodeRuntimeTarget,
 } from "./opencode-client";
 import { OpenCodeRunner } from "./opencode-runner";
 import { StoreService } from "./store";
 import {
-  resolveAgentStatusFromRouting,
-} from "./gating-rules";
+  buildRuntimeActivityFreshness,
+  isRuntimeActivityFreshnessNewer,
+  type RuntimeActivityFreshness,
+} from "./runtime-activity-freshness";
+import { resolveAgentStatusFromRouting } from "./gating-rules";
 import {
   buildDownstreamForwardedContextFromMessages,
   buildSourceAgentMessageSectionLabel,
@@ -85,7 +92,10 @@ import {
   buildTaskCompletionMessageContent,
   buildTaskRoundFinishedMessageContent,
 } from "./task-completion-message";
-import { buildEffectiveTopology, getRuntimeTemplateName } from "./runtime-topology-graph";
+import {
+  buildEffectiveTopology,
+  getRuntimeTemplateName,
+} from "./runtime-topology-graph";
 import { resolveForwardingActiveAgentIdsFromState } from "./forwarding-active-agents";
 import type { CompiledTeamDsl } from "./team-dsl";
 import { shouldScheduleEventStreamReconnect } from "./event-stream-lifecycle";
@@ -100,6 +110,7 @@ import {
 import { launchTerminalCommand } from "./terminal-launcher";
 
 const execFileAsync = promisify(execFile);
+const RUNTIME_PROGRESS_SYNC_INTERVAL_MS = 200;
 
 interface OrchestratorOptions {
   userDataPath: string;
@@ -133,6 +144,8 @@ interface TaskRuntimeOverlay {
   runtimeTarget: OpenCodeRuntimeTarget;
   attachBaseUrl: string | null;
   agentSessions: Map<string, string>;
+  persistedActivityIdsByAgent: Map<string, Set<string>>;
+  activityFreshnessByMessageId: Map<string, RuntimeActivityFreshness>;
 }
 
 type AgentExecutionPrompt =
@@ -173,12 +186,21 @@ export class Orchestrator {
   private readonly enableEventStream: boolean;
   private readonly taskRuntimeOverlays = new Map<string, TaskRuntimeOverlay>();
   private readonly connectedRuntimeTaskIds = new Set<string>();
-  private readonly pendingRuntimeRefreshWorkspaces = new Map<string, ReturnType<typeof setTimeout>>();
-  readonly pendingEventReconnects = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pendingRuntimeSyncTasks = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  readonly pendingEventReconnects = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   readonly pendingTaskRuns = new Set<Promise<void>>();
   private readonly knownWorkspaces = new Set<string>();
   private readonly runtimeRefreshDebounceMs: number;
-  private readonly terminalLauncher: (input: { cwd: string; command: string }) => Promise<void>;
+  private readonly terminalLauncher: (input: {
+    cwd: string;
+    command: string;
+  }) => Promise<void>;
   private isDisposing = false;
 
   constructor(options: OrchestratorOptions) {
@@ -195,10 +217,12 @@ export class Orchestrator {
     this.ensureWorkspaceRecord(cwd);
   }
 
-  async dispose(options: DisposeOrchestratorOptions = {}): Promise<OpenCodeShutdownReport> {
+  async dispose(
+    options: DisposeOrchestratorOptions = {},
+  ): Promise<OpenCodeShutdownReport> {
     this.isDisposing = true;
-    this.pendingRuntimeRefreshWorkspaces.forEach((timer) => clearTimeout(timer));
-    this.pendingRuntimeRefreshWorkspaces.clear();
+    this.pendingRuntimeSyncTasks.forEach((timer) => clearTimeout(timer));
+    this.pendingRuntimeSyncTasks.clear();
     this.pendingEventReconnects.forEach((timer) => clearTimeout(timer));
     this.pendingEventReconnects.clear();
     const awaitPendingTaskRuns = options.awaitPendingTaskRuns ?? true;
@@ -226,7 +250,10 @@ export class Orchestrator {
     return this.hydrateWorkspace(normalizedCwd);
   }
 
-  async getTaskSnapshot(taskId: string, cwd = process.cwd()): Promise<TaskSnapshot> {
+  async getTaskSnapshot(
+    taskId: string,
+    cwd = process.cwd(),
+  ): Promise<TaskSnapshot> {
     const resolvedCwd = this.resolveTaskCwd(taskId, cwd);
     await this.reconcilePersistedTaskStatus(resolvedCwd, taskId);
     return this.hydrateTask(resolvedCwd, taskId);
@@ -248,10 +275,15 @@ export class Orchestrator {
       preferredCwd ? path.resolve(preferredCwd) : null,
       indexedCwd,
       ...this.knownWorkspaces,
-    ].filter((value, index, list): value is string => Boolean(value) && list.indexOf(value) === index);
+    ].filter(
+      (value, index, list): value is string =>
+        Boolean(value) && list.indexOf(value) === index,
+    );
 
     for (const candidate of candidates) {
-      const task = this.store.listTasks(candidate).find((item) => item.id === taskId);
+      const task = this.store
+        .listTasks(candidate)
+        .find((item) => item.id === taskId);
       if (task) {
         return task.cwd;
       }
@@ -264,7 +296,9 @@ export class Orchestrator {
   }
 
   async readAgent(cwd: string, agentId: string): Promise<AgentRecord> {
-    const matched = this.listWorkspaceAgents(cwd).find((agent) => agent.id === agentId);
+    const matched = this.listWorkspaceAgents(cwd).find(
+      (agent) => agent.id === agentId,
+    );
     if (!matched) {
       throw new Error(`Agent 配置不存在：${agentId}`);
     }
@@ -277,7 +311,9 @@ export class Orchestrator {
     });
   }
 
-  async saveTopology(payload: UpdateTopologyPayload): Promise<WorkspaceSnapshot> {
+  async saveTopology(
+    payload: UpdateTopologyPayload,
+  ): Promise<WorkspaceSnapshot> {
     const normalizedCwd = path.resolve(payload.cwd);
     const agents = this.listWorkspaceAgents(normalizedCwd);
     const normalized = this.normalizeTopology(agents, payload.topology);
@@ -328,6 +364,11 @@ export class Orchestrator {
     await this.deleteTaskGraphRuntime(task);
     this.taskRuntimeOverlays.delete(task.id);
     this.connectedRuntimeTaskIds.delete(task.id);
+    const runtimeSyncTimer = this.pendingRuntimeSyncTasks.get(task.id);
+    if (runtimeSyncTimer) {
+      clearTimeout(runtimeSyncTimer);
+      this.pendingRuntimeSyncTasks.delete(task.id);
+    }
     const reconnectTimer = this.pendingEventReconnects.get(task.id);
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
@@ -353,7 +394,11 @@ export class Orchestrator {
       content: payload.content,
       availableAgents: agents.map((agent) => agent.id),
       ...withOptionalString({}, "mentionAgentId", payload.mentionAgentId),
-      ...withOptionalString({}, "defaultTargetAgentId", resolvePrimaryTopologyStartTarget(topology) ?? undefined),
+      ...withOptionalString(
+        {},
+        "defaultTargetAgentId",
+        resolvePrimaryTopologyStartTarget(topology) ?? undefined,
+      ),
     });
     if (!resolution.ok) {
       throw new Error(resolution.message);
@@ -361,7 +406,13 @@ export class Orchestrator {
     const mentionAgentId = resolution.targetAgentId;
 
     if (payload.taskId) {
-      return this.continueTask(normalizedCwd, payload.taskId, payload.content, mentionAgentId, agents);
+      return this.continueTask(
+        normalizedCwd,
+        payload.taskId,
+        payload.content,
+        mentionAgentId,
+        agents,
+      );
     }
 
     const initialized = await this.createTask(normalizedCwd, agents, {
@@ -405,12 +456,16 @@ export class Orchestrator {
       payload: snapshot,
     });
 
-    const taskAgent = snapshot.agents.find((item) => item.id === payload.agentId);
+    const taskAgent = snapshot.agents.find(
+      (item) => item.id === payload.agentId,
+    );
     if (!taskAgent) {
       throw new Error(`未找到 Agent ${payload.agentId} 对应的运行信息。`);
     }
     if (!taskAgent.opencodeSessionId) {
-      throw new Error(`Agent ${payload.agentId} 当前还没有可 attach 的 OpenCode session。`);
+      throw new Error(
+        `Agent ${payload.agentId} 当前还没有可 attach 的 OpenCode session。`,
+      );
     }
     await this.launchAgentTerminal(
       normalizedCwd,
@@ -419,10 +474,15 @@ export class Orchestrator {
     );
   }
 
-  async getTaskRuntime(payload: GetTaskRuntimePayload): Promise<AgentRuntimeSnapshot[]> {
+  async getTaskRuntime(
+    payload: GetTaskRuntimePayload,
+  ): Promise<AgentRuntimeSnapshot[]> {
     const normalizedCwd = path.resolve(payload.cwd);
     const task = this.store.getTask(normalizedCwd, payload.taskId);
-    const overlayAgents = this.overlayTaskAgents(task, this.store.listTaskAgents(normalizedCwd, task.id));
+    const overlayAgents = this.overlayTaskAgents(
+      task,
+      this.store.listTaskAgents(normalizedCwd, task.id),
+    );
     const runtimeTarget = this.getTaskRuntimeTarget(task);
     return Promise.all(
       overlayAgents.map(async (agent) => {
@@ -459,7 +519,10 @@ export class Orchestrator {
         } catch {
           return {
             ...baseSnapshot,
-            headline: agent.status === "running" ? "运行中，正在等待 OpenCode 返回实时消息" : null,
+            headline:
+              agent.status === "running"
+                ? "运行中，正在等待 OpenCode 返回实时消息"
+                : null,
           };
         }
       }),
@@ -553,7 +616,17 @@ export class Orchestrator {
 
     await this.ensureTaskInitialized(task, agents);
 
-    const message = this.createUserMessage(task.id, task.title, content, targetAgentRecord.id);
+    const targetRunCount =
+      (this.store
+        .listTaskAgents(task.cwd, task.id)
+        .find((item) => item.id === targetAgentRecord.id)?.runCount ?? 0) + 1;
+    const message = this.createUserMessage(
+      task.id,
+      task.title,
+      content,
+      targetAgentRecord.id,
+      targetRunCount,
+    );
     this.store.insertMessage(normalizedCwd, message);
     this.emit({
       type: "message-created",
@@ -561,21 +634,29 @@ export class Orchestrator {
       payload: message,
     });
 
-    const forwardedContent = stripTargetMentionPure(content, targetAgentRecord.id);
+    const forwardedContent = stripTargetMentionPure(
+      content,
+      targetAgentRecord.id,
+    );
     const topology = this.store.getTopology(normalizedCwd);
     const runtime = this.getLangGraphRuntime(normalizedCwd);
-    this.trackBackgroundTask(runtime.resumeTask({
-      taskId: task.id,
-      topology,
-      event: {
-        type: "user_message",
-        targetAgentId: targetAgentRecord.id,
-        content: forwardedContent,
+    this.trackBackgroundTask(
+      runtime
+        .resumeTask({
+          taskId: task.id,
+          topology,
+          event: {
+            type: "user_message",
+            targetAgentId: targetAgentRecord.id,
+            content: forwardedContent,
+          },
+        })
+        .then(() => undefined),
+      {
+        taskId: task.id,
+        agentId: targetAgentRecord.id,
       },
-    }).then(() => undefined), {
-      taskId: task.id,
-      agentId: targetAgentRecord.id,
-    });
+    );
     return this.hydrateTask(normalizedCwd, task.id);
   }
 
@@ -605,8 +686,12 @@ export class Orchestrator {
     taskTitle: string,
     content: string,
     targetAgentId: string,
+    targetRunCount: number,
   ): MessageRecord {
-    const normalizedContent = buildUserHistoryContentPure(content, targetAgentId);
+    const normalizedContent = buildUserHistoryContentPure(
+      content,
+      targetAgentId,
+    );
     return {
       id: randomUUID(),
       taskId,
@@ -617,12 +702,15 @@ export class Orchestrator {
       scope: "task",
       taskTitle,
       targetAgentIds: [targetAgentId],
+      targetRunCounts: [targetRunCount],
     };
   }
 
   private syncTaskAgents(task: TaskRecord, agents: AgentRecord[]) {
     const orderedAgents = this.orderAgents(task.cwd, agents);
-    const existingByName = new Set(this.store.listTaskAgents(task.cwd, task.id).map((item) => item.id));
+    const existingByName = new Set(
+      this.store.listTaskAgents(task.cwd, task.id).map((item) => item.id),
+    );
     for (const agent of orderedAgents) {
       if (existingByName.has(agent.id)) {
         continue;
@@ -644,7 +732,9 @@ export class Orchestrator {
     task: TaskRecord,
     runtimeAgentId: string,
   ): void {
-    const existing = this.store.listTaskAgents(task.cwd, task.id).find((item) => item.id === runtimeAgentId);
+    const existing = this.store
+      .listTaskAgents(task.cwd, task.id)
+      .find((item) => item.id === runtimeAgentId);
     if (existing) {
       return;
     }
@@ -656,7 +746,11 @@ export class Orchestrator {
       status: "idle",
       runCount: 0,
     });
-    this.store.updateTaskAgentCount(task.cwd, task.id, this.store.listTaskAgents(task.cwd, task.id).length);
+    this.store.updateTaskAgentCount(
+      task.cwd,
+      task.id,
+      this.store.listTaskAgents(task.cwd, task.id).length,
+    );
   }
 
   protected async runAgent(
@@ -667,7 +761,9 @@ export class Orchestrator {
     behavior: AgentRunBehaviorOptions = {},
   ) {
     if (behavior.followTopology) {
-      throw new Error("runAgent 已不再负责拓扑调度；请通过 submitTask/continueTask 走 LangGraph runtime。");
+      throw new Error(
+        "runAgent 已不再负责拓扑调度；请通过 submitTask/continueTask 走 LangGraph runtime。",
+      );
     }
 
     const result = await this.executeLangGraphAgentOnce(
@@ -701,7 +797,12 @@ export class Orchestrator {
     });
 
     if (nextTaskStatus === "finished") {
-      await this.completeTask(task.cwd, task.id, "finished", "standalone_round_finished");
+      await this.completeTask(
+        task.cwd,
+        task.id,
+        "finished",
+        "standalone_round_finished",
+      );
       return;
     }
 
@@ -709,7 +810,6 @@ export class Orchestrator {
       await this.completeTask(task.cwd, task.id, "failed");
       return;
     }
-
   }
 
   private shouldSuppressDuplicateDispatchMessage(
@@ -736,7 +836,10 @@ export class Orchestrator {
       if (message.sender === sourceAgentId && message.kind === "agent-final") {
         return false;
       }
-      if (message.sender !== sourceAgentId || message.kind !== "agent-dispatch") {
+      if (
+        message.sender !== sourceAgentId ||
+        message.kind !== "agent-dispatch"
+      ) {
         continue;
       }
 
@@ -754,12 +857,15 @@ export class Orchestrator {
     topology: TopologyRecord,
     targetAgentId: string,
   ): boolean {
-    return targetAgentId !== BUILD_AGENT_ID && !resolveExecutionDecisionAgent({
-      state: null,
-      topology,
-      runtimeAgentId: targetAgentId,
-      executableAgentId: targetAgentId,
-    });
+    return (
+      targetAgentId !== BUILD_AGENT_ID &&
+      !resolveExecutionDecisionAgent({
+        state: null,
+        topology,
+        runtimeAgentId: targetAgentId,
+        executableAgentId: targetAgentId,
+      })
+    );
   }
 
   private updateTaskStatusIfActive(
@@ -778,16 +884,23 @@ export class Orchestrator {
 
   private async reconcilePersistedTaskStatus(cwd: string, taskId: string) {
     const task = this.store.getTask(cwd, taskId);
-    if (!shouldFinishTaskFromPersistedStatePure({
-      taskStatus: task.status,
-      topology: this.store.getTopology(task.cwd),
-      agents: this.store.listTaskAgents(task.cwd, taskId),
-      messages: this.store.listMessages(task.cwd, taskId),
-    })) {
+    if (
+      !shouldFinishTaskFromPersistedStatePure({
+        taskStatus: task.status,
+        topology: this.store.getTopology(task.cwd),
+        agents: this.store.listTaskAgents(task.cwd, taskId),
+        messages: this.store.listMessages(task.cwd, taskId),
+      })
+    ) {
       return;
     }
 
-    await this.completeTask(task.cwd, taskId, "finished", "persisted_round_finished");
+    await this.completeTask(
+      task.cwd,
+      taskId,
+      "finished",
+      "persisted_round_finished",
+    );
   }
 
   private async reconcilePersistedWorkspaceTasks(cwd: string) {
@@ -804,13 +917,31 @@ export class Orchestrator {
 
   protected async buildProjectGitDiffSummary(cwd: string): Promise<string> {
     try {
-      const [statusResult, stagedStatResult, unstagedStatResult] = await Promise.all([
-        this.runGitSummaryCommand(cwd, ["status", "--short", "--untracked-files=all"]),
-        this.runGitSummaryCommand(cwd, ["diff", "--cached", "--stat", "--compact-summary"]),
-        this.runGitSummaryCommand(cwd, ["diff", "--stat", "--compact-summary"]),
-      ]);
+      const [statusResult, stagedStatResult, unstagedStatResult] =
+        await Promise.all([
+          this.runGitSummaryCommand(cwd, [
+            "status",
+            "--short",
+            "--untracked-files=all",
+          ]),
+          this.runGitSummaryCommand(cwd, [
+            "diff",
+            "--cached",
+            "--stat",
+            "--compact-summary",
+          ]),
+          this.runGitSummaryCommand(cwd, [
+            "diff",
+            "--stat",
+            "--compact-summary",
+          ]),
+        ]);
 
-      if (statusResult.unavailable || stagedStatResult.unavailable || unstagedStatResult.unavailable) {
+      if (
+        statusResult.unavailable ||
+        stagedStatResult.unavailable ||
+        unstagedStatResult.unavailable
+      ) {
         return "";
       }
 
@@ -858,7 +989,10 @@ export class Orchestrator {
     }
   }
 
-  private async runGitSummaryCommand(cwd: string, args: string[]): Promise<GitSummaryCommandResult> {
+  private async runGitSummaryCommand(
+    cwd: string,
+    args: string[],
+  ): Promise<GitSummaryCommandResult> {
     try {
       const result = await execFileAsync("git", ["-C", cwd, ...args], {
         timeout: 2500,
@@ -887,9 +1021,10 @@ export class Orchestrator {
       return true;
     }
 
-    const stderr = typeof (error as { stderr?: unknown } | undefined)?.stderr === "string"
-      ? (error as { stderr: string }).stderr
-      : "";
+    const stderr =
+      typeof (error as { stderr?: unknown } | undefined)?.stderr === "string"
+        ? (error as { stderr: string }).stderr
+        : "";
     if (!stderr) {
       return false;
     }
@@ -907,7 +1042,10 @@ export class Orchestrator {
     if (lines.length <= maxLines) {
       return lines;
     }
-    return [...lines.slice(0, maxLines), `... 共 ${lines.length} 行，仅展示前 ${maxLines} 行`];
+    return [
+      ...lines.slice(0, maxLines),
+      `... 共 ${lines.length} 行，仅展示前 ${maxLines} 行`,
+    ];
   }
 
   protected buildAgentExecutionPrompt(prompt: AgentExecutionPrompt): string {
@@ -936,11 +1074,11 @@ export class Orchestrator {
       sections.push("[Initial Task]\n（无）");
     }
     if (prompt.gitDiffSummary?.trim()) {
-      sections.push(`[Project Git Diff Summary]\n${prompt.gitDiffSummary.trim()}`);
+      sections.push(
+        `[Project Git Diff Summary]\n${prompt.gitDiffSummary.trim()}`,
+      );
     }
-    return sections
-      .join("\n\n")
-      .trim();
+    return sections.join("\n\n").trim();
   }
 
   private resolveAgentContextContent(
@@ -951,7 +1089,9 @@ export class Orchestrator {
     const candidates = [
       parsedDecision.cleanContent.trim(),
       parsedDecision.opinion.trim(),
-      stripStructuredSignalsPure(stripDecisionResponseMarkup(rawFinalMessage, allowedTriggers)).trim(),
+      stripStructuredSignalsPure(
+        stripDecisionResponseMarkup(rawFinalMessage, allowedTriggers),
+      ).trim(),
     ];
 
     return candidates.find((item) => item.length > 0) ?? "";
@@ -959,12 +1099,17 @@ export class Orchestrator {
 
   private resolveAllowedDecisionTriggers(input: {
     state: GraphTaskState | null;
-    topology: Pick<TopologyRecord, "edges"> & Partial<Pick<TopologyRecord, "langgraph">>;
+    topology: Pick<TopologyRecord, "edges"> &
+      Partial<Pick<TopologyRecord, "langgraph">>;
     runtimeAgentId: string;
     executableAgentId: string;
   }): AllowedDecisionTrigger[] {
-    const effectiveTopology = input.state ? buildEffectiveTopology(input.state) : input.topology;
-    const sourceAgentIds = [...new Set([input.runtimeAgentId, input.executableAgentId])];
+    const effectiveTopology = input.state
+      ? buildEffectiveTopology(input.state)
+      : input.topology;
+    const sourceAgentIds = [
+      ...new Set([input.runtimeAgentId, input.executableAgentId]),
+    ];
     const allowed: AllowedDecisionTrigger[] = [];
     const push = (trigger: AllowedDecisionTrigger) => {
       if (allowed.some((item) => item.trigger === trigger.trigger)) {
@@ -988,11 +1133,17 @@ export class Orchestrator {
     return allowed;
   }
 
-  private buildDispatchMessageContent(targetAgentIds: string[], content: string): string {
+  private buildDispatchMessageContent(
+    targetAgentIds: string[],
+    content: string,
+  ): string {
     return formatAgentDispatchContent(content, targetAgentIds);
   }
 
-  private extractAgentDisplayContent(content: string, options?: { preferTrailingDeliverySection?: boolean }): string {
+  private extractAgentDisplayContent(
+    content: string,
+    options?: { preferTrailingDeliverySection?: boolean },
+  ): string {
     const trimmed = content.trim();
     if (!trimmed) {
       return "";
@@ -1001,9 +1152,7 @@ export class Orchestrator {
     const trailingSection = options?.preferTrailingDeliverySection
       ? this.extractTrailingTopLevelSection(trimmed)
       : trimmed;
-    return trailingSection
-      .replace(/\n(?:---|\*\*\*)(?:\s*\n?)*$/u, "")
-      .trim();
+    return trailingSection.replace(/\n(?:---|\*\*\*)(?:\s*\n?)*$/u, "").trim();
   }
 
   private extractTrailingTopLevelSection(content: string): string {
@@ -1026,11 +1175,16 @@ export class Orchestrator {
 
   protected createDisplayContent(parsedDecision: ParsedDecision): string {
     const preferTrailingDeliverySection = parsedDecision.kind === "invalid";
-    const cleanContent = this.extractAgentDisplayContent(parsedDecision.cleanContent, {
-      preferTrailingDeliverySection,
-    });
+    const cleanContent = this.extractAgentDisplayContent(
+      parsedDecision.cleanContent,
+      {
+        preferTrailingDeliverySection,
+      },
+    );
     if (parsedDecision.kind === "invalid") {
-      return [cleanContent, parsedDecision.validationError].filter(Boolean).join("\n\n");
+      return [cleanContent, parsedDecision.validationError]
+        .filter(Boolean)
+        .join("\n\n");
     }
     if (cleanContent) {
       return cleanContent;
@@ -1047,7 +1201,8 @@ export class Orchestrator {
   private resolveParsedDecisionValue(input: {
     parsedDecision: ParsedDecision;
     decisionAgent: boolean;
-    topology: Pick<TopologyRecord, "edges"> & Partial<Pick<TopologyRecord, "langgraph">>;
+    topology: Pick<TopologyRecord, "edges"> &
+      Partial<Pick<TopologyRecord, "langgraph">>;
     sourceAgentIds: string[];
   }): AgentRoutingKind {
     if (input.parsedDecision.kind === "invalid") {
@@ -1071,14 +1226,18 @@ export class Orchestrator {
     return "invalid";
   }
 
-  private getTaskRuntimeTarget(task: Pick<TaskRecord, "id" | "cwd">): OpenCodeRuntimeTarget {
+  private getTaskRuntimeTarget(
+    task: Pick<TaskRecord, "id" | "cwd">,
+  ): OpenCodeRuntimeTarget {
     return {
       runtimeKey: task.id,
       projectPath: task.cwd,
     };
   }
 
-  private ensureTaskRuntimeOverlay(task: Pick<TaskRecord, "id" | "cwd">): TaskRuntimeOverlay {
+  private ensureTaskRuntimeOverlay(
+    task: Pick<TaskRecord, "id" | "cwd">,
+  ): TaskRuntimeOverlay {
     const existing = this.taskRuntimeOverlays.get(task.id);
     if (existing) {
       existing.cwd = task.cwd;
@@ -1091,12 +1250,17 @@ export class Orchestrator {
       runtimeTarget: this.getTaskRuntimeTarget(task),
       attachBaseUrl: null,
       agentSessions: new Map(),
+      persistedActivityIdsByAgent: new Map(),
+      activityFreshnessByMessageId: new Map(),
     };
     this.taskRuntimeOverlays.set(task.id, created);
     return created;
   }
 
-  private overlayTaskAgents(task: TaskRecord, agents: TaskAgentRecord[]): TaskAgentRecord[] {
+  private overlayTaskAgents(
+    task: TaskRecord,
+    agents: TaskAgentRecord[],
+  ): TaskAgentRecord[] {
     const overlay = this.taskRuntimeOverlays.get(task.id);
     return agents.map((agent) => ({
       ...agent,
@@ -1122,7 +1286,9 @@ export class Orchestrator {
     );
     overlay.agentSessions.set(agent.id, sessionId);
     if (!overlay.attachBaseUrl) {
-      overlay.attachBaseUrl = await this.opencodeClient.getAttachBaseUrl(overlay.runtimeTarget).catch(() => null);
+      overlay.attachBaseUrl = await this.opencodeClient
+        .getAttachBaseUrl(overlay.runtimeTarget)
+        .catch(() => null);
     }
     return sessionId;
   }
@@ -1131,18 +1297,24 @@ export class Orchestrator {
     await this.ensureTaskInitialized(task, this.listWorkspaceAgents(task.cwd));
   }
 
-  private async ensureTaskAgentSessions(task: TaskRecord): Promise<Map<string, string>> {
+  private async ensureTaskAgentSessions(
+    task: TaskRecord,
+  ): Promise<Map<string, string>> {
     const topology = this.store.getTopology(task.cwd);
     const prewarmAgentIds = new Set(
-      resolveTaskAgentIdsToPrewarm(topology, this.store.listTaskAgents(task.cwd, task.id)),
+      resolveTaskAgentIdsToPrewarm(
+        topology,
+        this.store.listTaskAgents(task.cwd, task.id),
+      ),
     );
     const sessions = await Promise.all(
-      this.store.listTaskAgents(task.cwd, task.id)
+      this.store
+        .listTaskAgents(task.cwd, task.id)
         .filter((agent) => prewarmAgentIds.has(agent.id))
-        .map(async (agent) => [
-        agent.id,
-        await this.ensureAgentSession(task, agent),
-      ] as const),
+        .map(
+          async (agent) =>
+            [agent.id, await this.ensureAgentSession(task, agent)] as const,
+        ),
     );
     return new Map(sessions);
   }
@@ -1158,7 +1330,11 @@ export class Orchestrator {
 
     const refreshedTask = this.store.getTask(task.cwd, task.id);
     if (!refreshedTask.initializedAt) {
-      this.store.updateTaskInitialized(task.cwd, task.id, new Date().toISOString());
+      this.store.updateTaskInitialized(
+        task.cwd,
+        task.id,
+        new Date().toISOString(),
+      );
     }
 
     return this.hydrateTask(task.cwd, task.id);
@@ -1180,7 +1356,9 @@ export class Orchestrator {
   ): AgentRecord[] {
     const orderedNames = this.getOrderedAgentIds(cwd, agents, topologyOverride);
     const agentByName = new Map(agents.map((agent) => [agent.id, agent]));
-    return orderedNames.map((name) => agentByName.get(name)).filter((agent): agent is AgentRecord => Boolean(agent));
+    return orderedNames
+      .map((name) => agentByName.get(name))
+      .filter((agent): agent is AgentRecord => Boolean(agent));
   }
 
   private async launchAgentTerminal(
@@ -1216,7 +1394,10 @@ export class Orchestrator {
     );
   }
 
-  private findAgent(agents: AgentRecord[], id: string | undefined): AgentRecord | undefined {
+  private findAgent(
+    agents: AgentRecord[],
+    id: string | undefined,
+  ): AgentRecord | undefined {
     if (!id) {
       return undefined;
     }
@@ -1233,8 +1414,13 @@ export class Orchestrator {
       return runtimeAgentId;
     }
 
-    const templateName = state ? getRuntimeTemplateName(state, runtimeAgentId) : null;
-    if (templateName && workspaceAgents.some((agent) => agent.id === templateName)) {
+    const templateName = state
+      ? getRuntimeTemplateName(state, runtimeAgentId)
+      : null;
+    if (
+      templateName &&
+      workspaceAgents.some((agent) => agent.id === templateName)
+    ) {
       return templateName;
     }
 
@@ -1248,10 +1434,16 @@ export class Orchestrator {
     if (!state) {
       return runtimeAgentId;
     }
-    return state.runtimeNodes.find((node) => node.id === runtimeAgentId)?.displayName ?? runtimeAgentId;
+    return (
+      state.runtimeNodes.find((node) => node.id === runtimeAgentId)
+        ?.displayName ?? runtimeAgentId
+    );
   }
 
-  private hydrateWorkspace(cwd: string, forceSyncTopology = false): WorkspaceSnapshot {
+  private hydrateWorkspace(
+    cwd: string,
+    forceSyncTopology = false,
+  ): WorkspaceSnapshot {
     const normalizedCwd = path.resolve(cwd);
     const workspace = this.ensureWorkspaceRecord(normalizedCwd);
     const agents = this.listWorkspaceAgents(normalizedCwd);
@@ -1292,7 +1484,10 @@ export class Orchestrator {
     };
   }
 
-  private ensureTopologyExists(cwd: string, agents: AgentRecord[]): TopologyRecord {
+  private ensureTopologyExists(
+    cwd: string,
+    agents: AgentRecord[],
+  ): TopologyRecord {
     const current = this.store.getTopology(cwd);
     if (current.nodes.length === 0 && current.edges.length === 0) {
       return createDefaultTopology(agents);
@@ -1339,9 +1534,11 @@ export class Orchestrator {
           trigger,
         };
       })
-      .filter((edge) =>
-        validTopologyNames.has(edge.source)
-        && (validTopologyNames.has(edge.target) || edge.target === LANGGRAPH_END_NODE_ID)
+      .filter(
+        (edge) =>
+          validTopologyNames.has(edge.source) &&
+          (validTopologyNames.has(edge.target) ||
+            edge.target === LANGGRAPH_END_NODE_ID),
       )
       .filter((edge) => {
         const key = getTopologyEdgeId(edge);
@@ -1381,93 +1578,131 @@ export class Orchestrator {
       ...orderedAgentNodes,
       ...topology.nodes.filter((item) => spawnNodeIds.has(item)),
     ].filter((value, index, list) => list.indexOf(value) === index);
-    const nodeRecords = rawNodeRecords.filter(
-      (node) =>
-        node.id
-        && node.templateName
-        && (node.kind === "spawn" || validNames.has(node.templateName)),
-    ).map((node) => {
-      const prompt = node.kind === "agent"
-        ? agentByName.get(node.templateName)?.prompt
-        : (typeof node.prompt === "string" ? node.prompt : undefined);
-      const writable = node.kind === "agent"
-        ? agentByName.get(node.templateName)?.isWritable === true
-        : node.writable === true;
+    const nodeRecords = rawNodeRecords
+      .filter(
+        (node) =>
+          node.id &&
+          node.templateName &&
+          (node.kind === "spawn" || validNames.has(node.templateName)),
+      )
+      .map((node) => {
+        const prompt =
+          node.kind === "agent"
+            ? agentByName.get(node.templateName)?.prompt
+            : typeof node.prompt === "string"
+              ? node.prompt
+              : undefined;
+        const writable =
+          node.kind === "agent"
+            ? agentByName.get(node.templateName)?.isWritable === true
+            : node.writable === true;
 
-      return {
-        id: node.id,
-        kind: node.kind,
-        templateName: node.templateName,
-        ...(node.spawnRuleId ? { spawnRuleId: node.spawnRuleId } : {}),
-        ...(node.spawnEnabled === true ? { spawnEnabled: true } : {}),
-        ...(typeof prompt === "string" ? { prompt } : {}),
-        ...(writable ? { writable: true } : {}),
-      };
-    });
-    const spawnRules = topology.spawnRules?.filter(
-      (rule) => {
-        const spawnNodeName = rule.spawnNodeName
-          || rawNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id
-          || "";
+        return {
+          id: node.id,
+          kind: node.kind,
+          templateName: node.templateName,
+          ...(node.spawnRuleId ? { spawnRuleId: node.spawnRuleId } : {}),
+          ...(node.spawnEnabled === true ? { spawnEnabled: true } : {}),
+          ...(typeof prompt === "string" ? { prompt } : {}),
+          ...(writable ? { writable: true } : {}),
+        };
+      });
+    const spawnRules = topology.spawnRules
+      ?.filter((rule) => {
+        const spawnNodeName =
+          rule.spawnNodeName ||
+          rawNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id ||
+          "";
         return (
-          rule.id
-          && rule.id
-          && spawnNodeName
-          && rule.entryRole
-          && validTopologyNames.has(spawnNodeName)
-          && (!rule.sourceTemplateName || validNames.has(rule.sourceTemplateName))
-          && (!rule.reportToTemplateName || validNames.has(rule.reportToTemplateName))
-          && rule.spawnedAgents.every((agent) => agent.role && validNames.has(agent.templateName))
+          rule.id &&
+          rule.id &&
+          spawnNodeName &&
+          rule.entryRole &&
+          validTopologyNames.has(spawnNodeName) &&
+          (!rule.sourceTemplateName ||
+            validNames.has(rule.sourceTemplateName)) &&
+          (!rule.reportToTemplateName ||
+            validNames.has(rule.reportToTemplateName)) &&
+          rule.spawnedAgents.every(
+            (agent) => agent.role && validNames.has(agent.templateName),
+          )
         );
-      },
-    ).map((rule) => {
-      if (rule.reportToTemplateName && !rule.reportToTrigger) {
-        throw new Error(`spawn rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`);
-      }
-      const normalizedBase = {
-        id: rule.id,
-        spawnNodeName: rule.spawnNodeName
-          || rawNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id
-          || rule.id,
-        ...(rule.sourceTemplateName ? { sourceTemplateName: rule.sourceTemplateName } : {}),
-        entryRole: rule.entryRole,
-        spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
-        edges: rule.edges.map((edge) => {
-          const trigger = normalizeTopologyEdgeTrigger(edge.trigger);
-          return {
-            ...edge,
-            trigger,
-            ...(isActionRequiredTopologyTrigger(trigger, edge.maxTriggerRounds) && edge.maxTriggerRounds !== undefined
-              ? { maxTriggerRounds: normalizeActionRequiredMaxRounds(edge.maxTriggerRounds) }
-              : {}),
-          };
-        }),
-        exitWhen: rule.exitWhen,
-      };
-      if (!rule.reportToTemplateName || !rule.reportToTrigger) {
-        return normalizedBase;
-      }
-      const normalizedReportTrigger = normalizeTopologyEdgeTrigger(rule.reportToTrigger);
-      return {
-        ...normalizedBase,
-        reportToTemplateName: rule.reportToTemplateName,
-        reportToTrigger: normalizedReportTrigger,
-        ...(rule.reportToMessageMode ? { reportToMessageMode: rule.reportToMessageMode } : {}),
-        ...(isActionRequiredTopologyTrigger(normalizedReportTrigger, rule.reportToMaxTriggerRounds)
-          && rule.reportToMaxTriggerRounds !== undefined
-          ? { reportToMaxTriggerRounds: normalizeActionRequiredMaxRounds(rule.reportToMaxTriggerRounds) }
-          : {}),
-      };
-    });
-    const explicitEndIncoming = (topology.langgraph?.end?.incoming ?? []).filter(
-      (edge) => validTopologyNames.has(edge.source) && typeof edge.trigger === "string",
+      })
+      .map((rule) => {
+        if (rule.reportToTemplateName && !rule.reportToTrigger) {
+          throw new Error(
+            `spawn rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`,
+          );
+        }
+        const normalizedBase = {
+          id: rule.id,
+          spawnNodeName:
+            rule.spawnNodeName ||
+            rawNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id ||
+            rule.id,
+          ...(rule.sourceTemplateName
+            ? { sourceTemplateName: rule.sourceTemplateName }
+            : {}),
+          entryRole: rule.entryRole,
+          spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
+          edges: rule.edges.map((edge) => {
+            const trigger = normalizeTopologyEdgeTrigger(edge.trigger);
+            return {
+              ...edge,
+              trigger,
+              ...(isActionRequiredTopologyTrigger(
+                trigger,
+                edge.maxTriggerRounds,
+              ) && edge.maxTriggerRounds !== undefined
+                ? {
+                    maxTriggerRounds: normalizeActionRequiredMaxRounds(
+                      edge.maxTriggerRounds,
+                    ),
+                  }
+                : {}),
+            };
+          }),
+          exitWhen: rule.exitWhen,
+        };
+        if (!rule.reportToTemplateName || !rule.reportToTrigger) {
+          return normalizedBase;
+        }
+        const normalizedReportTrigger = normalizeTopologyEdgeTrigger(
+          rule.reportToTrigger,
+        );
+        return {
+          ...normalizedBase,
+          reportToTemplateName: rule.reportToTemplateName,
+          reportToTrigger: normalizedReportTrigger,
+          ...(rule.reportToMessageMode
+            ? { reportToMessageMode: rule.reportToMessageMode }
+            : {}),
+          ...(isActionRequiredTopologyTrigger(
+            normalizedReportTrigger,
+            rule.reportToMaxTriggerRounds,
+          ) && rule.reportToMaxTriggerRounds !== undefined
+            ? {
+                reportToMaxTriggerRounds: normalizeActionRequiredMaxRounds(
+                  rule.reportToMaxTriggerRounds,
+                ),
+              }
+            : {}),
+        };
+      });
+    const explicitEndIncoming = (
+      topology.langgraph?.end?.incoming ?? []
+    ).filter(
+      (edge) =>
+        validTopologyNames.has(edge.source) && typeof edge.trigger === "string",
     );
     const explicitStartTarget = resolvePrimaryTopologyStartTarget(topology);
     const endIncoming = [...explicitEndIncoming, ...endIncomingFromEdges];
     const langgraph = createTopologyLangGraphRecord({
       nodes,
       edges,
-      startTargets: topology.langgraph?.start.targets ?? (explicitStartTarget ? [explicitStartTarget] : []),
+      startTargets:
+        topology.langgraph?.start.targets ??
+        (explicitStartTarget ? [explicitStartTarget] : []),
       endIncoming,
     });
     assertNoAmbiguousTopologyTriggerRoutes({
@@ -1507,7 +1742,9 @@ export class Orchestrator {
     await this.getLangGraphRuntime(task.cwd).deleteTask(task.id);
   }
 
-  private consumeInitialTaskForwardingAllowanceFromGraphState(state: GraphTaskState): boolean {
+  private consumeInitialTaskForwardingAllowanceFromGraphState(
+    state: GraphTaskState,
+  ): boolean {
     if (state.hasForwardedInitialTask) {
       return false;
     }
@@ -1520,7 +1757,11 @@ export class Orchestrator {
     sourceAgentId: string,
     targetAgentId: string,
   ): string[] {
-    return resolveForwardingActiveAgentIdsFromState(state, sourceAgentId, targetAgentId);
+    return resolveForwardingActiveAgentIdsFromState(
+      state,
+      sourceAgentId,
+      targetAgentId,
+    );
   }
 
   protected async createLangGraphBatchRunners(
@@ -1533,9 +1774,26 @@ export class Orchestrator {
     const topology = this.store.getTopology(cwd);
     const batchSize = batch.jobs.length;
 
-    if (batch.jobs.every((job) => job.kind === "transfer" || job.kind === "dispatch")) {
+    if (
+      batch.jobs.every(
+        (job) => job.kind === "transfer" || job.kind === "dispatch",
+      )
+    ) {
       const sourceAgentId = batch.sourceAgentId ?? "System";
-      if (!this.shouldSuppressDuplicateDispatchMessage(cwd, taskId, sourceAgentId, batch.triggerTargets)) {
+      if (
+        !this.shouldSuppressDuplicateDispatchMessage(
+          cwd,
+          taskId,
+          sourceAgentId,
+          batch.triggerTargets,
+        )
+      ) {
+        const targetRunCounts = batch.jobs.map(
+          (job) =>
+            (this.store
+              .listTaskAgents(cwd, taskId)
+              .find((item) => item.id === job.agentId)?.runCount ?? 0) + 1,
+        );
         const triggerMessage: MessageRecord = {
           id: randomUUID(),
           taskId,
@@ -1547,8 +1805,12 @@ export class Orchestrator {
           ),
           kind: "agent-dispatch",
           targetAgentIds: [...batch.triggerTargets],
+          targetRunCounts,
           dispatchDisplayContent: batch.displayContent,
-          senderDisplayName: this.resolveMessageSenderDisplayName(state, sourceAgentId),
+          senderDisplayName: this.resolveMessageSenderDisplayName(
+            state,
+            sourceAgentId,
+          ),
         };
         this.store.insertMessage(cwd, triggerMessage);
         this.emit({
@@ -1560,7 +1822,9 @@ export class Orchestrator {
     }
 
     const gitDiffSummary = await this.buildProjectGitDiffSummary(task.cwd);
-    const shouldForwardInitialTask = batch.jobs.some((job) => job.kind !== "raw");
+    const shouldForwardInitialTask = batch.jobs.some(
+      (job) => job.kind !== "raw",
+    );
     const includeInitialTask = shouldForwardInitialTask
       ? this.consumeInitialTaskForwardingAllowanceFromGraphState(state)
       : false;
@@ -1571,25 +1835,35 @@ export class Orchestrator {
 
     return batch.jobs.map((job, index) => {
       this.ensureRuntimeTaskAgent(task, job.agentId);
-      const executableAgentId = this.resolveExecutableAgentId(cwd, state, job.agentId);
+      const executableAgentId = this.resolveExecutableAgentId(
+        cwd,
+        state,
+        job.agentId,
+      );
       const messageMode = batch.sourceAgentId
         ? this.getEdgeMessageMode(
-          buildEffectiveTopology(state),
-          batch.sourceAgentId,
-          job.agentId,
-          batch.routingKind === "default" ? DEFAULT_TOPOLOGY_TRIGGER : batch.trigger,
-        )
+            buildEffectiveTopology(state),
+            batch.sourceAgentId,
+            job.agentId,
+            batch.routingKind === "default"
+              ? DEFAULT_TOPOLOGY_TRIGGER
+              : batch.trigger,
+          )
         : "last";
       const forwardedContext = batch.sourceAgentId
         ? buildDownstreamForwardedContextFromMessages(
-          taskMessages,
-          batch.sourceContent,
-          {
-            includeInitialTask,
-            messageMode,
-            activeAgentIds: this.resolveForwardingActiveAgentIds(state, batch.sourceAgentId, job.agentId),
-          },
-        )
+            taskMessages,
+            batch.sourceContent,
+            {
+              includeInitialTask,
+              messageMode,
+              activeAgentIds: this.resolveForwardingActiveAgentIds(
+                state,
+                batch.sourceAgentId,
+                job.agentId,
+              ),
+            },
+          )
         : null;
       let prompt: AgentExecutionPrompt;
       if (job.kind === "raw") {
@@ -1602,18 +1876,31 @@ export class Orchestrator {
         const followUpContent = job.sourceContent.trim();
         const remediationDisplayContent = job.displayContent.trim();
         if (!followUpContent || !remediationDisplayContent) {
-          throw new Error(`${job.sourceAgentId} 的 action_required 派发缺少可转发正文`);
+          throw new Error(
+            `${job.sourceAgentId} 的 action_required 派发缺少可转发正文`,
+          );
         }
-        prompt = withOptionalString(withOptionalString({
-          mode: "structured",
-          from: job.sourceAgentId,
-          agentMessage: followUpContent,
-        }, "userMessage",
-          initialUserContent
-          && !contentContainsNormalizedPure(followUpContent, initialUserContent)
-            ? initialUserContent
+        prompt = withOptionalString(
+          withOptionalString(
+            {
+              mode: "structured",
+              from: job.sourceAgentId,
+              agentMessage: followUpContent,
+            },
+            "userMessage",
+            initialUserContent &&
+              !contentContainsNormalizedPure(
+                followUpContent,
+                initialUserContent,
+              )
+              ? initialUserContent
+              : undefined,
+          ),
+          "gitDiffSummary",
+          this.shouldAttachGitDiffSummary(topology, executableAgentId)
+            ? gitDiffSummary
             : undefined,
-        ), "gitDiffSummary", this.shouldAttachGitDiffSummary(topology, executableAgentId) ? gitDiffSummary : undefined);
+        );
         const remediationMessage: MessageRecord = {
           id: randomUUID(),
           taskId,
@@ -1626,6 +1913,11 @@ export class Orchestrator {
           kind: "action-required-request",
           followUpMessageId: job.sourceMessageId,
           targetAgentIds: [job.agentId],
+          targetRunCounts: [
+            (this.store
+              .listTaskAgents(cwd, taskId)
+              .find((item) => item.id === job.agentId)?.runCount ?? 0) + 1,
+          ],
           ...withOptionalString(
             {},
             "senderDisplayName",
@@ -1646,10 +1938,14 @@ export class Orchestrator {
       } else {
         prompt = withOptionalString(
           withOptionalString(
-            withOptionalValue({
-              mode: "structured",
-              from: batch.sourceAgentId ?? "System",
-            }, "omitSourceAgentSectionLabel", messageMode === "last-all" ? true : undefined),
+            withOptionalValue(
+              {
+                mode: "structured",
+                from: batch.sourceAgentId ?? "System",
+              },
+              "omitSourceAgentSectionLabel",
+              messageMode === "last-all" ? true : undefined,
+            ),
             "userMessage",
             forwardedContext?.userMessage,
           ),
@@ -1659,7 +1955,9 @@ export class Orchestrator {
         prompt = withOptionalString(
           prompt,
           "gitDiffSummary",
-          this.shouldAttachGitDiffSummary(topology, executableAgentId) ? gitDiffSummary : undefined,
+          this.shouldAttachGitDiffSummary(topology, executableAgentId)
+            ? gitDiffSummary
+            : undefined,
         );
       }
 
@@ -1691,7 +1989,9 @@ export class Orchestrator {
     this.setInjectedConfigForTask(task);
     this.store.updateTaskAgentRun(task.cwd, task.id, runtimeAgentId, "running");
     this.updateTaskStatusIfActive(task.cwd, task.id, "running", null);
-    const currentAgent = this.store.listTaskAgents(task.cwd, task.id).find((item) => item.id === runtimeAgentId);
+    const currentAgent = this.store
+      .listTaskAgents(task.cwd, task.id)
+      .find((item) => item.id === runtimeAgentId);
     if (!currentAgent) {
       const missingAgentMessage: MessageRecord = {
         id: randomUUID(),
@@ -1725,8 +2025,14 @@ export class Orchestrator {
     try {
       const currentTask = this.store.getTask(task.cwd, task.id);
       await this.ensureTaskPanels(currentTask);
-      const agentSessionId = await this.ensureAgentSession(currentTask, currentAgent);
-      const latestAgent = this.findAgent(this.listWorkspaceAgents(cwd), executableAgentId);
+      const agentSessionId = await this.ensureAgentSession(
+        currentTask,
+        currentAgent,
+      );
+      const latestAgent = this.findAgent(
+        this.listWorkspaceAgents(cwd),
+        executableAgentId,
+      );
       if (!latestAgent) {
         throw new Error(`当前工作区缺少 Agent ${executableAgentId}`);
       }
@@ -1763,17 +2069,30 @@ export class Orchestrator {
             executableAgentId,
           })
         : [];
-      const response = await this.opencodeRunner.run({
+      const responsePromise = this.opencodeRunner.run({
         runtimeTarget: this.getTaskRuntimeTarget(currentTask),
         sessionId: agentSessionId,
         content: dispatchedContent,
         agent: executableAgentId,
-        ...(decisionAgent ? { system: buildAgentSystemPrompt(allowedDecisionTriggers.map((item) => item.trigger)) } : {}),
+        ...(decisionAgent
+          ? {
+              system: buildAgentSystemPrompt(
+                allowedDecisionTriggers.map((item) => item.trigger),
+              ),
+            }
+          : {}),
+      });
+      const response = await this.awaitExecutionWithProgressSync({
+        execution: responsePromise,
+        taskId: task.id,
+        agentIds: [runtimeAgentId],
       });
 
       if (response.status === "error") {
         throw new Error(
-          response.rawMessage.error || response.finalMessage || `${runtimeAgentId} 返回错误状态`,
+          response.rawMessage.error ||
+            response.finalMessage ||
+            `${runtimeAgentId} 返回错误状态`,
         );
       }
       const parsedDecision = parseDecisionPure(
@@ -1781,7 +2100,9 @@ export class Orchestrator {
         decisionAgent,
         allowedDecisionTriggers,
       );
-      const effectiveTopology = state ? buildEffectiveTopology(state) : topology;
+      const effectiveTopology = state
+        ? buildEffectiveTopology(state)
+        : topology;
       const resolvedDecision = this.resolveParsedDecisionValue({
         parsedDecision,
         decisionAgent,
@@ -1804,10 +2125,14 @@ export class Orchestrator {
         sender: runtimeAgentId,
         timestamp: response.timestamp,
         kind: "agent-final" as const,
+        runCount: currentAgent.runCount,
         status: response.status,
         responseNote: parsedDecision.opinion ?? "",
         rawResponse: response.finalMessage,
-        senderDisplayName: this.resolveMessageSenderDisplayName(state, runtimeAgentId),
+        senderDisplayName: this.resolveMessageSenderDisplayName(
+          state,
+          runtimeAgentId,
+        ),
       };
       let taskMessage: MessageRecord;
       if (resolvedDecision === "labeled" && parsedDecision.kind === "valid") {
@@ -1830,21 +2155,30 @@ export class Orchestrator {
       this.store.insertMessage(cwd, taskMessage);
 
       const actionRequiredTargets =
-        parsedDecision.kind === "valid"
-        && resolvedDecision === "labeled"
-        && resolveTriggerRoutingKindForSource(effectiveTopology, runtimeAgentId, parsedDecision.trigger) === "action_required"
+        parsedDecision.kind === "valid" &&
+        resolvedDecision === "labeled" &&
+        resolveTriggerRoutingKindForSource(
+          effectiveTopology,
+          runtimeAgentId,
+          parsedDecision.trigger,
+        ) === "action_required"
           ? this.getOutgoingEdgesForTrigger(
-            effectiveTopology,
-            runtimeAgentId,
-            parsedDecision.trigger,
-          )
+              effectiveTopology,
+              runtimeAgentId,
+              parsedDecision.trigger,
+            )
           : [];
       const agentStatus = resolveAgentStatusFromRouting({
         routingKind: resolvedDecision,
         decisionAgent,
         enteredActionRequired: actionRequiredTargets.length > 0,
       });
-      this.store.updateTaskAgentStatus(task.cwd, task.id, runtimeAgentId, agentStatus);
+      this.store.updateTaskAgentStatus(
+        task.cwd,
+        task.id,
+        runtimeAgentId,
+        agentStatus,
+      );
       if (actionRequiredTargets.length > 0) {
         this.updateTaskStatusIfActive(
           task.cwd,
@@ -1871,7 +2205,9 @@ export class Orchestrator {
           agentId: runtimeAgentId,
           status: agentStatus,
           runCount:
-            this.store.listTaskAgents(task.cwd, task.id).find((item) => item.id === runtimeAgentId)?.runCount ??
+            this.store
+              .listTaskAgents(task.cwd, task.id)
+              .find((item) => item.id === runtimeAgentId)?.runCount ??
             currentAgent.runCount,
         },
       });
@@ -1920,7 +2256,12 @@ export class Orchestrator {
         runtimeAgentId,
         executableAgentId,
       });
-      this.store.updateTaskAgentStatus(task.cwd, task.id, runtimeAgentId, "failed");
+      this.store.updateTaskAgentStatus(
+        task.cwd,
+        task.id,
+        runtimeAgentId,
+        "failed",
+      );
       const failedMessage: MessageRecord = {
         id: randomUUID(),
         taskId: task.id,
@@ -1943,7 +2284,10 @@ export class Orchestrator {
           taskId: task.id,
           agentId: runtimeAgentId,
           status: "failed",
-          runCount: this.store.listTaskAgents(task.cwd, task.id).find((item) => item.id === runtimeAgentId)?.runCount ?? 0,
+          runCount:
+            this.store
+              .listTaskAgents(task.cwd, task.id)
+              .find((item) => item.id === runtimeAgentId)?.runCount ?? 0,
         },
       });
       this.emit({
@@ -1979,10 +2323,16 @@ export class Orchestrator {
       return;
     }
 
-    const completedAt = status === "finished" || status === "failed" ? new Date().toISOString() : null;
+    const completedAt =
+      status === "finished" || status === "failed"
+        ? new Date().toISOString()
+        : null;
     this.store.updateTaskStatus(cwd, taskId, status, completedAt);
     const snapshot = this.hydrateTask(cwd, taskId);
-    const completionTimestamp = this.createTrailingMessageTimestamp(cwd, taskId);
+    const completionTimestamp = this.createTrailingMessageTimestamp(
+      cwd,
+      taskId,
+    );
     const completionMessage: MessageRecord =
       status === "finished"
         ? {
@@ -1999,10 +2349,16 @@ export class Orchestrator {
             taskId,
             sender: "system",
             timestamp: completionTimestamp,
-            content: buildTaskCompletionMessageContent(withOptionalValue({
-              status,
-              taskTitle: snapshot.task.title,
-            }, "failureReason", failureReason)),
+            content: buildTaskCompletionMessageContent(
+              withOptionalValue(
+                {
+                  status,
+                  taskTitle: snapshot.task.title,
+                },
+                "failureReason",
+                failureReason,
+              ),
+            ),
             kind: "task-completed",
             status: "failed",
           };
@@ -2020,7 +2376,8 @@ export class Orchestrator {
   }
 
   private createTrailingMessageTimestamp(cwd: string, taskId: string): string {
-    const latestTimestamp = this.store.listMessages(cwd, taskId).at(-1)?.timestamp ?? null;
+    const latestTimestamp =
+      this.store.listMessages(cwd, taskId).at(-1)?.timestamp ?? null;
     const nowMs = Date.now();
     const latestMs = latestTimestamp ? Date.parse(latestTimestamp) : Number.NaN;
     const nextMs = Number.isFinite(latestMs)
@@ -2047,21 +2404,23 @@ export class Orchestrator {
   ) {
     const edge = topology.edges.find(
       (item) =>
-        item.source === sourceAgentId
-        && item.target === targetAgentId
-        && item.trigger === trigger,
+        item.source === sourceAgentId &&
+        item.target === targetAgentId &&
+        item.trigger === trigger,
     );
     if (edge) {
       return edge.messageMode;
     }
 
-    const targetNode = topology.nodeRecords?.find((node) => node.id === targetAgentId);
+    const targetNode = topology.nodeRecords?.find(
+      (node) => node.id === targetAgentId,
+    );
     if (targetNode) {
       const inheritedEdge = topology.edges.find(
         (item) =>
-          item.source === sourceAgentId
-          && item.target === targetNode.templateName
-          && item.trigger === trigger,
+          item.source === sourceAgentId &&
+          item.target === targetNode.templateName &&
+          item.trigger === trigger,
       );
       if (inheritedEdge) {
         return inheritedEdge.messageMode;
@@ -2078,12 +2437,17 @@ export class Orchestrator {
   }
 
   private asRecord(value: unknown): Record<string, unknown> {
-    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    return value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
   }
 
   private hasWorkspaceRecord(cwd: string): boolean {
     const normalizedCwd = path.resolve(cwd);
-    return this.knownWorkspaces.has(normalizedCwd) || this.store.hasWorkspaceState(normalizedCwd);
+    return (
+      this.knownWorkspaces.has(normalizedCwd) ||
+      this.store.hasWorkspaceState(normalizedCwd)
+    );
   }
 
   private extractSessionIdFromOpenCodeEvent(event: unknown): string | null {
@@ -2108,30 +2472,34 @@ export class Orchestrator {
     return null;
   }
 
-  private scheduleRuntimeRefresh(cwd: string, taskId: string, sessionId: string | null) {
-    const normalizedCwd = path.resolve(cwd);
+  private scheduleRuntimeSync(taskId: string) {
+    const overlay = this.taskRuntimeOverlays.get(taskId);
+    if (!overlay) {
+      return;
+    }
+
+    const normalizedCwd = path.resolve(overlay.cwd);
     if (!this.hasWorkspaceRecord(normalizedCwd)) {
       return;
     }
 
-    const existing = this.pendingRuntimeRefreshWorkspaces.get(normalizedCwd);
+    const existing = this.pendingRuntimeSyncTasks.get(taskId);
     if (existing) {
       clearTimeout(existing);
     }
 
     const timer = setTimeout(() => {
-      this.pendingRuntimeRefreshWorkspaces.delete(normalizedCwd);
-      this.emit({
-        type: "runtime-updated",
-        cwd: normalizedCwd,
-        payload: {
-          taskId,
-          sessionId,
-          timestamp: new Date().toISOString(),
-        },
+      this.pendingRuntimeSyncTasks.delete(taskId);
+      const overlayAfterDelay = this.taskRuntimeOverlays.get(taskId);
+      if (!overlayAfterDelay) {
+        throw new Error(`Task ${taskId} 缺少运行态 overlay，无法同步过程消息`);
+      }
+      void this.syncVisibleRuntimeActivities({
+        taskId,
+        agentIds: [...overlayAfterDelay.agentSessions.keys()],
       });
     }, this.runtimeRefreshDebounceMs);
-    this.pendingRuntimeRefreshWorkspaces.set(normalizedCwd, timer);
+    this.pendingRuntimeSyncTasks.set(taskId, timer);
   }
 
   private scheduleEventStreamReconnect(taskId: string) {
@@ -2140,10 +2508,12 @@ export class Orchestrator {
       return;
     }
 
-    if (!shouldScheduleEventStreamReconnect({
-      hasProjectRecord: this.hasWorkspaceRecord(overlay.cwd),
-      isDisposing: this.isDisposing,
-    })) {
+    if (
+      !shouldScheduleEventStreamReconnect({
+        hasProjectRecord: this.hasWorkspaceRecord(overlay.cwd),
+        isDisposing: this.isDisposing,
+      })
+    ) {
       return;
     }
     if (this.pendingEventReconnects.has(overlay.taskId)) {
@@ -2152,10 +2522,12 @@ export class Orchestrator {
 
     const timer = setTimeout(() => {
       this.pendingEventReconnects.delete(overlay.taskId);
-      if (!shouldScheduleEventStreamReconnect({
-        hasProjectRecord: this.hasWorkspaceRecord(overlay.cwd),
-        isDisposing: this.isDisposing,
-      })) {
+      if (
+        !shouldScheduleEventStreamReconnect({
+          hasProjectRecord: this.hasWorkspaceRecord(overlay.cwd),
+          isDisposing: this.isDisposing,
+        })
+      ) {
         return;
       }
       void this.ensureTaskRuntimeEventStream({
@@ -2166,11 +2538,219 @@ export class Orchestrator {
     this.pendingEventReconnects.set(overlay.taskId, timer);
   }
 
+  private getTaskAgentRunCount(
+    cwd: string,
+    taskId: string,
+    agentId: string,
+  ): number {
+    return (
+      this.store
+        .listTaskAgents(cwd, taskId)
+        .find((agent) => agent.id === agentId)?.runCount ?? 0
+    );
+  }
+
+  private getPersistedActivityIdsForAgent(
+    taskId: string,
+    agentId: string,
+  ): Set<string> {
+    const overlay = this.taskRuntimeOverlays.get(taskId);
+    if (!overlay) {
+      throw new Error(`Task ${taskId} 缺少运行态 overlay，无法持久化过程消息`);
+    }
+    const existing = overlay.persistedActivityIdsByAgent.get(agentId);
+    if (existing) {
+      return existing;
+    }
+    const created = new Set<string>();
+    overlay.persistedActivityIdsByAgent.set(agentId, created);
+    return created;
+  }
+
+  private createAgentProgressMessage(input: {
+    taskId: string;
+    agentId: string;
+    sessionId: string;
+    runCount: number;
+    activity: OpenCodeRuntimeActivity;
+  }): AgentProgressMessageRecord {
+    const detail = input.activity.detail.trim() || input.activity.label.trim();
+    return {
+      id: `${input.taskId}:${input.agentId}:${input.runCount}:${input.activity.id}`,
+      taskId: input.taskId,
+      content: detail,
+      sender: input.agentId,
+      timestamp: input.activity.timestamp,
+      kind: "agent-progress" as const,
+      activityKind: input.activity.kind satisfies AgentProgressActivityKind,
+      label: input.activity.label,
+      detail,
+      detailState: input.activity.detailState,
+      sessionId: input.sessionId,
+      runCount: input.runCount,
+    };
+  }
+
+  private shouldRefreshAgentProgressDetail(
+    taskId: string,
+    existing: AgentProgressMessageRecord,
+    nextFreshness: RuntimeActivityFreshness,
+  ) {
+    const overlay = this.taskRuntimeOverlays.get(taskId);
+    if (!overlay) {
+      throw new Error(`Task ${taskId} 缺少运行态 overlay，无法判断过程消息是否应更新`);
+    }
+    const existingFreshness = overlay.activityFreshnessByMessageId.get(existing.id);
+    if (!existingFreshness) {
+      return false;
+    }
+    return isRuntimeActivityFreshnessNewer(existingFreshness, nextFreshness);
+  }
+
+  private async syncVisibleRuntimeActivities(input: {
+    taskId: string;
+    agentIds: string[];
+  }) {
+    const overlay = this.taskRuntimeOverlays.get(input.taskId);
+    if (!overlay) {
+      throw new Error(`Task ${input.taskId} 缺少运行态 overlay，无法同步过程消息`);
+    }
+
+    const emittedMessages: MessageRecord[] = [];
+    const targetAgentIds = new Set(input.agentIds);
+    for (const [agentId, sessionId] of overlay.agentSessions.entries()) {
+        if (!targetAgentIds.has(agentId)) {
+          continue;
+        }
+      const runtime = await this.opencodeClient.getSessionRuntime(
+        overlay.runtimeTarget,
+        sessionId,
+      );
+
+      const persistedActivityIds = this.getPersistedActivityIdsForAgent(
+        input.taskId,
+        agentId,
+      );
+      const runCount = this.getTaskAgentRunCount(
+        overlay.cwd,
+        input.taskId,
+        agentId,
+      );
+      const nextActivities = runtime.activities.filter(
+        (activity) => {
+          if (!persistedActivityIds.has(activity.id)) {
+            return true;
+          }
+          const nextFreshness = buildRuntimeActivityFreshness(activity);
+          const candidateMessage = this.createAgentProgressMessage({
+            taskId: input.taskId,
+            agentId,
+            sessionId,
+            runCount,
+            activity,
+          });
+          const existingMessage = this.store
+            .listMessages(overlay.cwd, input.taskId)
+            .find(
+              (message): message is AgentProgressMessageRecord =>
+                message.id === candidateMessage.id
+                && message.kind === "agent-progress",
+            );
+          if (!existingMessage) {
+            return false;
+          }
+          return this.shouldRefreshAgentProgressDetail(
+            input.taskId,
+            existingMessage,
+            nextFreshness,
+          );
+        },
+      );
+
+      for (const activity of nextActivities) {
+        const message = this.createAgentProgressMessage({
+          taskId: input.taskId,
+          agentId,
+          sessionId,
+          runCount,
+          activity,
+        });
+        overlay.activityFreshnessByMessageId.set(
+          message.id,
+          buildRuntimeActivityFreshness(activity),
+        );
+        persistedActivityIds.add(activity.id);
+        emittedMessages.push(message);
+      }
+    }
+
+    if (emittedMessages.length === 0) {
+      return;
+    }
+
+    for (const message of emittedMessages) {
+      this.store.insertMessage(overlay.cwd, message);
+      this.emit({
+        type: "message-created",
+        cwd: overlay.cwd,
+        payload: message,
+      });
+    }
+
+    this.emit({
+      type: "task-updated",
+      cwd: overlay.cwd,
+      payload: this.hydrateTask(overlay.cwd, input.taskId),
+    });
+  }
+
+  private async awaitExecutionWithProgressSync(input: {
+    execution: Promise<OpenCodeExecutionResult>;
+    taskId: string;
+    agentIds: string[];
+  }): Promise<OpenCodeExecutionResult> {
+    const settled = {
+      done: false,
+    };
+    const trackedExecution = input.execution.finally(() => {
+      settled.done = true;
+    });
+
+    while (!settled.done) {
+      await this.syncVisibleRuntimeActivities({
+        taskId: input.taskId,
+        agentIds: input.agentIds,
+      });
+      if (settled.done) {
+        break;
+      }
+      const waitResult = await Promise.race([
+        trackedExecution.then(() => "settled" as const),
+        new Promise<"tick">((resolve) => {
+          setTimeout(() => {
+            resolve("tick");
+          }, RUNTIME_PROGRESS_SYNC_INTERVAL_MS);
+        }),
+      ]);
+      if (waitResult === "settled") {
+        break;
+      }
+    }
+
+    await this.syncVisibleRuntimeActivities({
+      taskId: input.taskId,
+      agentIds: input.agentIds,
+    });
+    return trackedExecution;
+  }
+
   private emit(event: AgentTeamEvent) {
     this.events.emit("agent-team-event", event);
   }
 
-  private async ensureTaskRuntimeEventStream(task: Pick<TaskRecord, "id" | "cwd">) {
+  private async ensureTaskRuntimeEventStream(
+    task: Pick<TaskRecord, "id" | "cwd">,
+  ) {
     if (!this.enableEventStream) {
       return;
     }
@@ -2184,9 +2764,13 @@ export class Orchestrator {
     }
 
     this.connectedRuntimeTaskIds.add(task.id);
-    void this.opencodeClient.connectEvents(overlay.runtimeTarget, (event) => {
-      this.scheduleRuntimeRefresh(overlay.cwd, overlay.taskId, this.extractSessionIdFromOpenCodeEvent(event));
-    })
+    void this.opencodeClient
+      .connectEvents(overlay.runtimeTarget, (event) => {
+        if (!this.extractSessionIdFromOpenCodeEvent(event)) {
+          return;
+        }
+        this.scheduleRuntimeSync(overlay.taskId);
+      })
       .catch(() => undefined)
       .finally(() => {
         this.connectedRuntimeTaskIds.delete(task.id);

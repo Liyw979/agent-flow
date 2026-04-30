@@ -3,7 +3,15 @@ import net from "node:net";
 import test from "node:test";
 import type { SubmitTaskPayload } from "@shared/types";
 
+import {
+  reserveLoopbackPort,
+  resolveAvailableLoopbackBindHosts,
+} from "./loopback-bindings";
 import { startWebHost } from "./web-host";
+import {
+  UI_LOOPBACK_IPV4_HOST,
+  UI_LOOPBACK_IPV6_HOST,
+} from "./ui-host-launch";
 
 async function reservePort() {
   return await new Promise<number>((resolve, reject) => {
@@ -69,6 +77,7 @@ test("startWebHost 会按 JSON5 解析 /api/tasks/submit 请求体", async () =>
     port,
     webRoot: null,
     userDataPath: "/tmp",
+    bindHosts: await resolveAvailableLoopbackBindHosts(),
   });
 
   try {
@@ -93,4 +102,184 @@ test("startWebHost 会按 JSON5 解析 /api/tasks/submit 请求体", async () =>
   } finally {
     await host.close();
   }
+});
+
+test("startWebHost 会同时监听 IPv4 和 IPv6 loopback，避免 localhost 命中其他进程", async () => {
+  const port = await reservePort();
+  const host = await startWebHost({
+    orchestrator: {
+      subscribe: () => () => undefined,
+      submitTask: async () => {
+        throw new Error("unexpected submitTask");
+      },
+      getTaskSnapshot: async () => ({
+        task: {
+          id: "task-123",
+          title: "demo",
+          status: "running",
+          cwd: "/tmp/demo",
+          opencodeSessionId: null,
+          agentCount: 0,
+          createdAt: "2026-04-28T00:00:00.000Z",
+          completedAt: null,
+          initializedAt: null,
+        },
+        agents: [],
+        messages: [],
+      }),
+      getWorkspaceSnapshot: async () => ({
+        cwd: "/tmp/demo",
+        agents: [],
+        topology: {
+          nodes: [],
+          edges: [],
+          langgraph: {
+            nodes: [],
+            edges: [],
+          },
+        },
+      }),
+      getTaskRuntime: async () => {
+        throw new Error("unexpected getTaskRuntime");
+      },
+      openAgentTerminal: async () => {
+        throw new Error("unexpected openAgentTerminal");
+      },
+    } as never,
+    cwd: "/tmp/demo",
+    taskId: "task-123",
+    port,
+    webRoot: null,
+    userDataPath: "/tmp",
+    bindHosts: await resolveAvailableLoopbackBindHosts(),
+  });
+
+  try {
+    const availableBindHosts = await resolveAvailableLoopbackBindHosts();
+    const ipv4Response = await fetch(`http://${UI_LOOPBACK_IPV4_HOST}:${port}/healthz`);
+
+    assert.equal(ipv4Response.status, 200);
+    assert.deepEqual(await ipv4Response.json(), {
+      ok: true,
+      taskId: "task-123",
+      port,
+    });
+    if (availableBindHosts.includes(UI_LOOPBACK_IPV6_HOST)) {
+      const ipv6Response = await fetch(`http://[${UI_LOOPBACK_IPV6_HOST}]:${port}/healthz`);
+      assert.equal(ipv6Response.status, 200);
+      assert.deepEqual(await ipv6Response.json(), {
+        ok: true,
+        taskId: "task-123",
+        port,
+      });
+    }
+  } finally {
+    await host.close();
+  }
+});
+
+test("startWebHost 任一 bind host 监听失败时会关闭已监听 server 并取消订阅", async () => {
+  const availableBindHosts = await resolveAvailableLoopbackBindHosts();
+  if (availableBindHosts.length < 2) {
+    return;
+  }
+  const blockedHost = availableBindHosts[1];
+  if (!blockedHost) {
+    assert.fail("测试缺少第二个 loopback host");
+  }
+
+  const port = await reservePort();
+  const blocker = await reserveLoopbackPort(blockedHost, port);
+  if (!blocker.ok) {
+    assert.fail("测试未能占住第二个 loopback host 的端口");
+  }
+
+  let unsubscribeCallCount = 0;
+  try {
+    await assert.rejects(
+      startWebHost({
+        orchestrator: {
+          subscribe: () => {
+            return () => {
+              unsubscribeCallCount += 1;
+            };
+          },
+          submitTask: async () => {
+            throw new Error("unexpected submitTask");
+          },
+          getTaskSnapshot: async () => {
+            throw new Error("unexpected getTaskSnapshot");
+          },
+          getWorkspaceSnapshot: async () => {
+            throw new Error("unexpected getWorkspaceSnapshot");
+          },
+          getTaskRuntime: async () => {
+            throw new Error("unexpected getTaskRuntime");
+          },
+          openAgentTerminal: async () => {
+            throw new Error("unexpected openAgentTerminal");
+          },
+        } as never,
+        cwd: "/tmp/demo",
+        taskId: "task-123",
+        port,
+        webRoot: null,
+        userDataPath: "/tmp",
+        bindHosts: availableBindHosts,
+      }),
+      /listen|EADDRINUSE|port .* in use/i,
+    );
+  } finally {
+    await blocker.reservation.close();
+  }
+
+  assert.equal(unsubscribeCallCount, 1);
+  const reusedHost = await startWebHost({
+    orchestrator: {
+      subscribe: () => () => undefined,
+      submitTask: async () => {
+        throw new Error("unexpected submitTask");
+      },
+      getTaskSnapshot: async () => ({
+        task: {
+          id: "task-123",
+          title: "demo",
+          status: "running",
+          cwd: "/tmp/demo",
+          opencodeSessionId: null,
+          agentCount: 0,
+          createdAt: "2026-04-28T00:00:00.000Z",
+          completedAt: null,
+          initializedAt: null,
+        },
+        agents: [],
+        messages: [],
+      }),
+      getWorkspaceSnapshot: async () => ({
+        cwd: "/tmp/demo",
+        agents: [],
+        topology: {
+          nodes: [],
+          edges: [],
+          langgraph: {
+            nodes: [],
+            edges: [],
+          },
+        },
+      }),
+      getTaskRuntime: async () => {
+        throw new Error("unexpected getTaskRuntime");
+      },
+      openAgentTerminal: async () => {
+        throw new Error("unexpected openAgentTerminal");
+      },
+    } as never,
+    cwd: "/tmp/demo",
+    taskId: "task-123",
+    port,
+    webRoot: null,
+    userDataPath: "/tmp",
+    bindHosts: availableBindHosts,
+  });
+  await reusedHost.close();
 });

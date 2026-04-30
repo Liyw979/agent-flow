@@ -188,6 +188,14 @@ function withTaskPanelsAndSessions(
 function stubOpenCodeSessions(orchestrator: Orchestrator) {
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   orchestrator.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
+  orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => ({
+    sessionId,
+    messageCount: 0,
+    updatedAt: null,
+    headline: null,
+    activeToolNames: [],
+    activities: [],
+  });
   stubOpenCodeReloadConfig(orchestrator);
 }
 
@@ -1241,73 +1249,6 @@ test("task init 不会追加额外系统提醒", async () => {
   const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
 
   assert.equal(task.messages.some((message) => message.kind === undefined), false);
-});
-
-test("OpenCode 事件会触发 runtime-updated 前端事件", async () => {
-  type RuntimeUpdatedEvent = {
-    type: "runtime-updated";
-    cwd: string;
-    payload: {
-      taskId: string;
-      sessionId: string;
-    };
-  };
-
-  const userDataPath = createTempDir();
-  const projectPath = createTempDir();
-  const orchestrator = new TestOrchestrator({
-    userDataPath,
-    enableEventStream: true,
-    runtimeRefreshDebounceMs: 1,
-  });
-  const sentEvents: unknown[] = [];
-  const unsubscribe = orchestrator.subscribe((event) => {
-    sentEvents.push(event);
-  });
-
-  let eventHandler: (event: unknown) => void = () => undefined;
-  orchestrator.opencodeClient.connectEvents = async (target, onEvent) => {
-    void target;
-    eventHandler = onEvent as (event: unknown) => void;
-  };
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  orchestrator.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
-
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", []);
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
-  eventHandler({
-    type: "session.updated",
-    properties: {
-      sessionID: "session-build-1",
-    },
-  });
-  const runtimeUpdatedEvent = await waitForValue(
-    async () =>
-      sentEvents.find((event): event is RuntimeUpdatedEvent => {
-        if (typeof event !== "object" || event === null) {
-          return false;
-        }
-        const candidate = event as Partial<RuntimeUpdatedEvent>;
-        return (
-          candidate.type === "runtime-updated" &&
-          typeof candidate.cwd === "string" &&
-          candidate.payload !== undefined &&
-          typeof candidate.payload.taskId === "string" &&
-          typeof candidate.payload.sessionId === "string"
-        );
-      }),
-    (event): event is RuntimeUpdatedEvent => event !== undefined,
-    500,
-  );
-  if (runtimeUpdatedEvent === undefined) {
-    assert.fail("应当收到 runtime-updated 事件");
-  }
-
-  assert.equal(runtimeUpdatedEvent.cwd, project.cwd);
-  assert.equal(runtimeUpdatedEvent.payload.taskId, task.task.id);
-  assert.equal(runtimeUpdatedEvent.payload.sessionId, "session-build-1");
-  unsubscribe();
 });
 
 test("dispose 之后，迟到结束的 event stream 不会再排 reconnect 定时器", async () => {
@@ -2772,13 +2713,10 @@ test("Agent 返回 completed 但正文为空时，任务必须失败而不是写
 test("单 Agent 且没有下游时，任务结束后仍保留该 Agent 的最终聊天消息", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
-  const orchestrator = new TestOrchestrator(
-    {
-      userDataPath,
-      enableEventStream: false,
-    },
-    withTaskPanelsAndSessions((task, agent) => `session:${task.id}:${agent.id}`),
-  );
+  const orchestrator = new TestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+  });
   stubOpenCodeSessions(orchestrator);
 
   let project = await orchestrator.getWorkspaceSnapshot(projectPath);
@@ -2827,6 +2765,365 @@ test("单 Agent 且没有下游时，任务结束后仍保留该 Agent 的最终
   }
   assert.equal(baFinalMessage.content, "验证成功。");
   assert.equal(baFinalMessageIndex < completionMessageIndex, true);
+});
+
+test("agent 运行中时会先把过程消息追加到 task messages", async () => {
+  const userDataPath = createTempDir();
+  const projectPath = createTempDir();
+  const pendingRun = {
+    ready: false,
+    resolve: (_result: OpenCodeExecutionResult): void => {
+      throw new Error("测试中的 agent 运行 promise 没有进入等待状态");
+    },
+  };
+
+  const orchestrator = new StandaloneRunTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+  });
+  stubOpenCodeSessions(orchestrator);
+  stubOpenCodeReloadConfig(orchestrator);
+
+  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
+  await orchestrator.saveTopology({
+    cwd: project.cwd,
+    topology: {
+      nodes: ["BA"],
+      edges: [],
+    },
+  });
+  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+
+  orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => ({
+    sessionId,
+    messageCount: 1,
+    updatedAt: "2026-04-30T12:00:01.000Z",
+    headline: "读取文件中",
+    activeToolNames: ["read"],
+    activities: [
+      {
+        id: "runtime-activity-1",
+        kind: "tool",
+        label: "read",
+        detail: "参数: filePath=/tmp/demo.txt",
+        detailState: "complete",
+        detailPayloadKeyCount: 1,
+        detailHasPlaceholderValue: false,
+        detailParseMode: "structured",
+        timestamp: "2026-04-30T12:00:01.000Z",
+      },
+    ],
+  });
+  orchestrator.opencodeRunner.run = async () =>
+    new Promise<OpenCodeExecutionResult>((resolve) => {
+      pendingRun.ready = true;
+      pendingRun.resolve = resolve;
+    });
+
+  const runPromise = orchestrator.runStandaloneAgent({
+    cwd: project.cwd,
+    task: task.task,
+    agentId: "BA",
+    prompt: {
+      mode: "raw",
+      from: "User",
+      content: "请先读取文件再回答",
+    },
+  });
+
+  const runningSnapshot = await waitForTaskSnapshot(
+    orchestrator,
+    task.task.id,
+    (current) =>
+      current.messages.some(
+        (message) =>
+          message.kind === "agent-progress"
+          && message.sender === "BA"
+          && message.runCount === 1,
+      ),
+    4000,
+  );
+
+  assert.equal(
+    runningSnapshot.messages.some(
+      (message) =>
+        message.kind === "agent-progress"
+        && message.sender === "BA"
+        && message.runCount === 1,
+    ),
+    true,
+  );
+  assert.equal(runningSnapshot.task.status, "running");
+
+  if (!pendingRun.ready) {
+    assert.fail("测试中的 agent 运行 promise 没有进入等待状态");
+  }
+  pendingRun.resolve(
+    buildCompletedExecutionResult({
+      agent: "BA",
+      finalMessage: "已完成读取。",
+      messageId: "msg-runtime-final",
+      timestamp: "2026-04-30T12:00:02.000Z",
+    }),
+  );
+  await runPromise;
+});
+
+test("runStandaloneAgent 会用后续同步拿到的真实参数覆盖占位 agent-progress 详情", async () => {
+  const userDataPath = createTempDir();
+  const projectPath = createTempDir();
+  const pendingRun = {
+    ready: false,
+    resolve: (_result: OpenCodeExecutionResult): void => {
+      throw new Error("测试中的 agent 运行 promise 没有进入等待状态");
+    },
+  };
+
+  const orchestrator = new StandaloneRunTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+    runtimeRefreshDebounceMs: 1,
+  });
+  stubOpenCodeSessions(orchestrator);
+  stubOpenCodeReloadConfig(orchestrator);
+
+  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
+  await orchestrator.saveTopology({
+    cwd: project.cwd,
+    topology: {
+      nodes: ["BA"],
+      edges: [],
+    },
+  });
+  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+
+  let runtimeCallCount = 0;
+  orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => {
+    runtimeCallCount += 1;
+    return {
+      sessionId,
+      messageCount: 1,
+      updatedAt: "2026-04-30T12:00:01.000Z",
+      headline:
+        runtimeCallCount === 1
+          ? "未获取到调用参数"
+          : "参数: filePath=/tmp/demo.txt",
+      activeToolNames: ["read"],
+      activities: [
+        {
+          id: "runtime-activity-1",
+          kind: "tool",
+          label: "read",
+          detail:
+            runtimeCallCount === 1
+              ? "未获取到调用参数"
+              : "参数: filePath=/tmp/demo.txt",
+          detailState: runtimeCallCount === 1 ? "missing" : "complete",
+          detailPayloadKeyCount: runtimeCallCount === 1 ? 0 : 1,
+          detailHasPlaceholderValue: false,
+          detailParseMode: runtimeCallCount === 1 ? "missing" : "structured",
+          timestamp: "2026-04-30T12:00:01.000Z",
+        },
+      ],
+    };
+  };
+  orchestrator.opencodeRunner.run = async () =>
+    new Promise<OpenCodeExecutionResult>((resolve) => {
+      pendingRun.ready = true;
+      pendingRun.resolve = resolve;
+    });
+
+  const runPromise = orchestrator.runStandaloneAgent({
+    cwd: project.cwd,
+    task: task.task,
+    agentId: "BA",
+    prompt: {
+      mode: "raw",
+      from: "User",
+      content: "请先读取文件再回答",
+    },
+  });
+
+  await waitForTaskSnapshot(
+    orchestrator,
+    task.task.id,
+    (current) =>
+      current.messages.some(
+        (message) =>
+          message.kind === "agent-progress"
+          && message.sender === "BA"
+          && message.detail === "未获取到调用参数",
+      ),
+    4000,
+  );
+
+  await waitForTaskSnapshot(
+    orchestrator,
+    task.task.id,
+    (current) =>
+      current.messages.some(
+        (message) =>
+          message.kind === "agent-progress"
+          && message.sender === "BA"
+          && message.detail === "参数: filePath=/tmp/demo.txt",
+      ),
+    4000,
+  );
+
+  if (!pendingRun.ready) {
+    assert.fail("测试中的 agent 运行 promise 没有进入等待状态");
+  }
+  pendingRun.resolve(
+    buildCompletedExecutionResult({
+      agent: "BA",
+      finalMessage: "已完成读取。",
+      messageId: "msg-runtime-final-refresh",
+      timestamp: "2026-04-30T12:00:02.000Z",
+    }),
+  );
+  await runPromise;
+
+  const finalSnapshot = await orchestrator.getTaskSnapshot(task.task.id);
+  const progressMessages = finalSnapshot.messages.filter(
+    (message) => message.kind === "agent-progress" && message.sender === "BA",
+  );
+  assert.equal(progressMessages.length, 1);
+  const refreshedProgressMessage = progressMessages[0];
+  if (!refreshedProgressMessage || refreshedProgressMessage.kind !== "agent-progress") {
+    assert.fail("应当保留一条 agent-progress 消息");
+  }
+  assert.equal(refreshedProgressMessage.detail, "参数: filePath=/tmp/demo.txt");
+});
+
+test("runStandaloneAgent 在同为 complete 时会按结构化来源优先级覆盖较旧参数", async () => {
+  const userDataPath = createTempDir();
+  const projectPath = createTempDir();
+  const pendingRun = {
+    ready: false,
+    resolve: (_result: OpenCodeExecutionResult): void => {
+      throw new Error("测试中的 agent 运行 promise 没有进入等待状态");
+    },
+  };
+
+  const orchestrator = new StandaloneRunTestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+    runtimeRefreshDebounceMs: 1,
+  });
+  stubOpenCodeSessions(orchestrator);
+  stubOpenCodeReloadConfig(orchestrator);
+
+  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
+  await orchestrator.saveTopology({
+    cwd: project.cwd,
+    topology: {
+      nodes: ["BA"],
+      edges: [],
+    },
+  });
+  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+
+  let runtimeCallCount = 0;
+  orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => {
+    runtimeCallCount += 1;
+    return {
+      sessionId,
+      messageCount: 1,
+      updatedAt: runtimeCallCount === 1
+        ? "2026-04-30T12:00:01.000Z"
+        : "2026-04-30T12:00:02.000Z",
+      headline: runtimeCallCount === 1
+        ? "参数: placeholder"
+        : "参数: filePath=/tmp/demo.txt",
+      activeToolNames: ["read"],
+      activities: [
+        {
+          id: "runtime-activity-1",
+          kind: "tool",
+          label: "read",
+          detail: runtimeCallCount === 1
+            ? "参数: placeholder"
+            : "参数: filePath=/tmp/demo.txt",
+          detailState: "complete",
+          detailPayloadKeyCount: runtimeCallCount === 1 ? 0 : 1,
+          detailHasPlaceholderValue: runtimeCallCount === 1,
+          detailParseMode: runtimeCallCount === 1 ? "plain_text" : "structured",
+          timestamp: runtimeCallCount === 1
+            ? "2026-04-30T12:00:01.000Z"
+            : "2026-04-30T12:00:02.000Z",
+        },
+      ],
+    };
+  };
+  orchestrator.opencodeRunner.run = async () =>
+    new Promise<OpenCodeExecutionResult>((resolve) => {
+      pendingRun.ready = true;
+      pendingRun.resolve = resolve;
+    });
+
+  const runPromise = orchestrator.runStandaloneAgent({
+    cwd: project.cwd,
+    task: task.task,
+    agentId: "BA",
+    prompt: {
+      mode: "raw",
+      from: "User",
+      content: "请先读取文件再回答",
+    },
+  });
+
+  await waitForTaskSnapshot(
+    orchestrator,
+    task.task.id,
+    (current) =>
+      current.messages.some(
+        (message) =>
+          message.kind === "agent-progress"
+          && message.sender === "BA"
+          && message.detail === "参数: placeholder",
+      ),
+    4000,
+  );
+
+  await waitForTaskSnapshot(
+    orchestrator,
+    task.task.id,
+    (current) =>
+      current.messages.some(
+        (message) =>
+          message.kind === "agent-progress"
+          && message.sender === "BA"
+          && message.detail === "参数: filePath=/tmp/demo.txt",
+      ),
+    4000,
+  );
+
+  if (!pendingRun.ready) {
+    assert.fail("测试中的 agent 运行 promise 没有进入等待状态");
+  }
+  pendingRun.resolve(
+    buildCompletedExecutionResult({
+      agent: "BA",
+      finalMessage: "已完成读取。",
+      messageId: "msg-runtime-final-structured-refresh",
+      timestamp: "2026-04-30T12:00:03.000Z",
+    }),
+  );
+  await runPromise;
+
+  const finalSnapshot = await orchestrator.getTaskSnapshot(task.task.id);
+  const progressMessages = finalSnapshot.messages.filter(
+    (message) => message.kind === "agent-progress" && message.sender === "BA",
+  );
+  assert.equal(progressMessages.length, 1);
+  const refreshedProgressMessage = progressMessages[0];
+  if (!refreshedProgressMessage || refreshedProgressMessage.kind !== "agent-progress") {
+    assert.fail("应当保留一条 agent-progress 消息");
+  }
+  assert.equal(refreshedProgressMessage.detail, "参数: filePath=/tmp/demo.txt");
 });
 
 test("判定 Agent 未返回合法标签时必须判为 invalid", () => {

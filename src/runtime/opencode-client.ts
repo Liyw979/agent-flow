@@ -50,6 +50,10 @@ export interface OpenCodeRuntimeActivity {
   kind: "tool" | "message" | "thinking" | "step";
   label: string;
   detail: string;
+  detailState: "complete" | "missing" | "not_applicable";
+  detailPayloadKeyCount: number;
+  detailHasPlaceholderValue: boolean;
+  detailParseMode: "structured" | "plain_text" | "missing" | "not_applicable";
   timestamp: string;
 }
 
@@ -1414,6 +1418,10 @@ export class OpenCodeClient {
           kind: "message",
           label: this.shortenText(normalized.content, 48),
           detail: normalized.content.trim(),
+          detailState: "not_applicable",
+          detailPayloadKeyCount: 0,
+          detailHasPlaceholderValue: false,
+          detailParseMode: "not_applicable",
           timestamp: normalized.completedAt ?? normalized.timestamp,
         });
       }
@@ -1489,7 +1497,11 @@ export class OpenCodeClient {
         id: `${message.id}:${messageIndex}:${partIndex}:tool`,
         kind: "tool",
         label: toolName,
-        detail: toolDetail || "未获取到调用参数",
+        detail: toolDetail.detail || "未获取到调用参数",
+        detailState: toolDetail.detail ? "complete" : "missing",
+        detailPayloadKeyCount: toolDetail.payloadKeyCount,
+        detailHasPlaceholderValue: toolDetail.hasPlaceholderValue,
+        detailParseMode: toolDetail.parseMode,
         timestamp,
       };
     }
@@ -1501,6 +1513,10 @@ export class OpenCodeClient {
         kind: "thinking",
         label: this.shortenText(reasoningDetail, 48),
         detail: reasoningDetail,
+        detailState: "not_applicable",
+        detailPayloadKeyCount: 0,
+        detailHasPlaceholderValue: false,
+        detailParseMode: "not_applicable",
         timestamp,
       };
     }
@@ -1512,6 +1528,10 @@ export class OpenCodeClient {
         kind: "step",
         label: part["name"].trim(),
         detail: detail || `执行步骤：${part["name"].trim()}`,
+        detailState: "not_applicable",
+        detailPayloadKeyCount: 0,
+        detailHasPlaceholderValue: false,
+        detailParseMode: "not_applicable",
         timestamp,
       };
     }
@@ -1526,6 +1546,10 @@ export class OpenCodeClient {
       kind: "message",
       label: this.shortenText(detail, 48),
       detail,
+      detailState: "not_applicable",
+      detailPayloadKeyCount: 0,
+      detailHasPlaceholderValue: false,
+      detailParseMode: "not_applicable",
       timestamp,
     };
   }
@@ -1594,54 +1618,239 @@ export class OpenCodeClient {
     return "";
   }
 
-  private extractToolCallDetail(part: Record<string, unknown>): string {
+  private extractToolCallDetail(part: Record<string, unknown>): {
+    detail: string;
+    payloadKeyCount: number;
+    hasPlaceholderValue: boolean;
+    parseMode: OpenCodeRuntimeActivity["detailParseMode"];
+  } {
     const callRecord = this.asRecord(part["call"]);
     const toolRecord = this.asRecord(part["tool"]);
     const metadataRecord = this.asRecord(part["metadata"]);
     const stateRecord = this.asRecord(part["state"]);
-    const argsValue =
-      part["input"] ??
-      part["args"] ??
-      part["arguments"] ??
-      part["payload"] ??
-      part["options"] ??
-      part["params"] ??
-      part["data"] ??
-      part["body"] ??
-      callRecord["input"] ??
-      callRecord["args"] ??
-      callRecord["arguments"] ??
-      callRecord["payload"] ??
-      callRecord["options"] ??
-      callRecord["params"] ??
-      callRecord["data"] ??
-      callRecord["body"] ??
-      toolRecord["input"] ??
-      toolRecord["args"] ??
-      toolRecord["arguments"] ??
-      toolRecord["payload"] ??
-      toolRecord["options"] ??
-      toolRecord["params"] ??
-      toolRecord["data"] ??
-      toolRecord["body"] ??
-      metadataRecord["input"] ??
-      metadataRecord["args"] ??
-      metadataRecord["arguments"] ??
-      metadataRecord["payload"] ??
-      metadataRecord["options"] ??
-      metadataRecord["params"] ??
-      metadataRecord["data"] ??
-      metadataRecord["body"] ??
-      stateRecord["input"] ??
-      stateRecord["args"] ??
-      stateRecord["arguments"] ??
-      stateRecord["payload"] ??
-      stateRecord["options"] ??
-      stateRecord["params"] ??
-      stateRecord["data"] ??
-      stateRecord["body"];
-    const summary = this.extractStructuredArgsDetail(argsValue);
-    return summary ? `参数: ${summary}` : "";
+    const candidates: unknown[] = [
+      stateRecord["input"],
+      stateRecord["args"],
+      stateRecord["arguments"],
+      stateRecord["payload"],
+      stateRecord["options"],
+      stateRecord["params"],
+      stateRecord["data"],
+      stateRecord["body"],
+      part["input"],
+      part["args"],
+      part["arguments"],
+      part["payload"],
+      part["options"],
+      part["params"],
+      part["data"],
+      part["body"],
+      callRecord["input"],
+      callRecord["args"],
+      callRecord["arguments"],
+      callRecord["payload"],
+      callRecord["options"],
+      callRecord["params"],
+      callRecord["data"],
+      callRecord["body"],
+      toolRecord["input"],
+      toolRecord["args"],
+      toolRecord["arguments"],
+      toolRecord["payload"],
+      toolRecord["options"],
+      toolRecord["params"],
+      toolRecord["data"],
+      toolRecord["body"],
+      metadataRecord["input"],
+      metadataRecord["args"],
+      metadataRecord["arguments"],
+      metadataRecord["payload"],
+      metadataRecord["options"],
+      metadataRecord["params"],
+      metadataRecord["data"],
+      metadataRecord["body"],
+    ];
+    for (const candidate of candidates) {
+      const summary = this.extractStructuredToolCallDetail(candidate);
+      if (!summary.detail) {
+        continue;
+      }
+      return {
+        detail: `参数: ${summary.detail}`,
+        payloadKeyCount: summary.payloadKeyCount,
+        hasPlaceholderValue: summary.hasPlaceholderValue,
+        parseMode: summary.parseMode,
+      };
+    }
+    return {
+      detail: "",
+      payloadKeyCount: 0,
+      hasPlaceholderValue: false,
+      parseMode: "missing",
+    };
+  }
+
+  private extractStructuredToolCallDetail(value: unknown, depth = 0): {
+    detail: string;
+    payloadKeyCount: number;
+    hasPlaceholderValue: boolean;
+    parseMode: OpenCodeRuntimeActivity["detailParseMode"];
+  } {
+    if (value == null || depth > 4) {
+      return {
+        detail: "",
+        payloadKeyCount: 0,
+        hasPlaceholderValue: false,
+        parseMode: "missing",
+      };
+    }
+
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return {
+          detail: "",
+          payloadKeyCount: 0,
+          hasPlaceholderValue: false,
+          parseMode: "missing",
+        };
+      }
+      if (
+        (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))
+      ) {
+        try {
+          return this.extractStructuredToolCallDetail(
+            parseJson5(trimmed),
+            depth + 1,
+          );
+        } catch {
+          return {
+            detail: this.shortenText(trimmed, 160),
+            payloadKeyCount: 0,
+            hasPlaceholderValue: this.isPlaceholderLikeValue(trimmed),
+            parseMode: "plain_text",
+          };
+        }
+      }
+      return {
+        detail: this.shortenText(trimmed, 160),
+        payloadKeyCount: 0,
+        hasPlaceholderValue: this.isPlaceholderLikeValue(trimmed),
+        parseMode: "plain_text",
+      };
+    }
+
+    if (typeof value === "number" || typeof value === "boolean") {
+      return {
+        detail: String(value),
+        payloadKeyCount: 0,
+        hasPlaceholderValue: false,
+        parseMode: "plain_text",
+      };
+    }
+
+    if (Array.isArray(value)) {
+      const items = value
+        .map((item) => this.extractStructuredToolCallDetail(item, depth + 1))
+        .filter((item) => item.detail)
+        .slice(0, 6);
+      const detail = items.length > 0
+        ? this.shortenText(
+            `[${items.map((item) => item.detail).join(", ")}]`,
+            180,
+          )
+        : "";
+      return {
+        detail,
+        payloadKeyCount: items.reduce(
+          (sum, item) => sum + item.payloadKeyCount,
+          value.length,
+        ),
+        hasPlaceholderValue: items.some((item) => item.hasPlaceholderValue),
+        parseMode: detail ? "structured" : "missing",
+      };
+    }
+
+    const record = this.asRecord(value);
+    const preferredEntries = Object.entries(record)
+      .filter(([key, item]) => {
+        if (item == null || item === "") {
+          return false;
+        }
+        return !["output", "result", "response", "summary", "reasoning"].includes(key);
+      })
+      .slice(0, 6)
+      .map(([key, item]) => {
+        const summarized = this.extractStructuredToolCallDetail(item, depth + 1);
+        return summarized.detail
+          ? {
+              detail: `${key}=${summarized.detail}`,
+              payloadKeyCount: summarized.payloadKeyCount,
+              hasPlaceholderValue: summarized.hasPlaceholderValue,
+            }
+          : null;
+      })
+      .filter((item): item is {
+        detail: string;
+        payloadKeyCount: number;
+        hasPlaceholderValue: boolean;
+      } => item !== null);
+
+    if (preferredEntries.length > 0) {
+      return {
+        detail: this.shortenText(
+          preferredEntries.map((item) => item.detail).join(", "),
+          220,
+        ),
+        payloadKeyCount: preferredEntries.reduce(
+          (sum, item) => sum + item.payloadKeyCount,
+          preferredEntries.length,
+        ),
+        hasPlaceholderValue: preferredEntries.some(
+          (item) => item.hasPlaceholderValue,
+        ),
+        parseMode: "structured",
+      };
+    }
+
+    for (const key of [
+      "input",
+      "args",
+      "arguments",
+      "payload",
+      "options",
+      "params",
+      "data",
+      "body",
+    ]) {
+      if (!(key in record)) {
+        continue;
+      }
+      const nested = this.extractStructuredToolCallDetail(
+        record[key],
+        depth + 1,
+      );
+      if (nested.detail) {
+        return nested;
+      }
+    }
+
+    return {
+      detail: "",
+      payloadKeyCount: 0,
+      hasPlaceholderValue: false,
+      parseMode: "missing",
+    };
+  }
+
+  private isPlaceholderLikeValue(value: string): boolean {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "placeholder"
+      || normalized === "<placeholder>"
+      || normalized === "todo"
+      || normalized === "tbd"
+      || normalized === "unknown";
   }
 
   private extractStructuredArgsDetail(value: unknown, depth = 0): string {

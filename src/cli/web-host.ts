@@ -12,7 +12,11 @@ import type {
 import { parseJson5 } from "@shared/json5";
 import type { Orchestrator } from "../runtime/orchestrator";
 import { buildTaskLogFilePath } from "../runtime/app-log";
-import { UI_LOOPBACK_HOST } from "./ui-host-launch";
+import {
+  UI_LOOPBACK_HOST,
+  UI_LOOPBACK_IPV6_HOST,
+  type UiLoopbackBindHost,
+} from "./ui-host-launch";
 import { buildUiUrl } from "./ui-host-launch";
 
 interface StartWebHostOptions {
@@ -22,6 +26,7 @@ interface StartWebHostOptions {
   port: number;
   webRoot: string | null;
   userDataPath: string;
+  bindHosts: UiLoopbackBindHost[];
 }
 
 function json(response: http.ServerResponse, statusCode: number, body: unknown) {
@@ -117,6 +122,7 @@ export async function startWebHost(
   options: StartWebHostOptions,
 ): Promise<{ close: () => Promise<void> }> {
   const subscriptions = new Set<http.ServerResponse>();
+  let unsubscribed = false;
 
   const unsubscribe = options.orchestrator.subscribe((event: AgentTeamEvent) => {
     if (event.cwd !== options.cwd) {
@@ -129,7 +135,7 @@ export async function startWebHost(
     }
   });
 
-  const server = http.createServer(async (request, response) => {
+  const requestHandler = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     if (!request.url) {
       text(response, 400, "missing url");
       return;
@@ -209,29 +215,81 @@ export async function startWebHost(
         message: error instanceof Error ? error.message : String(error),
       });
     }
-  });
+  };
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.port, UI_LOOPBACK_HOST, () => resolve());
-  });
+  const closeServer = async (server: http.Server) => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  };
+
+  const closeBoundServers = async (servers: readonly http.Server[]) => {
+    for (const server of servers) {
+      await closeServer(server);
+    }
+  };
+
+  const unsubscribeOnce = () => {
+    if (unsubscribed) {
+      return;
+    }
+    unsubscribed = true;
+    unsubscribe();
+  };
+
+  const teardown = async (servers: readonly http.Server[]) => {
+    unsubscribeOnce();
+    for (const response of subscriptions) {
+      response.end();
+    }
+    subscriptions.clear();
+    await closeBoundServers(servers);
+  };
+
+  const boundServers: http.Server[] = [];
+  for (const host of options.bindHosts) {
+    const server = http.createServer(requestHandler);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        if (host === UI_LOOPBACK_IPV6_HOST) {
+          server.listen({
+            port: options.port,
+            host,
+            ipv6Only: true,
+          }, () => resolve());
+          return;
+        }
+        server.listen(options.port, host, () => resolve());
+      });
+      boundServers.push(server);
+    } catch (error) {
+      const listenError =
+        error instanceof Error ? error : new Error(String(error));
+      try {
+        await teardown(boundServers);
+      } catch (teardownError) {
+        throw new AggregateError(
+          [listenError, teardownError],
+          "Web Host 监听失败，且回滚失败",
+        );
+      }
+      throw listenError;
+    }
+  }
+
+  if (boundServers.length === 0) {
+    await teardown(boundServers);
+    throw new Error("当前机器没有可用的 loopback 地址可用于启动 Web Host。");
+  }
 
   return {
-    close: async () => {
-      unsubscribe();
-      for (const response of subscriptions) {
-        response.end();
-      }
-      subscriptions.clear();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
-    },
+    close: async () => teardown(boundServers),
   };
 }

@@ -1046,6 +1046,42 @@ test("buildRuntimeSnapshot 在工具参数形似 JSON5 但非法时回退为原�
   assert.equal(snapshot.activities[0]?.timestamp, "2026-04-21T12:52:26.000Z");
 });
 
+test("buildRuntimeSnapshot 会优先使用 tool state.input 作为更完整的参数来源", () => {
+  const { client } = createClient();
+  const typed = client as OpenCodeClient & {
+    buildRuntimeSnapshot: (sessionId: string, messages: unknown[]) => OpenCodeSessionRuntime;
+  };
+
+  const snapshot = typed.buildRuntimeSnapshot("session-1", [
+    {
+      id: "msg-1",
+      role: "assistant",
+      createdAt: "2026-04-21T12:52:26.000Z",
+      completedAt: "2026-04-21T12:52:27.000Z",
+      parts: [
+        {
+          type: "tool",
+          tool: "read",
+          input: "placeholder",
+          state: {
+            input: {
+              filePath: "/tmp/demo.txt",
+            },
+          },
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(snapshot.activities.length, 1);
+  assert.equal(snapshot.activities[0]?.kind, "tool");
+  assert.equal(snapshot.activities[0]?.detail, "参数: filePath=/tmp/demo.txt");
+  assert.equal(snapshot.activities[0]?.detailState, "complete");
+  assert.equal(snapshot.activities[0]?.detailParseMode, "structured");
+  assert.equal(snapshot.activities[0]?.detailPayloadKeyCount, 1);
+  assert.equal(snapshot.activities[0]?.detailHasPlaceholderValue, false);
+});
+
 test("startEventPump 在单条 SSE 数据非法时保留原始载荷并继续消费后续事件", async () => {
   const { client, projectPath } = createClient();
   const typed = client as unknown as {
