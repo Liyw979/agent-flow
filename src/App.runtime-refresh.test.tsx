@@ -5,7 +5,11 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 
-import type { TaskSnapshot, UiSnapshotPayload } from "@shared/types";
+import {
+  buildTopologyNodeRecords,
+  type TaskSnapshot,
+  type UiSnapshotPayload,
+} from "@shared/types";
 
 import App from "./App";
 
@@ -44,6 +48,23 @@ class MockResizeObserver {
 const TASK_ID = "task-app-runtime-refresh";
 const WORKSPACE_CWD = "/tmp/agent-team-app-runtime-refresh";
 
+function createSingleAgentTopology(agentId: string) {
+  return {
+    nodes: [agentId],
+    edges: [],
+    nodeRecords: buildTopologyNodeRecords({
+      nodes: [agentId],
+      spawnNodeIds: new Set(),
+      templateNameByNodeId: new Map(),
+      initialMessageRoutingByNodeId: new Map(),
+      spawnRuleIdByNodeId: new Map(),
+      spawnEnabledNodeIds: new Set(),
+      promptByNodeId: new Map(),
+      writableNodeIds: new Set(),
+    }),
+  };
+}
+
 function createUiSnapshot(input: {
   agentSessionId: string | null;
   messages: TaskSnapshot["messages"];
@@ -59,10 +80,7 @@ function createUiSnapshot(input: {
           isWritable: false,
         },
       ],
-      topology: {
-        nodes: ["漏洞挑战-1"],
-        edges: [],
-      },
+      topology: createSingleAgentTopology("漏洞挑战-1"),
       messages: [],
       tasks: [],
     },
@@ -89,10 +107,7 @@ function createUiSnapshot(input: {
         },
       ],
       messages: input.messages,
-      topology: {
-        nodes: ["漏洞挑战-1"],
-        edges: [],
-      },
+      topology: createSingleAgentTopology("漏洞挑战-1"),
     },
     launchTaskId: TASK_ID,
     launchCwd: WORKSPACE_CWD,

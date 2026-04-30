@@ -1,5 +1,6 @@
 import {
   type AgentRecord,
+  getTopologyNodeRecords,
   type PermissionMode,
   type TopologyRecord,
 } from "@shared/types";
@@ -39,7 +40,10 @@ function buildReadonlyAgentPermissionConfig(): OpenCodePermissionConfig {
 export function extractDslAgentsFromTopology(
   topology: TopologyRecord,
 ): AgentRecord[] | null {
-  const nodeRecords = topology.nodeRecords?.filter((node) => node.kind === "agent") ?? [];
+  if (topology.nodes.length === 0) {
+    return null;
+  }
+  const nodeRecords = getTopologyNodeRecords(topology).filter((node) => node.kind === "agent");
   const hasDslPromptMetadata = nodeRecords.some((node) =>
     typeof node.prompt === "string" || typeof node.writable === "boolean",
   );

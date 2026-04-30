@@ -1,5 +1,8 @@
 import path from "node:path";
-import { createTopologyLangGraphRecord } from "@shared/types";
+import {
+  buildTopologyNodeRecords,
+  createTopologyLangGraphRecord,
+} from "@shared/types";
 import type {
   MessageRecord,
   TaskAgentRecord,
@@ -77,6 +80,16 @@ function createDefaultWorkspaceState(): WorkspaceStateFile {
       langgraph: createTopologyLangGraphRecord({
         nodes: [],
         edges: [],
+      }),
+      nodeRecords: buildTopologyNodeRecords({
+        nodes: [],
+        spawnNodeIds: new Set(),
+        templateNameByNodeId: new Map(),
+        initialMessageRoutingByNodeId: new Map(),
+        spawnRuleIdByNodeId: new Map(),
+        spawnEnabledNodeIds: new Set(),
+        promptByNodeId: new Map(),
+        writableNodeIds: new Set(),
       }),
     },
     tasks: [],

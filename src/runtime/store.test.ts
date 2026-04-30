@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { buildTopologyNodeRecords } from "@shared/types";
+
 import { StoreService } from "./store";
 
 const LEGACY_WORKSPACE_STATE_BASENAME = ["state", "json"].join(".");
@@ -36,6 +38,16 @@ test("StoreService 会在内存里保存 topology / tasks / taskAgents / message
       },
       end: null,
     },
+    nodeRecords: buildTopologyNodeRecords({
+      nodes: ["Build"],
+      spawnNodeIds: new Set(),
+      templateNameByNodeId: new Map(),
+      initialMessageRoutingByNodeId: new Map(),
+      spawnRuleIdByNodeId: new Map(),
+      spawnEnabledNodeIds: new Set(),
+      promptByNodeId: new Map(),
+      writableNodeIds: new Set(),
+    }),
   });
   store.insertTask({
     id: "task-1",

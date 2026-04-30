@@ -1,9 +1,9 @@
 import {
   DEFAULT_TOPOLOGY_TRIGGER,
+  getTopologyNodeRecords,
   normalizeTopologyEdgeTrigger,
   type SpawnRule,
   type TopologyEdge,
-  type TopologyNodeRecord,
   type TopologyRecord,
 } from "@shared/types";
 
@@ -11,17 +11,6 @@ type DownstreamMode =
   | "spawn"
   | typeof DEFAULT_TOPOLOGY_TRIGGER
   | TopologyEdge["trigger"];
-
-function getNodeRecords(topology: TopologyRecord): TopologyNodeRecord[] {
-  if (topology.nodeRecords && topology.nodeRecords.length > 0) {
-    return topology.nodeRecords.map((node) => ({ ...node }));
-  }
-  return topology.nodes.map((name) => ({
-    id: name,
-    kind: "agent" as const,
-    templateName: name,
-  }));
-}
 
 function buildReachableTargets(topology: TopologyRecord, startNodeId: string): string[] {
   const queue = [startNodeId];
@@ -47,7 +36,7 @@ function buildReachableTargets(topology: TopologyRecord, startNodeId: string): s
 
 function buildSpawnRuleFromReachable(topology: TopologyRecord, sourceNodeId: string, targetNodeId: string): SpawnRule {
   const reachable = buildReachableTargets(topology, targetNodeId);
-  const nodeRecords = getNodeRecords(topology);
+  const nodeRecords = getTopologyNodeRecords(topology);
   const targetTemplates = reachable.map((nodeId) => {
     const matched = nodeRecords.find((node) => node.id === nodeId);
     return {
@@ -97,7 +86,7 @@ function setSpawnNodeState(
   targetNodeId: string,
   enabled: boolean,
 ): Pick<TopologyRecord, "nodeRecords" | "spawnRules"> {
-  const nodeRecords = getNodeRecords(topology);
+  const nodeRecords = getTopologyNodeRecords(topology);
   const spawnRuleId = `spawn-rule:${targetNodeId}`;
   const nextNodeRecords = nodeRecords.map((node) =>
     node.id === targetNodeId
@@ -120,11 +109,11 @@ function setSpawnNodeState(
 }
 
 export function getDownstreamMode(input: {
-  topology: Pick<TopologyRecord, "edges" | "nodeRecords">;
+  topology: Pick<TopologyRecord, "nodes" | "edges" | "nodeRecords">;
   sourceNodeId: string;
   targetNodeId: string;
 }): DownstreamMode | null {
-  const targetNode = input.topology.nodeRecords?.find((node) => node.id === input.targetNodeId);
+  const targetNode = getTopologyNodeRecords(input.topology).find((node) => node.id === input.targetNodeId);
   if (targetNode?.spawnEnabled) {
     return "spawn";
   }
@@ -167,7 +156,7 @@ export function setSpawnEnabledForDownstream(input: {
 
   return {
     ...input.topology,
-    ...(spawnState.nodeRecords ? { nodeRecords: spawnState.nodeRecords } : {}),
+    nodeRecords: spawnState.nodeRecords,
     spawnRules: nextSpawnRules,
     edges: nextEdges,
   };
@@ -206,7 +195,7 @@ export function setDownstreamMode(input: {
 
   return {
     ...input.topology,
-    ...(spawnState.nodeRecords ? { nodeRecords: spawnState.nodeRecords } : {}),
+    nodeRecords: spawnState.nodeRecords,
     spawnRules: spawnState.spawnRules ?? [],
     edges: nextEdges,
   };

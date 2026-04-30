@@ -4,12 +4,12 @@ import {
   type UiLoopbackBindHost,
 } from "./ui-host-launch";
 
-export interface ReservedLoopbackPort {
+interface ReservedLoopbackPort {
   port: number;
   close: () => Promise<void>;
 }
 
-export type ReserveLoopbackPortResult =
+type ReserveLoopbackPortResult =
   | {
       ok: true;
       reservation: ReservedLoopbackPort;

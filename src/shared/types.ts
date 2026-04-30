@@ -56,6 +56,17 @@ export interface TopologyAgentSeed {
 export type TopologyNodeKind = "agent" | "spawn";
 
 export type SpawnedAgentRole = "pro" | "con" | "summary" | string;
+export type InitialMessageRouting =
+  | {
+      mode: "inherit";
+    }
+  | {
+      mode: "none";
+    }
+  | {
+      mode: "list";
+      agentIds: string[];
+    };
 
 function buildTopologyTrigger(name: string): TopologyTrigger {
   return `<${name}>`;
@@ -102,6 +113,7 @@ export interface TopologyNodeRecord {
   id: string;
   kind: TopologyNodeKind;
   templateName: string;
+  initialMessageRouting: InitialMessageRouting;
   spawnRuleId?: string;
   spawnEnabled?: boolean;
   prompt?: string;
@@ -119,7 +131,7 @@ export interface TaskAgentRecord {
 
 export type TopologyTrigger = string;
 export type TopologyEdgeTrigger = TopologyTrigger;
-export type TopologyEdgeMessageMode = "none" | "last" | "last-all";
+export type TopologyEdgeMessageMode = "none" | "last";
 
 export const DEFAULT_ACTION_REQUIRED_MAX_ROUNDS = 4;
 export const DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE: TopologyEdgeMessageMode =
@@ -175,7 +187,7 @@ export interface TopologyRecord {
   nodes: string[];
   edges: TopologyEdge[];
   langgraph?: TopologyLangGraphRecord;
-  nodeRecords?: TopologyNodeRecord[];
+  nodeRecords: TopologyNodeRecord[];
   spawnRules?: SpawnRule[];
 }
 
@@ -229,6 +241,86 @@ export function normalizeActionRequiredMaxRounds(value: unknown): number {
     throw new Error("maxTriggerRounds 必须是大于等于 1 的整数");
   }
   return value;
+}
+
+export function normalizeInitialMessageAgentIds(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  const rawValues = typeof value === "string" ? [value] : value;
+  if (!Array.isArray(rawValues)) {
+    throw new Error("initialMessage 必须是字符串或字符串数组");
+  }
+
+  const normalizedValues: string[] = [];
+  for (const item of rawValues) {
+    if (typeof item !== "string") {
+      throw new Error("initialMessage 只允许包含 Agent ID 字符串");
+    }
+    const normalizedItem = item.trim();
+    if (!normalizedItem) {
+      throw new Error("initialMessage 不允许包含空白 Agent ID");
+    }
+    if (!normalizedValues.includes(normalizedItem)) {
+      normalizedValues.push(normalizedItem);
+    }
+  }
+
+  return normalizedValues;
+}
+
+function assertInitialMessageAgentIds(value: unknown): asserts value is string[] {
+  if (!Array.isArray(value)) {
+    throw new Error("initialMessageRouting.mode=list 时必须显式提供 agentIds 数组");
+  }
+  for (const item of value) {
+    if (typeof item !== "string" || item.trim().length === 0) {
+      throw new Error("initialMessageRouting.agentIds 只允许包含非空 Agent ID 字符串");
+    }
+  }
+}
+
+export function parseInitialMessageRoutingFromDslInput(
+  value: unknown,
+): InitialMessageRouting {
+  if (value === undefined) {
+    return { mode: "inherit" };
+  }
+
+  const agentIds = normalizeInitialMessageAgentIds(value);
+  if (agentIds.length === 0) {
+    return { mode: "none" };
+  }
+  return {
+    mode: "list",
+    agentIds,
+  };
+}
+
+export function assertInitialMessageRouting(
+  value: unknown,
+): asserts value is InitialMessageRouting {
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "mode" in value
+  ) {
+    const record = value as Record<string, unknown>;
+    if (record["mode"] === "inherit") {
+      return;
+    }
+    if (record["mode"] === "none") {
+      return;
+    }
+    if (record["mode"] === "list") {
+      assertInitialMessageAgentIds(record["agentIds"]);
+      return;
+    }
+    throw new Error("非法 initialMessageRouting.mode");
+  }
+
+  throw new Error("非法 initialMessageRouting");
 }
 
 export function getActionRequiredEdgeLoopLimit(
@@ -801,35 +893,70 @@ export function createDefaultTopology(
           ? [nodes[0]]
           : [],
     }),
-    nodeRecords: nodes.map((name) => ({
-      id: name,
-      kind: "agent",
-      templateName: name,
-    })),
+    nodeRecords: buildTopologyNodeRecords({
+      nodes,
+      spawnNodeIds: new Set(),
+      templateNameByNodeId: new Map(),
+      initialMessageRoutingByNodeId: new Map(),
+      spawnRuleIdByNodeId: new Map(),
+      spawnEnabledNodeIds: new Set(),
+      promptByNodeId: new Map(),
+      writableNodeIds: new Set(),
+    }),
     spawnRules: [],
   };
+}
+
+export function buildTopologyNodeRecords(input: {
+  nodes: string[];
+  spawnNodeIds: ReadonlySet<string>;
+  templateNameByNodeId: ReadonlyMap<string, string>;
+  initialMessageRoutingByNodeId: ReadonlyMap<string, InitialMessageRouting>;
+  spawnRuleIdByNodeId: ReadonlyMap<string, string>;
+  spawnEnabledNodeIds: ReadonlySet<string>;
+  promptByNodeId: ReadonlyMap<string, string>;
+  writableNodeIds: ReadonlySet<string>;
+}): TopologyNodeRecord[] {
+  return input.nodes.map((nodeId) => {
+    const templateName = input.templateNameByNodeId.get(nodeId) ?? nodeId;
+    const initialMessageRouting =
+      input.initialMessageRoutingByNodeId.get(nodeId) ?? { mode: "inherit" };
+    const isSpawnNode = input.spawnNodeIds.has(nodeId);
+    const spawnRuleId = input.spawnRuleIdByNodeId.get(nodeId);
+    const prompt = input.promptByNodeId.get(nodeId);
+
+    return {
+      id: nodeId,
+      kind: isSpawnNode ? "spawn" : "agent",
+      templateName,
+      initialMessageRouting,
+      ...(typeof spawnRuleId === "string" ? { spawnRuleId } : {}),
+      ...(input.spawnEnabledNodeIds.has(nodeId) ? { spawnEnabled: true } : {}),
+      ...(typeof prompt === "string" ? { prompt } : {}),
+      ...(input.writableNodeIds.has(nodeId) ? { writable: true } : {}),
+    };
+  });
 }
 
 export function getTopologyNodeRecords(
   topology: TopologyRecord,
 ): TopologyNodeRecord[] {
-  const explicit = topology.nodeRecords?.filter(
-    (node): node is TopologyNodeRecord =>
-      typeof node?.id === "string" &&
-      node.id.length > 0 &&
-      typeof node.templateName === "string" &&
-      node.templateName.length > 0 &&
-      (node.kind === "agent" || node.kind === "spawn"),
-  );
-  if (explicit && explicit.length > 0) {
-    return explicit.map((node) => ({ ...node }));
+  if (topology.nodeRecords.length === 0) {
+    throw new Error("拓扑缺少 nodeRecords。");
   }
-
-  return topology.nodes.map((name) => ({
-    id: name,
-    kind: "agent",
-    templateName: name,
-  }));
+  for (const node of topology.nodeRecords) {
+    if (
+      typeof node?.id !== "string" ||
+      node.id.length === 0 ||
+      typeof node.templateName !== "string" ||
+      node.templateName.length === 0 ||
+      (node.kind !== "agent" && node.kind !== "spawn")
+    ) {
+      throw new Error("拓扑 nodeRecords 存在非法节点记录。");
+    }
+    assertInitialMessageRouting(node.initialMessageRouting);
+  }
+  return topology.nodeRecords;
 }
 
 export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {

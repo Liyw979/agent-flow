@@ -1,5 +1,6 @@
 import {
   DEFAULT_TOPOLOGY_TRIGGER,
+  getTopologyNodeRecords,
   getTopologyEdgeId,
   resolveTriggerRoutingKindForSource,
   type TopologyEdge,
@@ -372,7 +373,7 @@ export class GatingScheduler {
     }
 
     const spawnNodeIds = new Set(
-      (this.topology.nodeRecords ?? [])
+      getTopologyNodeRecords(this.topology)
         .filter((node) => node.kind === "spawn")
         .map((node) => node.id),
     );
@@ -510,7 +511,7 @@ export class GatingScheduler {
   }
 
   private getTemplateName(nodeId: string): string | null {
-    const nodeRecord = this.topology.nodeRecords?.find((node) => node.id === nodeId);
+    const nodeRecord = getTopologyNodeRecords(this.topology).find((node) => node.id === nodeId);
     return nodeRecord?.templateName ?? nodeId;
   }
 
@@ -544,7 +545,7 @@ export class GatingScheduler {
   private isSpawnReportEdgeSatisfiedByRuntimeReport(edge: TopologyEdge, completedEdges: Set<string>): boolean {
     const spawnRule = (this.topology.spawnRules ?? []).find((rule) => {
       const spawnNodeName = rule.spawnNodeName
-        || this.topology.nodeRecords?.find((node) => node.spawnRuleId === rule.id)?.id
+        || getTopologyNodeRecords(this.topology).find((node) => node.spawnRuleId === rule.id)?.id
         || "";
       return (
         spawnNodeName === edge.source
@@ -578,7 +579,7 @@ export class GatingScheduler {
         return false;
       }
 
-      const sourceNode = this.topology.nodeRecords?.find((node) => node.id === candidate.source);
+      const sourceNode = getTopologyNodeRecords(this.topology).find((node) => node.id === candidate.source);
       return sourceNode ? terminalTemplateNames.has(sourceNode.templateName) : false;
     });
   }

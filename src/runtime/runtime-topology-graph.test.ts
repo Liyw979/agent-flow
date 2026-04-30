@@ -14,7 +14,7 @@ test("buildEffectiveTopology 不会因为 nodeRecords 只保存局部节点而�
       { source: "Build", target: "QA", trigger: "<default>", messageMode: "last" },
     ],
     nodeRecords: [
-      { id: "BA", kind: "agent", templateName: "BA", spawnEnabled: false },
+      { id: "BA", kind: "agent", templateName: "BA", spawnEnabled: false, initialMessageRouting: { mode: "inherit" } },
     ],
   };
   const state = createGraphTaskState({

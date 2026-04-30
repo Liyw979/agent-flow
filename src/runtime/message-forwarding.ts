@@ -1,15 +1,30 @@
 import {
+  extractAgentFinalDisplayContent,
+  getActionRequiredRequestDisplayBody,
+} from "../lib/chat-messages";
+import {
   getMessageTargetAgentIds,
-  isAgentDispatchMessageRecord,
+  getMessageSenderDisplayName,
+  isAgentFinalMessageRecord,
+  isActionRequiredRequestMessageRecord,
   isUserMessageRecord,
+  type InitialMessageRouting,
   type MessageRecord,
   type TopologyEdgeMessageMode,
 } from "@shared/types";
-import { withOptionalString } from "@shared/object-utils";
-import { mergeTaskChatMessages, type ChatMessageItem } from "../lib/chat-messages";
 
 type MinimalMessage = MessageRecord;
-const NONE_MODE_PLACEHOLDER_MESSAGE = "[no-forwarded-message]";
+export const NONE_MODE_PLACEHOLDER_MESSAGE = "[no-forwarded-message]";
+
+type DownstreamForwardedContext =
+  | {
+      kind: "empty";
+    }
+  | {
+      kind: "forwarded";
+      userMessage: string;
+      agentMessage: string;
+    };
 
 function extractMention(content: string): string | undefined {
   const match = content.match(/@([^\s]+)/u);
@@ -79,9 +94,11 @@ export function buildDownstreamForwardedContextFromMessages(
   options: {
     includeInitialTask?: boolean;
     messageMode: TopologyEdgeMessageMode;
-    activeAgentIds?: string[];
+    initialMessageRouting: InitialMessageRouting;
+    sourceAgentId: string;
+    initialMessageSourceAliasesByAgentId: Record<string, string[]>;
   },
-): { userMessage?: string; agentMessage: string } {
+): DownstreamForwardedContext {
   const includeInitialTask = options.includeInitialTask ?? true;
   const messageMode = options.messageMode;
   const initialUserContent = getInitialUserMessageContent(messages);
@@ -90,105 +107,206 @@ export function buildDownstreamForwardedContextFromMessages(
     messages,
     latestSourceContent,
     messageMode,
-    options.activeAgentIds ?? [],
+    options.initialMessageRouting,
+    options.sourceAgentId,
+    options.initialMessageSourceAliasesByAgentId,
   );
-  return withOptionalString({
+  if (!agentMessage) {
+    return { kind: "empty" };
+  }
+  return {
+    kind: "forwarded",
     agentMessage,
-  }, "userMessage",
-    includeInitialTask
-    && initialUserContent
-    && !contentContainsNormalized(agentMessage, initialUserContent)
-      ? initialUserContent
-      : undefined,
-  );
+    userMessage:
+      includeInitialTask
+      && initialUserContent
+      && !contentContainsNormalized(agentMessage, initialUserContent)
+        ? initialUserContent
+        : "",
+  };
 }
 
 function resolveForwardedAgentMessage(
   messages: MinimalMessage[],
   latestSourceContent: string,
   messageMode: TopologyEdgeMessageMode,
-  activeAgentIds: string[],
+  initialMessageRouting: InitialMessageRouting,
+  sourceAgentId: string,
+  initialMessageSourceAliasesByAgentId: Record<string, string[]>,
 ): string {
-  if (messageMode === "none") {
-    return NONE_MODE_PLACEHOLDER_MESSAGE;
-  }
-
-  if (messageMode === "last-all") {
-    const transcript = buildLastForwardableTranscript(messages, activeAgentIds);
-    return transcript || latestSourceContent || "（当前没有可转发的历史消息记录。）";
-  }
-
-  return latestSourceContent || "（该上游 Agent 未返回可继续流转的正文。）";
-}
-
-function buildLastForwardableTranscript(messages: MinimalMessage[], activeAgentIds: string[]): string {
-  const activeAgentIdSet = new Set(
-    activeAgentIds
-      .map((value) => value.trim())
-      .filter(Boolean),
+  const sourceEntries = buildDefaultForwardingEntries(
+    latestSourceContent,
+    messageMode,
+    sourceAgentId,
   );
-  if (activeAgentIdSet.size === 0) {
+  const initialEntries = buildInitialMessageEntries(
+    messages,
+    initialMessageRouting,
+    initialMessageSourceAliasesByAgentId,
+  );
+  const aggregatedSections = aggregateForwardingEntries([
+    ...sourceEntries,
+    ...initialEntries,
+  ]);
+  if (aggregatedSections.length === 0) {
     return "";
   }
-
-  const items = mergeTaskChatMessages(messages)
-    .filter((item) => activeAgentIdSet.has(item.sender))
-    .filter((item) => isForwardableChatMessageItem(item));
-  if (items.length === 0) {
-    return "";
-  }
-
-  const latestItemIndexBySender = new Map<string, number>();
-  for (let index = 0; index < items.length; index += 1) {
-    latestItemIndexBySender.set(items[index]!.sender, index);
-  }
-
-  return items
-    .filter((item, index) => latestItemIndexBySender.get(item.sender) === index)
-    .map((item) => formatForwardableChatMessageItem(item))
-    .filter(Boolean)
-    .join("\n\n");
+  return aggregatedSections.join("\n\n");
 }
 
-function isForwardableChatMessageItem(item: ChatMessageItem): boolean {
-  if (!item.content.trim()) {
+type ForwardingEntry = {
+  sourceAgentId: string;
+  content: string;
+};
+
+type InitialMessageEntryResolution =
+  | {
+      kind: "found";
+      entry: ForwardingEntry;
+    }
+  | {
+      kind: "missing";
+    };
+
+function buildDefaultForwardingEntries(
+  latestSourceContent: string,
+  messageMode: TopologyEdgeMessageMode,
+  sourceAgentId: string,
+): ForwardingEntry[] {
+  if (messageMode === "none") {
+    return [];
+  }
+
+  const content = latestSourceContent || "（该上游 Agent 未返回可继续流转的正文。）";
+  return [{ sourceAgentId, content }];
+}
+
+function buildInitialMessageEntries(
+  messages: MinimalMessage[],
+  initialMessageRouting: InitialMessageRouting,
+  initialMessageSourceAliasesByAgentId: Record<string, string[]>,
+): ForwardingEntry[] {
+  if (initialMessageRouting.mode === "inherit" || initialMessageRouting.mode === "none") {
+    return [];
+  }
+
+  return initialMessageRouting.agentIds
+    .map((agentId): ForwardingEntry => {
+      const resolution = resolveInitialMessageEntryByAgentId(
+        messages,
+        agentId,
+        initialMessageSourceAliasesByAgentId[agentId] ?? [],
+      );
+      if (resolution.kind === "missing") {
+        throw new Error(`initialMessage 指定的来源 Agent 缺少可转发消息：${agentId}`);
+      }
+      return resolution.entry;
+    });
+}
+
+function aggregateForwardingEntries(entries: ForwardingEntry[]): string[] {
+  const contentsBySource = new Map<string, string[]>();
+  const normalizedContentBySource = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const normalizedSourceAgentId = entry.sourceAgentId.trim();
+    const normalizedContent = normalizeContentForDedup(entry.content);
+    if (!normalizedSourceAgentId || !normalizedContent) {
+      continue;
+    }
+    const sourceContents = contentsBySource.get(normalizedSourceAgentId) ?? [];
+    const sourceSeen = normalizedContentBySource.get(normalizedSourceAgentId) ?? new Set<string>();
+    if (sourceSeen.has(normalizedContent)) {
+      continue;
+    }
+    sourceSeen.add(normalizedContent);
+    sourceContents.push(entry.content.trim());
+    contentsBySource.set(normalizedSourceAgentId, sourceContents);
+    normalizedContentBySource.set(normalizedSourceAgentId, sourceSeen);
+  }
+  return [...contentsBySource.entries()].map(([sourceAgentId, sourceContents]) =>
+    `${buildSourceAgentMessageSectionLabel(sourceAgentId)}\n${sourceContents.join("\n\n")}`,
+  );
+}
+
+function resolveInitialMessageEntryByAgentId(
+  messages: MinimalMessage[],
+  agentId: string,
+  aliases: string[],
+): InitialMessageEntryResolution {
+  const candidates = [...new Set([
+    ...aliases.map((value) => value.trim()).filter(Boolean),
+    agentId.trim(),
+  ])];
+  for (const candidate of candidates) {
+    const matchedMessage = messages.find((message) =>
+      isForwardableInitialSourceMessage(message)
+      && matchesForwardingMessageAgentAlias(message, candidate),
+    );
+    if (!matchedMessage) {
+      continue;
+    }
+    const content = normalizeForwardableMessageContent(matchedMessage);
+    if (!content) {
+      continue;
+    }
+    return {
+      kind: "found",
+      entry: {
+        sourceAgentId: matchedMessage.sender.trim() || agentId,
+        content,
+      },
+    };
+  }
+  return {
+    kind: "missing",
+  };
+}
+
+function isForwardableInitialSourceMessage(message: MinimalMessage): boolean {
+  if (isAgentFinalMessageRecord(message)) {
+    return message.content.trim().length > 0;
+  }
+  if (isActionRequiredRequestMessageRecord(message)) {
+    return message.content.trim().length > 0;
+  }
+  return false;
+}
+
+function matchesForwardingMessageAgentAlias(message: MinimalMessage, alias: string): boolean {
+  const normalizedAlias = alias.trim();
+  if (!normalizedAlias) {
     return false;
   }
-  if (item.sender === "system") {
-    return false;
-  }
-  return !item.messageChain.every((message) => isAgentDispatchMessageRecord(message));
+  const candidateIds = new Set<string>([
+    message.sender,
+    getMessageSenderDisplayName(message) ?? "",
+  ].map((value) => value.trim()).filter(Boolean));
+  return candidateIds.has(normalizedAlias);
 }
 
-function formatForwardableChatMessageItem(item: ChatMessageItem): string {
-  const sender = item.sender.trim() || "Unknown";
-  const content = normalizeForwardableChatMessageItemContent(item);
-
-  if (!content) {
-    return "";
-  }
-
-  return `[${sender}] ${content}`;
-}
-
-function normalizeForwardableChatMessageItemContent(item: ChatMessageItem): string {
-  const trimmed = item.content.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  if (item.sender === "user") {
-    const targetAgentId = item.messageChain
-      .flatMap((message) => getMessageTargetAgentIds(message))
-      .map((value) => value.trim())
-      .find(Boolean);
+function normalizeForwardableMessageContent(message: MinimalMessage): string {
+  if (message.sender === "user") {
+    const rawUserContent = message.content.trim();
+    if (!rawUserContent) {
+      return "";
+    }
+    const targetAgentId = getMessageTargetAgentIds(message)[0]?.trim();
     const stripped = targetAgentId
-      ? stripTargetMention(trimmed, targetAgentId)
-      : trimmed;
+      ? stripTargetMention(rawUserContent, targetAgentId)
+      : rawUserContent;
     return stripTrailingStandaloneMentions(stripped);
   }
-
-  return stripTrailingStandaloneMentions(trimmed);
+  if (isAgentFinalMessageRecord(message)) {
+    return stripTrailingStandaloneMentions(
+      extractAgentFinalDisplayContent(message),
+    );
+  }
+  if (message.kind === "action-required-request") {
+    return stripTrailingStandaloneMentions(
+      getActionRequiredRequestDisplayBody(message),
+    );
+  }
+  return stripTrailingStandaloneMentions(message.content.trim());
 }
 
 function stripTrailingStandaloneMentions(content: string): string {

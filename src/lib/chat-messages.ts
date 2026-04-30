@@ -116,7 +116,7 @@ function getMessageAllowedDecisionTriggers(message: MessageRecord): string[] {
   return [];
 }
 
-function getActionRequiredRequestDisplayBody(message: MessageRecord): string {
+export function getActionRequiredRequestDisplayBody(message: MessageRecord): string {
   const normalized = stripTrailingMentions(message.content);
   const allowedTriggers = getMessageAllowedDecisionTriggers(message);
   const extracted = extractLastDecisionResponse(normalized, allowedTriggers);
@@ -160,7 +160,7 @@ function extractTrailingTopLevelSection(content: string): string {
   return trailingSection || content;
 }
 
-function extractAgentFinalDisplayContent(message: MessageRecord): string {
+export function extractAgentFinalDisplayContent(message: MessageRecord): string {
   const rawContent = message.content.trim();
   if (!rawContent) {
     return "";

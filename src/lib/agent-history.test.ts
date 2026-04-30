@@ -116,8 +116,8 @@ const topology: TopologyRecord = {
     },
   ],
   nodeRecords: [
-    { id: "Build", kind: "agent", templateName: "Build" },
-    { id: "TaskReview", kind: "agent", templateName: "TaskReview" },
+    { id: "Build", kind: "agent", templateName: "Build", initialMessageRouting: { mode: "inherit" } },
+    { id: "TaskReview", kind: "agent", templateName: "TaskReview", initialMessageRouting: { mode: "inherit" } },
   ],
 };
 
@@ -520,20 +520,21 @@ test("buildAgentHistoryItems 会按 runtime agent 对应模板的 trigger 集合
         source: "线索发现",
         target: "疑点辩论",
         trigger: "<continue>",
-        messageMode: "last-all",
+        messageMode: "last",
       },
     ],
     nodeRecords: [
-      { id: "线索发现", kind: "agent", templateName: "线索发现" },
+      { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
       {
         id: "疑点辩论",
         kind: "spawn",
         templateName: "疑点辩论",
         spawnRuleId: "spawn-rule:疑点辩论",
+        initialMessageRouting: { mode: "inherit" },
       },
-      { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战" },
-      { id: "漏洞论证", kind: "agent", templateName: "漏洞论证" },
-      { id: "讨论总结", kind: "agent", templateName: "讨论总结" },
+      { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战", initialMessageRouting: { mode: "inherit" } },
+      { id: "漏洞论证", kind: "agent", templateName: "漏洞论证", initialMessageRouting: { mode: "inherit" } },
+      { id: "讨论总结", kind: "agent", templateName: "讨论总结", initialMessageRouting: { mode: "inherit" } },
     ],
     spawnRules: [
       {
@@ -565,13 +566,13 @@ test("buildAgentHistoryItems 会按 runtime agent 对应模板的 trigger 集合
             sourceRole: "漏洞挑战",
             targetRole: "讨论总结",
             trigger: "<complete>",
-            messageMode: "last-all",
+            messageMode: "last",
           },
           {
             sourceRole: "漏洞论证",
             targetRole: "讨论总结",
             trigger: "<complete>",
-            messageMode: "last-all",
+            messageMode: "last",
           },
         ],
         exitWhen: "all_completed",
@@ -613,9 +614,9 @@ test("buildAgentHistoryItems 解析 runtime agent 模板时不会误命中同前
     }),
   ];
   const ambiguousNodeRecords: TopologyNodeRecord[] = [
-    { id: "A", kind: "agent", templateName: "A" },
-    { id: "A-B", kind: "agent", templateName: "A-B" },
-    { id: "Next", kind: "agent", templateName: "Next" },
+    { id: "A", kind: "agent", templateName: "A", initialMessageRouting: { mode: "inherit" } },
+    { id: "A-B", kind: "agent", templateName: "A-B", initialMessageRouting: { mode: "inherit" } },
+    { id: "Next", kind: "agent", templateName: "Next", initialMessageRouting: { mode: "inherit" } },
   ];
   const ambiguousTopology: TopologyRecord = {
     nodes: ["A", "A-B", "Next"],
@@ -673,31 +674,33 @@ test("buildAgentHistoryItems 遇到归属多个 spawn rule 的模板时不会猜
         source: "入口甲",
         target: "工厂甲",
         trigger: "<continue>",
-        messageMode: "last-all",
+        messageMode: "last",
       },
       {
         source: "入口乙",
         target: "工厂乙",
         trigger: "<continue>",
-        messageMode: "last-all",
+        messageMode: "last",
       },
     ],
     nodeRecords: [
-      { id: "入口甲", kind: "agent", templateName: "入口甲" },
-      { id: "入口乙", kind: "agent", templateName: "入口乙" },
+      { id: "入口甲", kind: "agent", templateName: "入口甲", initialMessageRouting: { mode: "inherit" } },
+      { id: "入口乙", kind: "agent", templateName: "入口乙", initialMessageRouting: { mode: "inherit" } },
       {
         id: "工厂甲",
         kind: "spawn",
         templateName: "工厂甲",
         spawnRuleId: "spawn-rule:甲",
+        initialMessageRouting: { mode: "inherit" },
       },
       {
         id: "工厂乙",
         kind: "spawn",
         templateName: "工厂乙",
         spawnRuleId: "spawn-rule:乙",
+        initialMessageRouting: { mode: "inherit" },
       },
-      { id: "复核", kind: "agent", templateName: "复核" },
+      { id: "复核", kind: "agent", templateName: "复核", initialMessageRouting: { mode: "inherit" } },
     ],
     spawnRules: [
       {

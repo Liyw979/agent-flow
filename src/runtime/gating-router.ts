@@ -2,6 +2,7 @@ import {
   DEFAULT_TOPOLOGY_TRIGGER,
   DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
   getActionRequiredEdgeLoopLimit,
+  getTopologyNodeRecords,
   getSpawnRules,
   isActionRequiredTopologyTrigger,
   isDefaultTopologyTrigger,
@@ -1221,7 +1222,7 @@ function resolvePendingAllCompletedDebateTargets(
 }
 
 function getTemplateNameForNode(topology: TopologyRecord, nodeId: string): string | null {
-  return topology.nodeRecords?.find((node) => node.id === nodeId)?.templateName ?? nodeId;
+  return getTopologyNodeRecords(topology).find((node) => node.id === nodeId)?.templateName ?? nodeId;
 }
 
 function getSpawnRuleTemplateNameForRole(

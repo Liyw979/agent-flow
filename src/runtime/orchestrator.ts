@@ -15,15 +15,18 @@ import {
   type AgentRecord,
   assertNoAmbiguousTopologyTriggerRoutes,
   BUILD_AGENT_ID,
+  buildTopologyNodeRecords,
   createDefaultTopology,
   DEFAULT_TOPOLOGY_TRIGGER,
   DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
+  type InitialMessageRouting,
   isActionRequiredTopologyTrigger,
   LANGGRAPH_END_NODE_ID,
   normalizeActionRequiredMaxRounds,
   collectTopologyTriggerShapes,
   createTopologyLangGraphRecord,
   getTopologyEdgeId,
+  getTopologyNodeRecords,
   normalizeTopologyEdgeTrigger,
   resolveTriggerRoutingKindForSource,
   type DeleteTaskPayload,
@@ -73,6 +76,7 @@ import {
 import { resolveAgentStatusFromRouting } from "./gating-rules";
 import {
   buildDownstreamForwardedContextFromMessages,
+  NONE_MODE_PLACEHOLDER_MESSAGE,
   buildSourceAgentMessageSectionLabel,
   buildUserHistoryContent as buildUserHistoryContentPure,
   contentContainsNormalized as contentContainsNormalizedPure,
@@ -96,7 +100,6 @@ import {
   buildEffectiveTopology,
   getRuntimeTemplateName,
 } from "./runtime-topology-graph";
-import { resolveForwardingActiveAgentIdsFromState } from "./forwarding-active-agents";
 import type { CompiledTeamDsl } from "./team-dsl";
 import { shouldScheduleEventStreamReconnect } from "./event-stream-lifecycle";
 import { resolveExecutionDecisionAgent } from "./decision-agent-context";
@@ -133,6 +136,20 @@ interface GitSummaryCommandResult {
   unavailable: boolean;
 }
 
+interface EdgeForwardingConfig {
+  messageMode: "none" | "last";
+  initialMessageRouting: InitialMessageRouting;
+}
+
+type InitialMessageAliasScope =
+  | {
+      kind: "group";
+      groupId: string;
+    }
+  | {
+      kind: "static-only";
+    };
+
 interface WorkspaceRecord {
   cwd: string;
   id: string;
@@ -163,7 +180,7 @@ type AgentExecutionPrompt =
       from: string;
       userMessage?: string;
       agentMessage?: string;
-      omitSourceAgentSectionLabel?: boolean;
+      omitSourceAgentSectionLabel: boolean;
       gitDiffSummary?: string;
     };
 
@@ -1512,13 +1529,10 @@ export class Orchestrator {
   ): TopologyRecord {
     const validNames = new Set(agents.map((item) => item.id));
     const agentByName = new Map(agents.map((agent) => [agent.id, agent]));
-    const rawNodeRecords: TopologyNodeRecord[] = topology.nodeRecords
-      ? topology.nodeRecords
-      : topology.nodes.map((name) => ({
-          id: name,
-          kind: "agent" as const,
-          templateName: name,
-        }));
+    if (!topology.nodeRecords || topology.nodeRecords.length === 0) {
+      throw new Error("拓扑缺少 nodeRecords，无法继续运行。");
+    }
+    const rawNodeRecords: TopologyNodeRecord[] = getTopologyNodeRecords(topology);
     const spawnNodeIds = new Set(
       rawNodeRecords
         .filter((node) => node.kind === "spawn" && node.id)
@@ -1577,8 +1591,9 @@ export class Orchestrator {
     const nodes = [
       ...orderedAgentNodes,
       ...topology.nodes.filter((item) => spawnNodeIds.has(item)),
+      ...spawnNodeIds,
     ].filter((value, index, list) => list.indexOf(value) === index);
-    const nodeRecords = rawNodeRecords
+    const normalizedNodeRecords = rawNodeRecords
       .filter(
         (node) =>
           node.id &&
@@ -1601,6 +1616,7 @@ export class Orchestrator {
           id: node.id,
           kind: node.kind,
           templateName: node.templateName,
+          initialMessageRouting: node.initialMessageRouting,
           ...(node.spawnRuleId ? { spawnRuleId: node.spawnRuleId } : {}),
           ...(node.spawnEnabled === true ? { spawnEnabled: true } : {}),
           ...(typeof prompt === "string" ? { prompt } : {}),
@@ -1611,7 +1627,7 @@ export class Orchestrator {
       ?.filter((rule) => {
         const spawnNodeName =
           rule.spawnNodeName ||
-          rawNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id ||
+          normalizedNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id ||
           "";
         return (
           rule.id &&
@@ -1638,7 +1654,7 @@ export class Orchestrator {
           id: rule.id,
           spawnNodeName:
             rule.spawnNodeName ||
-            rawNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id ||
+            normalizedNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id ||
             rule.id,
           ...(rule.sourceTemplateName
             ? { sourceTemplateName: rule.sourceTemplateName }
@@ -1709,12 +1725,46 @@ export class Orchestrator {
       edges,
       endIncoming: langgraph.end?.incoming ?? [],
     });
+    const nodeRecords = buildTopologyNodeRecords({
+      nodes,
+      spawnNodeIds: new Set(
+        normalizedNodeRecords
+          .filter((node) => node.kind === "spawn")
+          .map((node) => node.id),
+      ),
+      templateNameByNodeId: new Map(
+        normalizedNodeRecords.map((node) => [node.id, node.templateName]),
+      ),
+      initialMessageRoutingByNodeId: new Map(
+        normalizedNodeRecords.map((node) => [node.id, node.initialMessageRouting]),
+      ),
+      spawnRuleIdByNodeId: new Map(
+        normalizedNodeRecords
+          .filter((node) => typeof node.spawnRuleId === "string")
+          .map((node) => [node.id, node.spawnRuleId as string]),
+      ),
+      spawnEnabledNodeIds: new Set(
+        normalizedNodeRecords
+          .filter((node) => node.spawnEnabled === true)
+          .map((node) => node.id),
+      ),
+      promptByNodeId: new Map(
+        normalizedNodeRecords
+          .filter((node) => typeof node.prompt === "string")
+          .map((node) => [node.id, node.prompt as string]),
+      ),
+      writableNodeIds: new Set(
+        normalizedNodeRecords
+          .filter((node) => node.writable === true)
+          .map((node) => node.id),
+      ),
+    });
 
     return {
       nodes,
       edges,
       langgraph,
-      ...(nodeRecords ? { nodeRecords } : {}),
+      nodeRecords,
       ...(spawnRules ? { spawnRules } : {}),
     };
   }
@@ -1752,16 +1802,57 @@ export class Orchestrator {
     return true;
   }
 
-  private resolveForwardingActiveAgentIds(
+  private resolveInitialMessageSourceAliases(
     state: GraphTaskState,
     sourceAgentId: string,
     targetAgentId: string,
-  ): string[] {
-    return resolveForwardingActiveAgentIdsFromState(
-      state,
-      sourceAgentId,
-      targetAgentId,
+    routing: InitialMessageRouting,
+  ): Record<string, string[]> {
+    if (routing.mode !== "list") {
+      return {};
+    }
+    const targetRuntimeNode = state.runtimeNodes.find((node) => node.id === targetAgentId);
+    const sourceRuntimeNode = state.runtimeNodes.find((node) => node.id === sourceAgentId);
+    const scope: InitialMessageAliasScope =
+      targetRuntimeNode?.groupId
+        ? { kind: "group", groupId: targetRuntimeNode.groupId }
+        : sourceRuntimeNode?.groupId
+          ? { kind: "group", groupId: sourceRuntimeNode.groupId }
+          : { kind: "static-only" };
+    return Object.fromEntries(
+      routing.agentIds.map((agentId) => [
+        agentId,
+        this.resolveInitialMessageAliasesForAgent(
+          state,
+          scope,
+          agentId,
+        ),
+      ]),
     );
+  }
+
+  private resolveInitialMessageAliasesForAgent(
+    state: GraphTaskState,
+    scope: InitialMessageAliasScope,
+    agentId: string,
+  ): string[] {
+    const runtimeNodes = scope.kind === "group"
+      ? state.runtimeNodes.filter((node) => node.groupId === scope.groupId)
+      : [];
+    const aliases = new Set<string>([agentId.trim()]);
+    for (const node of runtimeNodes) {
+      if (
+        node.id !== agentId &&
+        node.templateName !== agentId &&
+        node.displayName !== agentId
+      ) {
+        continue;
+      }
+      aliases.add(node.id.trim());
+      aliases.add(node.templateName.trim());
+      aliases.add(node.displayName.trim());
+    }
+    return [...aliases].filter(Boolean);
   }
 
   protected async createLangGraphBatchRunners(
@@ -1840,31 +1931,6 @@ export class Orchestrator {
         state,
         job.agentId,
       );
-      const messageMode = batch.sourceAgentId
-        ? this.getEdgeMessageMode(
-            buildEffectiveTopology(state),
-            batch.sourceAgentId,
-            job.agentId,
-            batch.routingKind === "default"
-              ? DEFAULT_TOPOLOGY_TRIGGER
-              : batch.trigger,
-          )
-        : "last";
-      const forwardedContext = batch.sourceAgentId
-        ? buildDownstreamForwardedContextFromMessages(
-            taskMessages,
-            batch.sourceContent,
-            {
-              includeInitialTask,
-              messageMode,
-              activeAgentIds: this.resolveForwardingActiveAgentIds(
-                state,
-                batch.sourceAgentId,
-                job.agentId,
-              ),
-            },
-          )
-        : null;
       let prompt: AgentExecutionPrompt;
       if (job.kind === "raw") {
         prompt = {
@@ -1886,6 +1952,7 @@ export class Orchestrator {
               mode: "structured",
               from: job.sourceAgentId,
               agentMessage: followUpContent,
+              omitSourceAgentSectionLabel: false,
             },
             "userMessage",
             initialUserContent &&
@@ -1930,36 +1997,78 @@ export class Orchestrator {
           cwd,
           payload: remediationMessage,
         });
-      } else if (messageMode === "none") {
-        prompt = {
-          mode: "control",
-          content: forwardedContext?.agentMessage ?? "<default>",
-        };
       } else {
-        prompt = withOptionalString(
-          withOptionalString(
-            withOptionalValue(
-              {
-                mode: "structured",
-                from: batch.sourceAgentId ?? "System",
-              },
-              "omitSourceAgentSectionLabel",
-              messageMode === "last-all" ? true : undefined,
-            ),
-            "userMessage",
-            forwardedContext?.userMessage,
-          ),
-          "agentMessage",
-          forwardedContext?.agentMessage,
+        if (!batch.sourceAgentId) {
+          throw new Error("拓扑自动派发缺少来源 Agent，无法构造转发消息。");
+        }
+        const edgeForwardingConfig = this.getEdgeForwardingConfig(
+          buildEffectiveTopology(state),
+          batch.sourceAgentId,
+          job.agentId,
+          batch.routingKind === "default"
+            ? DEFAULT_TOPOLOGY_TRIGGER
+            : batch.trigger,
         );
-        prompt = withOptionalString(
-          prompt,
-          "gitDiffSummary",
-          this.shouldAttachGitDiffSummary(topology, executableAgentId)
-            ? gitDiffSummary
-            : undefined,
+        const forwardedContext = buildDownstreamForwardedContextFromMessages(
+          taskMessages,
+          batch.sourceContent,
+          {
+            includeInitialTask,
+            messageMode: edgeForwardingConfig.messageMode,
+            initialMessageRouting:
+              edgeForwardingConfig.initialMessageRouting,
+            sourceAgentId: batch.sourceAgentId,
+            initialMessageSourceAliasesByAgentId:
+              this.resolveInitialMessageSourceAliases(
+                state,
+                batch.sourceAgentId,
+                job.agentId,
+                edgeForwardingConfig.initialMessageRouting,
+              ),
+          },
         );
+        prompt =
+          forwardedContext.kind === "empty"
+            ? {
+                mode: "control",
+                content: NONE_MODE_PLACEHOLDER_MESSAGE,
+              }
+            : withOptionalString(
+                withOptionalString(
+                  {
+                    mode: "structured",
+                    from: batch.sourceAgentId ?? "System",
+                    omitSourceAgentSectionLabel: true,
+                  },
+                  "userMessage",
+                  forwardedContext.userMessage,
+                ),
+                "agentMessage",
+                forwardedContext.agentMessage,
+              );
       }
+      if (prompt.mode === "control") {
+        return {
+          id: `${batch.sourceAgentId ?? "user"}:${job.agentId}:${index}:${Date.now()}`,
+          agentId: job.agentId,
+          promise: this.executeLangGraphAgentOnce(
+            cwd,
+            task,
+            state,
+            job.agentId,
+            executableAgentId,
+            prompt,
+            batchSize,
+          ),
+        };
+      }
+      prompt = withOptionalString(
+        prompt,
+        "gitDiffSummary",
+        this.shouldAttachGitDiffSummary(topology, executableAgentId)
+          ? gitDiffSummary
+          : undefined,
+      );
 
       return {
         id: `${batch.sourceAgentId ?? "user"}:${job.agentId}:${index}:${Date.now()}`,
@@ -2396,23 +2505,33 @@ export class Orchestrator {
     );
   }
 
-  protected getEdgeMessageMode(
+  protected getEdgeForwardingConfig(
     topology: TopologyRecord,
     sourceAgentId: string,
     targetAgentId: string,
     trigger: string,
-  ) {
+  ): EdgeForwardingConfig {
     const edge = topology.edges.find(
       (item) =>
         item.source === sourceAgentId &&
         item.target === targetAgentId &&
         item.trigger === trigger,
     );
+    const topologyNodeRecords = getTopologyNodeRecords(topology);
     if (edge) {
-      return edge.messageMode;
+      const targetNode = topologyNodeRecords.find(
+        (node) => node.id === targetAgentId,
+      );
+      if (!targetNode) {
+        throw new Error(`拓扑缺少目标节点记录：${targetAgentId}`);
+      }
+      return {
+        messageMode: edge.messageMode,
+        initialMessageRouting: targetNode.initialMessageRouting,
+      };
     }
 
-    const targetNode = topology.nodeRecords?.find(
+    const targetNode = topologyNodeRecords.find(
       (node) => node.id === targetAgentId,
     );
     if (targetNode) {
@@ -2423,12 +2542,15 @@ export class Orchestrator {
           item.trigger === trigger,
       );
       if (inheritedEdge) {
-        return inheritedEdge.messageMode;
+        return {
+          messageMode: inheritedEdge.messageMode,
+          initialMessageRouting: targetNode.initialMessageRouting,
+        };
       }
     }
 
     throw new Error(
-      `拓扑边不存在，无法解析 messageMode：${sourceAgentId} -> ${targetAgentId} (${trigger})`,
+      `拓扑边不存在，无法解析转发配置：${sourceAgentId} -> ${targetAgentId} (${trigger})`,
     );
   }
 

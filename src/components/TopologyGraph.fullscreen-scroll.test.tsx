@@ -6,7 +6,13 @@ import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 
 import { TopologyGraph } from "./TopologyGraph";
-import type { MessageRecord, TaskSnapshot, TopologyRecord, WorkspaceSnapshot } from "@shared/types";
+import {
+  buildTopologyNodeRecords,
+  type MessageRecord,
+  type TaskSnapshot,
+  type TopologyRecord,
+  type WorkspaceSnapshot,
+} from "@shared/types";
 
 const WORKSPACE_CWD = "/tmp/agent-team-topology-graph";
 const TASK_ID = "task-1";
@@ -15,6 +21,16 @@ const AGENT_ID = "Build";
 const topology: TopologyRecord = {
   nodes: [AGENT_ID],
   edges: [],
+  nodeRecords: buildTopologyNodeRecords({
+    nodes: [AGENT_ID],
+    spawnNodeIds: new Set(),
+    templateNameByNodeId: new Map(),
+    initialMessageRoutingByNodeId: new Map(),
+    spawnRuleIdByNodeId: new Map(),
+    spawnEnabledNodeIds: new Set(),
+    promptByNodeId: new Map(),
+    writableNodeIds: new Set(),
+  }),
 };
 
 function createAgentFinalMessage(input: {
