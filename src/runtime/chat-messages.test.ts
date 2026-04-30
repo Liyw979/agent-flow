@@ -437,6 +437,23 @@ test("agent-final 展示时会移除结构化 trigger 标签，只保留正文",
   assert.equal(merged[0]?.content, "继续处理。\n\n请补充实现依据。");
 });
 
+test("labeled agent-final 的 content 以裸 trigger 开头时，聊天展示也会移除 trigger 标签", () => {
+  const merged = mergeTaskChatMessages([
+    createLabeledAgentFinalMessage(
+      "agent-final-leading-trigger",
+      `${EXAMPLE_TRIGGER_LABEL}发现新的可疑点，继续后续流程。`,
+      `${EXAMPLE_TRIGGER_LABEL}发现新的可疑点，继续后续流程。`,
+      "发现新的可疑点，继续后续流程。",
+      "<continue>",
+      "线索发现",
+      DEFAULT_TIMESTAMP,
+    ),
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]?.content, "发现新的可疑点，继续后续流程。");
+});
+
 test("agent-final 展示时会保留非结构化孤立结束标签", () => {
   const merged = mergeTaskChatMessages([
     createDefaultAgentFinalMessage(

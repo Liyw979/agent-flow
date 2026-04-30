@@ -109,14 +109,22 @@ function stripActionRequiredFeedbackLabel(content: string): string {
   return stripLeadingDecisionResponseLabel(stripDecisionResponseMarkup(content));
 }
 
+function getMessageAllowedDecisionTriggers(message: MessageRecord): string[] {
+  if (message.kind === "agent-final" && message.routingKind === "labeled") {
+    return [message.trigger];
+  }
+  return [];
+}
+
 function getActionRequiredRequestDisplayBody(message: MessageRecord): string {
   const normalized = stripTrailingMentions(message.content);
-  const extracted = extractLastDecisionResponse(normalized);
+  const allowedTriggers = getMessageAllowedDecisionTriggers(message);
+  const extracted = extractLastDecisionResponse(normalized, allowedTriggers);
   if (extracted) {
     return extracted;
   }
 
-  return stripDecisionResponseMarkup(normalized);
+  return stripDecisionResponseMarkup(normalized, allowedTriggers);
 }
 
 function formatDisplayContentWithStoredMentions(sourceContent: string, body: string): string {
@@ -158,7 +166,10 @@ function extractAgentFinalDisplayContent(message: MessageRecord): string {
     return "";
   }
 
-  const normalizedRawContent = stripDecisionResponseMarkup(rawContent);
+  const normalizedRawContent = stripDecisionResponseMarkup(
+    rawContent,
+    getMessageAllowedDecisionTriggers(message),
+  );
   const trailingSection = isAgentFinalMessageRecord(message)
     ? normalizedRawContent
     : extractTrailingTopLevelSection(normalizedRawContent);
