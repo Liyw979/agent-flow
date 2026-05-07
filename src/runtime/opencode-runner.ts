@@ -11,7 +11,17 @@ interface RunAgentPayload extends SubmitMessagePayload {
   sessionId: string;
 }
 
-const RETRYABLE_EXECUTION_MAX_ATTEMPTS = 3;
+const RETRYABLE_EXECUTION_INTERVAL_MS = 60_000;
+
+interface RunnerClock {
+  sleep(ms: number): Promise<void>;
+}
+
+const defaultRunnerClock: RunnerClock = {
+  sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  },
+};
 
 type AttemptFailure =
   | {
@@ -43,7 +53,10 @@ type RecoveryAttempt =
     };
 
 export class OpenCodeRunner {
-  constructor(private readonly client: OpenCodeClient) {}
+  constructor(
+    private readonly client: OpenCodeClient,
+    private readonly clock: RunnerClock = defaultRunnerClock,
+  ) {}
 
   async run(payload: RunAgentPayload): Promise<OpenCodeExecutionResult> {
     const runtimeTarget = payload.runtimeTarget ?? payload.projectPath;
@@ -51,7 +64,6 @@ export class OpenCodeRunner {
       throw new Error("OpenCode runner 缺少 runtimeTarget/projectPath");
     }
 
-    let attempt = 1;
     while (true) {
       const startedAt = new Date().toISOString();
       const attemptResult = await this.executeAttempt(runtimeTarget, payload);
@@ -68,20 +80,7 @@ export class OpenCodeRunner {
       if (recoveryAttempt.kind === "completed") {
         return recoveryAttempt.result;
       }
-      if (attempt < RETRYABLE_EXECUTION_MAX_ATTEMPTS) {
-        attempt += 1;
-        continue;
-      }
-      if (recoveryAttempt.kind === "error-result") {
-        return recoveryAttempt.result;
-      }
-      if (attemptResult.kind === "error-result") {
-        return attemptResult.result;
-      }
-      if (recoveryAttempt.kind === "throw") {
-        throw recoveryAttempt.error;
-      }
-      throw attemptResult.error;
+      await this.clock.sleep(RETRYABLE_EXECUTION_INTERVAL_MS);
     }
   }
 
