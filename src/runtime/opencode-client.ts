@@ -354,10 +354,6 @@ export class OpenCodeClient {
     timeoutMs = TRANSPORT_ERROR_RECOVERY_TIMEOUT_MS,
   ): Promise<OpenCodeExecutionResult | null> {
     const normalized = this.normalizeTarget(target);
-    if (!this.isRecoverableTransportError(errorMessage)) {
-      return null;
-    }
-
     const startedAtMs = Date.parse(startedAt);
     const lowerBound = Number.isFinite(startedAtMs) ? startedAtMs - 2_000 : Date.now() - 2_000;
     const deadline = Date.now() + timeoutMs;
@@ -1389,10 +1385,6 @@ export class OpenCodeClient {
 
     const finish = info["finish"].trim();
     return finish.length > 0 && finish !== "tool-calls";
-  }
-
-  private isRecoverableTransportError(errorMessage: string): boolean {
-    return /\b(terminated|aborted)\b/i.test(errorMessage) || /fetch failed/i.test(errorMessage);
   }
 
   buildRuntimeSnapshot(sessionId: string, messages: unknown[]): OpenCodeSessionRuntime {

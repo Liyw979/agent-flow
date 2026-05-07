@@ -415,6 +415,58 @@ test("recoverExecutionResultAfterTransportError 在 fetch failed 后会从 sessi
   assert.ok(listCount >= 2);
 });
 
+test("recoverExecutionResultAfterTransportError 在任意失败文案下也会检查 session 历史并恢复正式回复", async () => {
+  const { client, projectPath } = createClient();
+  const typed = client as OpenCodeClient & {
+    listSessionMessages: (target: string, sessionId: string, limit?: number) => Promise<unknown[]>;
+  };
+
+  typed.listSessionMessages = async () => [
+    {
+      info: {
+        id: "msg-user",
+        role: "user",
+        time: {
+          created: Date.parse("2026-04-27T03:48:29.645Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "请继续论证" },
+      ],
+    },
+    {
+      info: {
+        id: "msg-final",
+        parentID: "msg-user",
+        role: "assistant",
+        finish: "stop",
+        time: {
+          created: Date.parse("2026-04-27T03:48:53.519Z"),
+          completed: Date.parse("2026-04-27T03:49:02.458Z"),
+        },
+      },
+      parts: [
+        { type: "text", text: "<continue>\n已补齐论证。" },
+      ],
+    },
+  ];
+
+  const recovered = await client.recoverExecutionResultAfterTransportError(
+    projectPath,
+    "session-1",
+    "2026-04-27T03:48:30.000Z",
+    "temporary upstream failure",
+    1000,
+  );
+
+  assert.notEqual(recovered, null);
+  if (!recovered) {
+    assert.fail("expected recovered result");
+  }
+  assert.equal(recovered.status, "completed");
+  assert.equal(recovered.messageId, "msg-final");
+});
+
 test("recoverExecutionResultAfterTransportError 会沿 parent 链恢复多级 assistant 回复", async () => {
   const { client, projectPath } = createClient();
   const typed = client as OpenCodeClient & {
