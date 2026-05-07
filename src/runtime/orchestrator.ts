@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { execFile } from "node:child_process";
 import path from "node:path";
-import { promisify } from "node:util";
 import { withOptionalString, withOptionalValue } from "@shared/object-utils";
 import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
@@ -14,7 +12,6 @@ import {
   type AgentRuntimeSnapshot,
   type AgentRecord,
   assertNoAmbiguousTopologyTriggerRoutes,
-  BUILD_AGENT_ID,
   buildTopologyNodeRecords,
   createDefaultTopology,
   DEFAULT_TOPOLOGY_TRIGGER,
@@ -109,7 +106,6 @@ import {
 } from "./project-agent-source";
 import { launchTerminalCommand } from "./terminal-launcher";
 
-const execFileAsync = promisify(execFile);
 const RUNTIME_PROGRESS_SYNC_INTERVAL_MS = 200;
 
 interface OrchestratorOptions {
@@ -126,11 +122,6 @@ interface DisposeOrchestratorOptions {
 
 interface ParsedSignal {
   done: boolean;
-}
-
-interface GitSummaryCommandResult {
-  stdout: string;
-  unavailable: boolean;
 }
 
 interface EdgeForwardingConfig {
@@ -178,7 +169,6 @@ type AgentExecutionPrompt =
       userMessage?: string;
       agentMessage?: string;
       omitSourceAgentSectionLabel: boolean;
-      gitDiffSummary?: string;
     };
 
 interface AgentRunBehaviorOptions {
@@ -868,21 +858,6 @@ export class Orchestrator {
     return false;
   }
 
-  private shouldAttachGitDiffSummary(
-    topology: TopologyRecord,
-    targetAgentId: string,
-  ): boolean {
-    return (
-      targetAgentId !== BUILD_AGENT_ID &&
-      !resolveExecutionDecisionAgent({
-        state: null,
-        topology,
-        runtimeAgentId: targetAgentId,
-        executableAgentId: targetAgentId,
-      })
-    );
-  }
-
   private updateTaskStatusIfActive(
     cwd: string,
     taskId: string,
@@ -930,139 +905,6 @@ export class Orchestrator {
     };
   }
 
-  protected async buildProjectGitDiffSummary(cwd: string): Promise<string> {
-    try {
-      const [statusResult, stagedStatResult, unstagedStatResult] =
-        await Promise.all([
-          this.runGitSummaryCommand(cwd, [
-            "status",
-            "--short",
-            "--untracked-files=all",
-          ]),
-          this.runGitSummaryCommand(cwd, [
-            "diff",
-            "--cached",
-            "--stat",
-            "--compact-summary",
-          ]),
-          this.runGitSummaryCommand(cwd, [
-            "diff",
-            "--stat",
-            "--compact-summary",
-          ]),
-        ]);
-
-      if (
-        statusResult.unavailable ||
-        stagedStatResult.unavailable ||
-        unstagedStatResult.unavailable
-      ) {
-        return "";
-      }
-
-      const sections: string[] = [];
-      const statusLines = this.limitGitSummaryLines(
-        statusResult.stdout
-          .split("\n")
-          .map((line) => line.trimEnd())
-          .filter(Boolean),
-        10,
-      );
-      if (statusLines.length > 0) {
-        sections.push(`工作区状态：\n${statusLines.join("\n")}`);
-      }
-
-      const stagedLines = this.limitGitSummaryLines(
-        stagedStatResult.stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean),
-        8,
-      );
-      if (stagedLines.length > 0) {
-        sections.push(`已暂存变更统计：\n${stagedLines.join("\n")}`);
-      }
-
-      const unstagedLines = this.limitGitSummaryLines(
-        unstagedStatResult.stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean),
-        8,
-      );
-      if (unstagedLines.length > 0) {
-        sections.push(`未暂存变更统计：\n${unstagedLines.join("\n")}`);
-      }
-
-      if (sections.length === 0) {
-        return "当前项目 Git 工作区干净，没有未提交变更。";
-      }
-
-      return `当前项目 Git Diff 精简摘要：\n${sections.join("\n\n")}`.trim();
-    } catch {
-      return "";
-    }
-  }
-
-  private async runGitSummaryCommand(
-    cwd: string,
-    args: string[],
-  ): Promise<GitSummaryCommandResult> {
-    try {
-      const result = await execFileAsync("git", ["-C", cwd, ...args], {
-        timeout: 2500,
-      });
-      return {
-        stdout: result.stdout,
-        unavailable: false,
-      };
-    } catch (error) {
-      if (this.isGitSummaryUnavailableError(error)) {
-        return {
-          stdout: "",
-          unavailable: true,
-        };
-      }
-      return {
-        stdout: "",
-        unavailable: false,
-      };
-    }
-  }
-
-  private isGitSummaryUnavailableError(error: unknown): boolean {
-    const errnoError = error as NodeJS.ErrnoException | undefined;
-    if (errnoError?.code === "ENOENT") {
-      return true;
-    }
-
-    const stderr =
-      typeof (error as { stderr?: unknown } | undefined)?.stderr === "string"
-        ? (error as { stderr: string }).stderr
-        : "";
-    if (!stderr) {
-      return false;
-    }
-
-    return [
-      /not a git repository/i,
-      /cannot change to ['"].*['"]/i,
-      /不是 git 仓库/i,
-      /无法切换到 ['"].*['"]/i,
-      /不是一个 git 仓库/i,
-    ].some((pattern) => pattern.test(stderr));
-  }
-
-  private limitGitSummaryLines(lines: string[], maxLines: number): string[] {
-    if (lines.length <= maxLines) {
-      return lines;
-    }
-    return [
-      ...lines.slice(0, maxLines),
-      `... 共 ${lines.length} 行，仅展示前 ${maxLines} 行`,
-    ];
-  }
-
   protected buildAgentExecutionPrompt(prompt: AgentExecutionPrompt): string {
     if (prompt.mode === "raw") {
       const content = prompt.content.trim();
@@ -1087,11 +929,6 @@ export class Orchestrator {
     }
     if (sections.length === 0) {
       sections.push("[Initial Task]\n（无）");
-    }
-    if (prompt.gitDiffSummary?.trim()) {
-      sections.push(
-        `[Project Git Diff Summary]\n${prompt.gitDiffSummary.trim()}`,
-      );
     }
     return sections.join("\n\n").trim();
   }
@@ -1890,7 +1727,6 @@ export class Orchestrator {
     batch: GraphDispatchBatch,
   ) {
     const task = this.store.getTask(cwd, taskId);
-    const topology = this.store.getTopology(cwd);
     const batchSize = batch.jobs.length;
 
     if (
@@ -1940,7 +1776,6 @@ export class Orchestrator {
       }
     }
 
-    const gitDiffSummary = await this.buildProjectGitDiffSummary(task.cwd);
     const shouldForwardInitialTask = batch.jobs.some(
       (job) => job.kind !== "raw",
     );
@@ -2015,20 +1850,14 @@ export class Orchestrator {
           );
         }
         prompt = withOptionalString(
-          withOptionalString(
-            {
-              mode: "structured",
-              from: job.sourceAgentId,
-              agentMessage: forwardedContext.agentMessage,
-              omitSourceAgentSectionLabel: true,
-            },
-            "userMessage",
-            forwardedContext.userMessage,
-          ),
-          "gitDiffSummary",
-          this.shouldAttachGitDiffSummary(topology, executableAgentId)
-            ? gitDiffSummary
-            : undefined,
+          {
+            mode: "structured",
+            from: job.sourceAgentId,
+            agentMessage: forwardedContext.agentMessage,
+            omitSourceAgentSectionLabel: true,
+          },
+          "userMessage",
+          forwardedContext.userMessage,
         );
         forwardedAgentMessage = forwardedContext.agentMessage;
         const remediationMessage: MessageRecord = {
@@ -2140,14 +1969,6 @@ export class Orchestrator {
           ),
         };
       }
-      prompt = withOptionalString(
-        prompt,
-        "gitDiffSummary",
-        this.shouldAttachGitDiffSummary(topology, executableAgentId)
-          ? gitDiffSummary
-          : undefined,
-      );
-
       return {
         id: `${batch.sourceAgentId ?? "user"}:${job.agentId}:${index}:${Date.now()}`,
         agentId: job.agentId,
