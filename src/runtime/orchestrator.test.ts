@@ -17,7 +17,6 @@ import {
 } from "@shared/types";
 import type { OpenCodeExecutionResult } from "./opencode-client";
 import { Orchestrator, isTerminalTaskStatus } from "./orchestrator";
-import { buildAgentSystemPrompt } from "./agent-system-prompt";
 import { compileBuiltinVulnerabilityTopology } from "./builtin-topology-test-helpers";
 import { parseDecision as parseDecisionPure } from "./decision-parser";
 import { createGraphTaskState, type GraphDispatchBatch, type GraphAgentResult } from "./gating-router";
@@ -3194,13 +3193,6 @@ test("判定 Agent 返回 action_required 后会在其余 decisionAgent 收齐�
   assert.equal(buildPrompts.length, 2);
   assert.match(buildPrompts[1] ?? "", /\[From UnitTest Agent\]/u);
   assert.match(buildPrompts[1] ?? "", /请修复第 1 轮单测问题/u);
-});
-
-test("判定类 system prompt 会使用真实来源 Agent 名称", () => {
-  const systemPrompt = buildAgentSystemPrompt(["<revise>", "<approved>"]);
-
-  assert.doesNotMatch(systemPrompt, /\[From BA Agent\]/);
-  assert.doesNotMatch(systemPrompt, /\[@来源 Agent Message\]/);
 });
 
 test("Task 启动后仍允许重新 applyTeamDsl，让 task headless/task ui 的 --file 继续以 .json5 为准", async () => {

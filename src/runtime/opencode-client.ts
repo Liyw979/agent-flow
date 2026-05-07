@@ -2,7 +2,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseJson5 } from "@shared/json5";
-import { withOptionalString, withOptionalValue } from "@shared/object-utils";
+import { withOptionalValue } from "@shared/object-utils";
 import { buildSubmitMessageBody } from "./opencode-request-body";
 import { toOpenCodeAgentId } from "./opencode-agent-id";
 import { appendAppLog } from "./app-log";
@@ -24,7 +24,6 @@ interface OpenCodeEvent {
 export interface SubmitMessagePayload {
   content: string;
   agent: string;
-  system?: string;
 }
 
 export interface OpenCodeNormalizedMessage {
@@ -267,10 +266,10 @@ export class OpenCodeClient {
     const normalized = this.normalizeTarget(target);
     const opencodeAgent = toOpenCodeAgentId(payload.agent);
 
-    const body = buildSubmitMessageBody(withOptionalString({
+    const body = buildSubmitMessageBody({
       agent: opencodeAgent,
       content: payload.content,
-    }, "system", payload.system));
+    });
     // Do not send deprecated `tools` here. OpenCode copies that field into session-level
     // permissions, which can accidentally reopen write/edit/bash access for restricted agents.
 

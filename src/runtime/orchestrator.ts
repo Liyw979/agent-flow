@@ -52,7 +52,6 @@ import {
   parseTargetAgentIds,
 } from "@shared/chat-message-format";
 import { stripDecisionResponseMarkup } from "@shared/decision-response";
-import { buildAgentSystemPrompt } from "./agent-system-prompt";
 import {
   parseDecision as parseDecisionPure,
   stripStructuredSignals as stripStructuredSignalsPure,
@@ -2170,26 +2169,11 @@ export class Orchestrator {
         runtimeAgentId,
         executableAgentId,
       });
-      const allowedDecisionTriggers = decisionAgent
-        ? this.resolveAllowedDecisionTriggers({
-            state,
-            topology,
-            runtimeAgentId,
-            executableAgentId,
-          })
-        : [];
       const responsePromise = this.opencodeRunner.run({
         runtimeTarget: this.getTaskRuntimeTarget(currentTask),
         sessionId: agentSessionId,
         content: dispatchedContent,
         agent: executableAgentId,
-        ...(decisionAgent
-          ? {
-              system: buildAgentSystemPrompt(
-                allowedDecisionTriggers.map((item) => item.trigger),
-              ),
-            }
-          : {}),
       });
       const response = await this.awaitExecutionWithProgressSync({
         execution: responsePromise,
@@ -2204,6 +2188,14 @@ export class Orchestrator {
             `${runtimeAgentId} 返回错误状态`,
         );
       }
+      const allowedDecisionTriggers = decisionAgent
+        ? this.resolveAllowedDecisionTriggers({
+            state,
+            topology,
+            runtimeAgentId,
+            executableAgentId,
+          })
+        : [];
       const parsedDecision = parseDecisionPure(
         response.finalMessage,
         decisionAgent,

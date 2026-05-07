@@ -101,6 +101,36 @@ test("submitMessage 在空响应体时必须报错，不能伪造 pending messag
   );
 });
 
+test("submitMessage 最终请求体不注入 system 字段", async () => {
+  const { client, projectPath } = createClient();
+  let capturedBody = "";
+  client.request = async (_pathname, options) => {
+    capturedBody = options.body ?? "";
+    return new Response(JSON.stringify({
+      id: "msg-1",
+      role: "assistant",
+      parts: [{ type: "text", text: "已发送" }],
+      createdAt: "2026-05-07T00:00:00.000Z",
+      sessionID: "session-1",
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  await client.submitMessage(projectPath, "session-1", {
+    agent: "TaskReview",
+    content: "请继续判定",
+  });
+
+  assert.notEqual(capturedBody, "");
+  assert.equal(capturedBody.includes("\"system\""), false);
+  assert.deepEqual(JSON.parse(capturedBody), {
+    agent: "TaskReview",
+    parts: [{ type: "text", text: "请继续判定" }],
+  });
+});
+
 test("createSession throws when the response is missing a session id", async () => {
   const { client, projectPath } = createClient();
   client.request = async () => new Response("", { status: 200 });
