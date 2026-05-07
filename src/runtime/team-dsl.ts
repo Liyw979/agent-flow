@@ -656,18 +656,25 @@ function assertGraphAgentPromptsDeclareOutgoingTriggers(graph: GraphDslGraph): v
   }
 }
 
-function assertGraphInitialMessageSourcesExist(graph: GraphDslGraph): void {
+function assertGraphInitialMessageSourcesExist(
+  graph: GraphDslGraph,
+  availableExternalAgentIds: ReadonlySet<string>,
+): void {
   const localAgentIds = new Set(
     graph.nodes
       .filter((node): node is GraphDslAgentNode => node.type === "agent")
       .map((node) => node.id),
   );
+  const resolvableAgentIds = new Set([
+    ...availableExternalAgentIds,
+    ...localAgentIds,
+  ]);
   for (const node of graph.nodes) {
     if (node.type === "agent") {
       const routing = parseInitialMessageRoutingFromDslInput(node.initialMessage);
       if (routing.mode === "list") {
         for (const agentId of routing.agentIds) {
-          if (!localAgentIds.has(agentId)) {
+          if (!resolvableAgentIds.has(agentId)) {
             throw new Error(
               `DSL Agent ${node.id} 的 initialMessage 引用了不存在的来源 Agent：${agentId}`,
             );
@@ -676,13 +683,16 @@ function assertGraphInitialMessageSourcesExist(graph: GraphDslGraph): void {
       }
       continue;
     }
-    assertGraphInitialMessageSourcesExist(node.graph);
+    assertGraphInitialMessageSourcesExist(node.graph, new Set([
+      ...availableExternalAgentIds,
+      ...localAgentIds,
+    ]));
   }
 }
 
 function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
   assertGraphAgentPromptsDeclareOutgoingTriggers(input);
-  assertGraphInitialMessageSourcesExist(input);
+  assertGraphInitialMessageSourcesExist(input, new Set<string>());
   const agentDefinitions = new Map<string, TeamDslAgentRecord>();
   const nodeRecords = new Map<string, TopologyNodeRecord>();
   const spawnRules = new Map<string, SpawnRule>();

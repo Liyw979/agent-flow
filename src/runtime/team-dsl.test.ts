@@ -4,6 +4,7 @@ import test from "node:test";
 import { buildTopologyNodeRecords } from "@shared/types";
 
 import {
+  readBuiltinTopology,
   readBuiltinVulnerabilityTopology,
 } from "./builtin-topology-test-helpers";
 import {
@@ -831,6 +832,18 @@ test("compileTeamDsl 会拒绝 initialMessage 引用不存在的来源 Agent", (
         ],
       }),
     /initialMessage 引用了不存在的来源 Agent：不存在的来源/u,
+  );
+});
+
+test("compileTeamDsl 支持 rfc-scanner 拓扑中的 spawn 子图 initialMessage 引用父图来源 Agent", () => {
+  const compiled = compileTeamDsl(readBuiltinTopology("rfc-scanner.json5"));
+
+  assert.deepEqual(
+    compiled.topology.nodeRecords.find((node) => node.id === "漏洞论证")?.initialMessageRouting,
+    {
+      mode: "list",
+      agentIds: ["线索发现"],
+    },
   );
 });
 
