@@ -9,6 +9,14 @@ import { buildTaskLogFilePath, initAppFileLogger } from "./app-log";
 import type { OpenCodeNormalizedMessage, OpenCodeSessionRuntime } from "./opencode-client";
 import { OpenCodeClient } from "./opencode-client";
 
+class TestOpenCodeClient extends OpenCodeClient {
+  declare request: OpenCodeClient["request"];
+}
+
+type TestRequestPathname = Parameters<TestOpenCodeClient["request"]>[0];
+type TestRequestOptions = Parameters<TestOpenCodeClient["request"]>[1];
+type TestRequestResult = ReturnType<TestOpenCodeClient["request"]>;
+
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "agent-team-opencode-client-"));
 }
@@ -22,7 +30,7 @@ function createClient(projectPath = createTempDir()) {
       eventPump: Promise<void> | null;
       injectedConfigContent: string | null;
     }>;
-    request: (pathname: string) => Promise<Response>;
+    request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
     getSessionMessage: (projectPath: string, sessionId: string, messageId: string) => Promise<unknown>;
     listSessionMessages: (projectPath: string, sessionId: string, limit?: number) => Promise<unknown[]>;
   };
@@ -53,14 +61,7 @@ test("request 会跟随当前 serverHandle 的实际端口", async () => {
       eventPump: Promise<void> | null;
       injectedConfigContent: string | null;
     }>;
-    request: (
-      pathname: string,
-      options: {
-        method: "GET" | "POST";
-        projectPath?: string;
-        body?: string;
-      },
-    ) => Promise<Response>;
+    request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
   };
   const state = typed.servers.get(projectPath);
   assert.notEqual(state, undefined);
@@ -148,7 +149,7 @@ test("createSession logs invalid responses into the task log file when runtimeKe
   initAppFileLogger(userDataPath);
 
   const client = new OpenCodeClient() as OpenCodeClient & {
-    request: () => Promise<Response>;
+    request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
   };
   client.request = async () => new Response("", { status: 200 });
 
@@ -173,7 +174,7 @@ test("createSession 在响应体不是合法 JSON5 时仍走 invalid response �
   initAppFileLogger(userDataPath);
 
   const client = new OpenCodeClient() as OpenCodeClient & {
-    request: () => Promise<Response>;
+    request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
   };
   client.request = async () => new Response("oops", { status: 200 });
 
@@ -194,14 +195,7 @@ test("createSession 在响应体不是合法 JSON5 时仍走 invalid response �
 test("session message 请求不注入 AbortSignal，确保长任务不会被请求层超时中断", async () => {
   const { client, projectPath } = createClient();
   const typed = client as OpenCodeClient & {
-    request: (
-      pathname: string,
-      options: {
-        method: "GET" | "POST";
-        projectPath?: string;
-        body?: string;
-      },
-    ) => Promise<Response>;
+    request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
   };
 
   const originalFetch = globalThis.fetch;
@@ -227,15 +221,7 @@ test("session message 请求不注入 AbortSignal，确保长任务不会被请�
 test("createSession 超时后不应重启 runtime，也不应自动重试", async () => {
   const { client, projectPath } = createClient();
   const typed = client as OpenCodeClient & {
-    request: (
-      pathname: string,
-      options: {
-        method: "GET" | "POST";
-        target?: string;
-        projectPath?: string;
-        body?: string;
-      },
-    ) => Promise<Response>;
+    request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
   };
 
   let requestCount = 0;
@@ -785,14 +771,7 @@ test("配置变更时不应触发 shutdown", async () => {
 test("不同 runtimeKey 会使用各自独立的 serve 端口，即使 cwd 相同", async () => {
   const client = new OpenCodeClient() as OpenCodeClient & {
     startServer: (target: { runtimeKey: string; projectPath: string }) => Promise<{ process: null; port: number }>;
-    request: (
-      pathname: string,
-      options: {
-        method: "GET" | "POST";
-        target?: { runtimeKey: string; projectPath: string };
-        body?: string;
-      },
-    ) => Promise<Response>;
+    request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
   };
   const projectPath = createTempDir();
   const targetA = { runtimeKey: "task-a", projectPath };
