@@ -847,6 +847,99 @@ test("compileTeamDsl 支持 rfc-scanner 拓扑中的 spawn 子图 initialMessage
   );
 });
 
+test("compileTeamDsl 允许 spawn 子图引用外层显式可见 agent，但不会把 sibling spawn 内部 agent 视为全局可见", () => {
+  const compiled = compileTeamDsl({
+    entry: "线索发现",
+    nodes: [
+      agentNode("线索发现", promptWithTriggers("你负责线索发现。", "<continue>"), false),
+      spawnNode(
+        "主辩论",
+        {
+          entry: "漏洞论证",
+          nodes: [
+            {
+              ...agentNode("漏洞论证", promptWithTriggers("你负责漏洞论证。", "<continue>"), false),
+              initialMessage: ["线索发现"],
+            },
+          ],
+          links: [],
+        },
+      ),
+    ],
+    links: [
+      {
+        from: "线索发现",
+        to: "主辩论",
+        trigger: "<continue>",
+        message_type: "last",
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    compiled.topology.spawnRules?.[0]?.spawnedAgents.find((agent) => agent.role === "漏洞论证"),
+    {
+      role: "漏洞论证",
+      templateName: "漏洞论证",
+    },
+  );
+  assert.deepEqual(
+    compiled.topology.nodeRecords.find((node) => node.id === "漏洞论证")?.initialMessageRouting,
+    {
+      mode: "list",
+      agentIds: ["线索发现"],
+    },
+  );
+
+  assert.throws(
+    () =>
+      compileTeamDsl({
+        entry: "线索发现",
+        nodes: [
+          agentNode("线索发现", promptWithTriggers("你负责线索发现。", "<continue>"), false),
+          spawnNode(
+            "主辩论",
+            {
+              entry: "漏洞论证",
+              nodes: [
+                {
+                  ...agentNode("漏洞论证", promptWithTriggers("你负责漏洞论证。", "<continue>"), false),
+                  initialMessage: ["旁路证据"],
+                },
+              ],
+              links: [],
+            },
+          ),
+          spawnNode(
+            "旁路讨论",
+            {
+              entry: "旁路证据",
+              nodes: [
+                agentNode("旁路证据", promptWithTriggers("你负责旁路证据。", "<continue>"), false),
+              ],
+              links: [],
+            },
+          ),
+        ],
+        links: [
+          {
+            from: "线索发现",
+            to: "主辩论",
+            trigger: "<continue>",
+            message_type: "last",
+          },
+          {
+            from: "线索发现",
+            to: "旁路讨论",
+            trigger: "<continue>",
+            message_type: "last",
+          },
+        ],
+      }),
+    /initialMessage 引用了不存在的来源 Agent：旁路证据/u,
+  );
+});
+
 test("compileTeamDsl 会拒绝在 link 上声明 initialMessage", () => {
   assert.throws(
     () =>

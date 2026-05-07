@@ -63,7 +63,7 @@ function normalizeContentForDedup(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-export function contentContainsNormalized(content: string, candidate: string): boolean {
+function contentContainsNormalized(content: string, candidate: string): boolean {
   const normalizedContent = normalizeContentForDedup(content);
   const normalizedCandidate = normalizeContentForDedup(candidate);
   if (!normalizedContent || !normalizedCandidate) {

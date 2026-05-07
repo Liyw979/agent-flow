@@ -79,8 +79,6 @@ import {
   NONE_MODE_PLACEHOLDER_MESSAGE,
   buildSourceAgentMessageSectionLabel,
   buildUserHistoryContent as buildUserHistoryContentPure,
-  contentContainsNormalized as contentContainsNormalizedPure,
-  getInitialUserMessageContent as getInitialUserMessageContentPure,
   stripTargetMention as stripTargetMentionPure,
 } from "./message-forwarding";
 import {
@@ -1920,9 +1918,6 @@ export class Orchestrator {
       ? this.consumeInitialTaskForwardingAllowanceFromGraphState(state)
       : false;
     const taskMessages = this.store.listMessages(task.cwd, taskId);
-    const initialUserContent = includeInitialTask
-      ? getInitialUserMessageContentPure(taskMessages)
-      : "";
 
     return batch.jobs.map((job, index) => {
       this.ensureRuntimeTaskAgent(task, job.agentId);
@@ -1946,22 +1941,47 @@ export class Orchestrator {
             `${job.sourceAgentId} 的 action_required 派发缺少可转发正文`,
           );
         }
+        const edgeForwardingConfig = this.getEdgeForwardingConfig(
+          buildEffectiveTopology(state),
+          job.sourceAgentId,
+          job.agentId,
+          batch.routingKind === "default"
+            ? DEFAULT_TOPOLOGY_TRIGGER
+            : batch.trigger,
+        );
+        const forwardedContext = buildDownstreamForwardedContextFromMessages(
+          taskMessages,
+          followUpContent,
+          {
+            includeInitialTask,
+            messageMode: edgeForwardingConfig.messageMode,
+            initialMessageRouting:
+              edgeForwardingConfig.initialMessageRouting,
+            sourceAgentId: job.sourceAgentId,
+            initialMessageSourceAliasesByAgentId:
+              this.resolveInitialMessageSourceAliases(
+                state,
+                job.sourceAgentId,
+                job.agentId,
+                edgeForwardingConfig.initialMessageRouting,
+              ),
+          },
+        );
+        if (forwardedContext.kind === "empty") {
+          throw new Error(
+            `${job.sourceAgentId} 的 action_required 派发缺少可转发上下文`,
+          );
+        }
         prompt = withOptionalString(
           withOptionalString(
             {
               mode: "structured",
               from: job.sourceAgentId,
-              agentMessage: followUpContent,
-              omitSourceAgentSectionLabel: false,
+              agentMessage: forwardedContext.agentMessage,
+              omitSourceAgentSectionLabel: true,
             },
             "userMessage",
-            initialUserContent &&
-              !contentContainsNormalizedPure(
-                followUpContent,
-                initialUserContent,
-              )
-              ? initialUserContent
-              : undefined,
+            forwardedContext.userMessage,
           ),
           "gitDiffSummary",
           this.shouldAttachGitDiffSummary(topology, executableAgentId)

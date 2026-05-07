@@ -747,6 +747,55 @@ test("runtime agent 场景下，initialMessage 用模板名也能命中实例消
   });
 });
 
+test("spawn 首轮派发给漏洞论证实例时，initialMessage 会补入静态线索发现消息", () => {
+  const messages = [
+    createUserMessage({
+      content: "@线索发现 RFC 5321 第 2.3.8 节",
+      timestamp: TEST_TIMESTAMP,
+      targetAgentIds: ["线索发现"],
+    }),
+    createAgentFinalMessage({
+      sender: "线索发现",
+      content: "1. 可疑点标题\nSMTP 数据行处理存在一个新的可疑点。",
+      timestamp: TEST_TIMESTAMP,
+      routingKind: "default",
+    }),
+    createAgentFinalMessage({
+      sender: "漏洞挑战-1",
+      content: "当前材料更像误报，请继续补充更直接的实现证据。",
+      timestamp: "2026-05-07T02:00:01.000Z",
+      routingKind: "default",
+    }),
+  ];
+
+  const forwarded = buildDownstreamForwardedContextFromMessages(
+    messages,
+    "当前材料更像误报，请继续补充更直接的实现证据。",
+    {
+      messageMode: "last",
+      includeInitialTask: true,
+      initialMessageRouting: {
+        mode: "list",
+        agentIds: ["线索发现"],
+      },
+      sourceAgentId: "漏洞挑战-1",
+      initialMessageSourceAliasesByAgentId: {
+        "线索发现": ["线索发现"],
+      },
+    },
+  );
+
+  assert.deepEqual(forwarded, {
+    kind: "forwarded",
+    userMessage: "RFC 5321 第 2.3.8 节",
+    agentMessage:
+    [
+      "[From 漏洞挑战-1 Agent]\n当前材料更像误报，请继续补充更直接的实现证据。",
+      "[From 线索发现 Agent]\n1. 可疑点标题\nSMTP 数据行处理存在一个新的可疑点。",
+    ].join("\n\n"),
+  });
+});
+
 test("群聊消息保留寻址 @Agent，但下游转发读取时会去掉该寻址标记", () => {
   const storedUserContent = buildUserHistoryContent(
     "在当前项目的一个临时文件中实现一个加法工具，调用后传入a和b，返回c @BA",
