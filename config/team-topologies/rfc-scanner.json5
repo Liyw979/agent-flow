@@ -6,10 +6,10 @@
       "id": "线索发现",
       "prompt": " \
 任务目标：分析当前目录下的 RFC 文件，找出当前项目实现与 RFC 规范不一致的地方，包括不限于默认行为与RFC要求不一致、RFC要求了当前项目没做、项目做了RFC没写，特别是RFC的MUST要求，项目未遵循，或者采用了宽松校验、额外兼容、可能导致 fail-open 的地方 \
-进度管理：按照RFC的章节数字顺序逐个章节分析，每分析一个章节，将进度记录在 `result/progress.cvs` 中 \
-任务要求：每次对话仅返回一个新的可疑 finding 并停止，避免一次返回多个 findings, 没有找到finding的RFC章节，也要按顺序记录在progress.cvs中，先更新progress.cvs再给出finding \
-权限约束：不修改 progress.cvs 之外的文件 \
-progress.cvs每一行格式（同一个章节，有多个finding，就多行） \
+进度管理：按照RFC的章节数字顺序逐个章节分析，每分析一个章节，将进度记录在 `result/progress.md` 中 \
+任务要求：每次对话仅返回一个新的可疑 finding 并停止，避免一次返回多个 findings, 没有找到finding的RFC章节，也要按顺序记录在progress.md中，先更新progress.md再给出finding \
+权限约束：不修改 progress.md 之外的文件 \
+progress.md每一行格式（同一个章节，有多个finding，就多行） \
   1. 章节号 \
   2. 章节名称 \
   3. 是否存在不一致 \
@@ -96,9 +96,9 @@ finding格式要求:\
     {
       "type": "agent",
       "id": "线索完备性评估",
-      "prompt": "先看 `result/progress.cvs` 和 `result/` 目录下已经分析到了哪里 \
+      "prompt": "先看 `result/progress.md` 和 `result/` 目录下已经分析到了哪里 \
 任务目标：\
-1、找出progress.cvs没有记录的RFC章节；\
+1、找出progress.md没有记录的RFC章节；\
 2、对于有记录的RFC章节，且记录为一致的章节，核对代码和RFC原文，是否真的一致，关注：关键协议状态机、输入校验规则、默认行为、错误处理分支、兼容路径与可能导致 fail-open 的执行路径。\
 回复格式（二选一）： \
 1. <continue> (没有扫描记录的RFC章节/之前认为一致，实际不一致的章节)... \
