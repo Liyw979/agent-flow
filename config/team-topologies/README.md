@@ -219,7 +219,7 @@
 - 可以写单个字符串，例如 `"initialMessage": "线索发现"`。
 - 也可以写字符串数组，例如 `"initialMessage": ["线索发现", "漏洞讨论"]`。
 - 若写空数组 `[]`，表示 `initialMessageRouting.mode = none`，即不额外注入任何来源消息；它不会覆盖 `link.message_type = last` 的默认转发。
-- 运行时会按列表顺序，从这些 Agent 的首条可转发消息中生成 `[From <AgentId> Agent]` 段落。
+- 运行时会按 JSON 中 Agent 自上而下的定义顺序，从这些 Agent 的首条可转发消息中生成 `[From <AgentId> Agent]` 段落；即使 `initialMessage` 数组里的书写顺序不同，编译后也会按定义顺序重排。
 - 若列表中已经包含当前触发该目标的 source Agent，运行时会把该来源的多段不同内容聚合到同一个 `[From ... Agent]` 段落里，并只去掉完全重复的内容。
 
 示例：

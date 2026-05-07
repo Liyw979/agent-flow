@@ -70,6 +70,46 @@ export interface CompiledTeamDsl {
   topology: TopologyRecord;
 }
 
+function sortInitialMessageRoutingByAgentDefinitionOrder(
+  routing: TopologyNodeRecord["initialMessageRouting"],
+  agentDefinitionOrderById: ReadonlyMap<string, number>,
+): TopologyNodeRecord["initialMessageRouting"] {
+  if (routing.mode !== "list") {
+    return routing;
+  }
+
+  const sortedAgentIds = [...routing.agentIds].sort((left, right) => {
+    const leftOrder = agentDefinitionOrderById.get(left);
+    const rightOrder = agentDefinitionOrderById.get(right);
+    if (leftOrder === undefined || rightOrder === undefined) {
+      throw new Error(`initialMessage 顺序重排失败：${leftOrder === undefined ? left : right}`);
+    }
+    return leftOrder - rightOrder;
+  });
+  return {
+    mode: "list",
+    agentIds: sortedAgentIds,
+  };
+}
+
+function applyInitialMessageRoutingDefinitionOrder(
+  nodeRecords: Map<string, TopologyNodeRecord>,
+  agentDefinitionOrderById: ReadonlyMap<string, number>,
+): void {
+  for (const [nodeId, nodeRecord] of nodeRecords.entries()) {
+    if (nodeRecord.kind !== "agent") {
+      continue;
+    }
+    nodeRecords.set(nodeId, {
+      ...nodeRecord,
+      initialMessageRouting: sortInitialMessageRoutingByAgentDefinitionOrder(
+        nodeRecord.initialMessageRouting,
+        agentDefinitionOrderById,
+      ),
+    });
+  }
+}
+
 const GraphDslLinkSchema = z.object({
   from: z.string(),
   to: z.string(),
@@ -483,6 +523,7 @@ function collectGraphDslNodeDefinitions(
     spawnRules: Map<string, SpawnRule>;
     isRootGraph: boolean;
     availableExternalTargets: ReadonlySet<string>;
+    agentDefinitionOrderById: Map<string, number>;
   },
 ): void {
   const localNames = new Set<string>();
@@ -518,13 +559,12 @@ function collectGraphDslNodeDefinitions(
             id: node.id,
             prompt: node.prompt,
             writable: node.writable,
-            initialMessageRouting: parseInitialMessageRoutingFromDslInput(
-              node.initialMessage,
-            ),
+            initialMessageRouting: parseInitialMessageRoutingFromDslInput(node.initialMessage),
           }
         : node;
 
     if (parsedNode.type === "agent") {
+      context.agentDefinitionOrderById.set(parsedNode.id, context.agentDefinitionOrderById.size);
       context.agentDefinitions.set(node.id, {
         id: parsedNode.id,
         prompt: parsedNode.prompt,
@@ -733,6 +773,7 @@ function assertGraphInitialMessageSourcesExistWithVisibleSources(
 function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
   assertGraphAgentPromptsDeclareOutgoingTriggers(input);
   assertGraphInitialMessageSourcesExist(input);
+  const agentDefinitionOrderById = new Map<string, number>();
   const agentDefinitions = new Map<string, TeamDslAgentRecord>();
   const nodeRecords = new Map<string, TopologyNodeRecord>();
   const spawnRules = new Map<string, SpawnRule>();
@@ -742,7 +783,9 @@ function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
     spawnRules,
     isRootGraph: true,
     availableExternalTargets: new Set<string>(),
+    agentDefinitionOrderById,
   });
+  applyInitialMessageRoutingDefinitionOrder(nodeRecords, agentDefinitionOrderById);
 
   const compiledAgents = normalizeCompiledWritableAgents(
     [...agentDefinitions.values()].map((agent) => compileAgentDefinition(agent)),
