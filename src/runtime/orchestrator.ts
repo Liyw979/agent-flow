@@ -788,6 +788,7 @@ export class Orchestrator {
       agentId,
       prompt,
       1,
+      "",
     );
     if (!(behavior.completeTaskOnFinish ?? true)) {
       return;
@@ -1852,6 +1853,36 @@ export class Orchestrator {
     return [...aliases].filter(Boolean);
   }
 
+  private resolveSourceForwardedAgentMessage(
+    state: GraphTaskState,
+    sourceAgentId: string,
+  ): string {
+    return state.forwardedAgentMessageByName[sourceAgentId] ?? "";
+  }
+
+  private resolveInitialMessageForwardedAgentMessages(
+    state: GraphTaskState,
+    routing: InitialMessageRouting,
+    initialMessageSourceAliasesByAgentId: Record<string, string[]>,
+  ): Record<string, string> {
+    if (routing.mode !== "list") {
+      return {};
+    }
+    return Object.fromEntries(
+      routing.agentIds.map((agentId) => {
+        const aliases = initialMessageSourceAliasesByAgentId[agentId] ?? [];
+        const matchedAgentId = [agentId, ...aliases].find((candidate) =>
+          Boolean(state.forwardedAgentMessageByName[candidate]),
+        ) ?? "";
+        return [agentId, matchedAgentId ? state.forwardedAgentMessageByName[matchedAgentId] ?? "" : ""];
+      }),
+    );
+  }
+
+  private resolveGlobalSourceOrder(state: GraphTaskState): string[] {
+    return buildEffectiveTopology(state).nodes;
+  }
+
   protected async createLangGraphBatchRunners(
     cwd: string,
     taskId: string,
@@ -1917,7 +1948,6 @@ export class Orchestrator {
       ? this.consumeInitialTaskForwardingAllowanceFromGraphState(state)
       : false;
     const taskMessages = this.store.listMessages(task.cwd, taskId);
-
     return batch.jobs.map((job, index) => {
       this.ensureRuntimeTaskAgent(task, job.agentId);
       const executableAgentId = this.resolveExecutableAgentId(
@@ -1926,6 +1956,7 @@ export class Orchestrator {
         job.agentId,
       );
       let prompt: AgentExecutionPrompt;
+      let forwardedAgentMessage = "";
       if (job.kind === "raw") {
         prompt = {
           mode: "raw",
@@ -1948,6 +1979,13 @@ export class Orchestrator {
             ? DEFAULT_TOPOLOGY_TRIGGER
             : batch.trigger,
         );
+        const initialMessageSourceAliasesByAgentId =
+          this.resolveInitialMessageSourceAliases(
+            state,
+            job.sourceAgentId,
+            job.agentId,
+            edgeForwardingConfig.initialMessageRouting,
+          );
         const forwardedContext = buildDownstreamForwardedContextFromMessages(
           taskMessages,
           followUpContent,
@@ -1957,13 +1995,18 @@ export class Orchestrator {
             initialMessageRouting:
               edgeForwardingConfig.initialMessageRouting,
             sourceAgentId: job.sourceAgentId,
-            initialMessageSourceAliasesByAgentId:
-              this.resolveInitialMessageSourceAliases(
+            initialMessageSourceAliasesByAgentId,
+            initialMessageForwardedAgentMessageByAgentId:
+              this.resolveInitialMessageForwardedAgentMessages(
                 state,
-                job.sourceAgentId,
-                job.agentId,
                 edgeForwardingConfig.initialMessageRouting,
+                initialMessageSourceAliasesByAgentId,
               ),
+            sourceForwardedAgentMessage: this.resolveSourceForwardedAgentMessage(
+              state,
+              job.sourceAgentId,
+            ),
+            globalSourceOrder: this.resolveGlobalSourceOrder(state),
           },
         );
         if (forwardedContext.kind === "empty") {
@@ -1987,6 +2030,7 @@ export class Orchestrator {
             ? gitDiffSummary
             : undefined,
         );
+        forwardedAgentMessage = forwardedContext.agentMessage;
         const remediationMessage: MessageRecord = {
           id: randomUUID(),
           taskId,
@@ -2028,6 +2072,13 @@ export class Orchestrator {
             ? DEFAULT_TOPOLOGY_TRIGGER
             : batch.trigger,
         );
+        const initialMessageSourceAliasesByAgentId =
+          this.resolveInitialMessageSourceAliases(
+            state,
+            batch.sourceAgentId,
+            job.agentId,
+            edgeForwardingConfig.initialMessageRouting,
+          );
         const forwardedContext = buildDownstreamForwardedContextFromMessages(
           taskMessages,
           batch.sourceContent,
@@ -2037,13 +2088,18 @@ export class Orchestrator {
             initialMessageRouting:
               edgeForwardingConfig.initialMessageRouting,
             sourceAgentId: batch.sourceAgentId,
-            initialMessageSourceAliasesByAgentId:
-              this.resolveInitialMessageSourceAliases(
+            initialMessageSourceAliasesByAgentId,
+            initialMessageForwardedAgentMessageByAgentId:
+              this.resolveInitialMessageForwardedAgentMessages(
                 state,
-                batch.sourceAgentId,
-                job.agentId,
                 edgeForwardingConfig.initialMessageRouting,
+                initialMessageSourceAliasesByAgentId,
               ),
+            sourceForwardedAgentMessage: this.resolveSourceForwardedAgentMessage(
+              state,
+              batch.sourceAgentId,
+            ),
+            globalSourceOrder: this.resolveGlobalSourceOrder(state),
           },
         );
         prompt =
@@ -2065,6 +2121,8 @@ export class Orchestrator {
                 "agentMessage",
                 forwardedContext.agentMessage,
               );
+        forwardedAgentMessage =
+          forwardedContext.kind === "empty" ? "" : forwardedContext.agentMessage;
       }
       if (prompt.mode === "control") {
         return {
@@ -2078,6 +2136,7 @@ export class Orchestrator {
             executableAgentId,
             prompt,
             batchSize,
+            forwardedAgentMessage,
           ),
         };
       }
@@ -2100,6 +2159,7 @@ export class Orchestrator {
           executableAgentId,
           prompt,
           batchSize,
+          forwardedAgentMessage,
         ),
       };
     });
@@ -2113,6 +2173,7 @@ export class Orchestrator {
     executableAgentId: string,
     prompt: AgentExecutionPrompt,
     concurrentBatchSize: number,
+    forwardedAgentMessage: string,
   ): Promise<GraphAgentResult> {
     this.setInjectedConfigForTask(task);
     this.store.updateTaskAgentRun(task.cwd, task.id, runtimeAgentId, "running");
@@ -2144,6 +2205,7 @@ export class Orchestrator {
         routingKind: "invalid",
         agentStatus: "failed",
         agentContextContent: "",
+        forwardedAgentMessage: "",
         opinion: "",
         signalDone: false,
         errorMessage: `Task ${task.id} 缺少 Agent ${runtimeAgentId}`,
@@ -2346,6 +2408,7 @@ export class Orchestrator {
         decisionAgent,
         agentStatus,
         agentContextContent,
+        forwardedAgentMessage,
         opinion: parsedDecision.opinion,
         signalDone: signal.done,
       };
@@ -2425,6 +2488,7 @@ export class Orchestrator {
         routingKind: "invalid",
         agentStatus: "failed",
         agentContextContent: "",
+        forwardedAgentMessage: "",
         opinion: "",
         signalDone: false,
         errorMessage: error instanceof Error ? error.message : String(error),

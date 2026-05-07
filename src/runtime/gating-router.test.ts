@@ -21,10 +21,10 @@ function createBuiltinVulnerabilityTopology(): TopologyRecord {
 }
 
 type TestGraphAgentResult =
-  | Omit<Extract<GraphAgentResult, { status: "failed" }>, "messageId">
-  | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "default" }>, "messageId">
-  | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "invalid" }>, "messageId">
-  | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "labeled" }>, "messageId">;
+  | Omit<Extract<GraphAgentResult, { status: "failed" }>, "messageId" | "forwardedAgentMessage">
+  | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "default" }>, "messageId" | "forwardedAgentMessage">
+  | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "invalid" }>, "messageId" | "forwardedAgentMessage">
+  | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "labeled" }>, "messageId" | "forwardedAgentMessage">;
 
 function applyResult(
   state: Parameters<typeof applyAgentResultToGraphStateInternal>[0],
@@ -36,6 +36,9 @@ function applyResult(
     decisionAgent: result.decisionAgent,
     agentStatus: result.agentStatus,
     agentContextContent: result.agentContextContent,
+    forwardedAgentMessage: ("forwardedAgentMessage" in result
+      ? result.forwardedAgentMessage
+      : "") as string,
     opinion: result.opinion,
     signalDone: result.signalDone,
   };

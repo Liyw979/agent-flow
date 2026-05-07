@@ -958,6 +958,7 @@ function applyMessageLineAndMatchDecision(input: {
           trigger: candidateTransition.trigger,
           agentStatus: "completed",
           agentContextContent: input.line.body,
+          forwardedAgentMessage: "",
           opinion: "",
           signalDone: false,
         }
@@ -969,6 +970,7 @@ function applyMessageLineAndMatchDecision(input: {
           routingKind: "default",
           agentStatus: "completed",
           agentContextContent: input.line.body,
+          forwardedAgentMessage: "",
           opinion: "",
           signalDone: false,
         };

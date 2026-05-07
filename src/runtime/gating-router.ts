@@ -118,6 +118,7 @@ interface GraphAgentResultBase {
   decisionAgent: boolean;
   agentStatus: AgentStatus;
   agentContextContent: string;
+  forwardedAgentMessage: string;
   opinion: string;
   signalDone: boolean;
 }
@@ -244,6 +245,7 @@ export function applyAgentResultToGraphState(
   ensureRuntimeAgentStatuses(nextState);
   nextState.agentStatusesByName[result.agentId] = result.agentStatus;
   nextState.agentContextByName[result.agentId] = result.agentContextContent;
+  nextState.forwardedAgentMessageByName[result.agentId] = result.forwardedAgentMessage;
   nextState.taskStatus = "running";
   nextState.finishReason = null;
 

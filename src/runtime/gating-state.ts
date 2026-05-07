@@ -70,6 +70,7 @@ export interface GraphTaskState {
   finishReason: string | null;
   agentStatusesByName: Record<string, AgentStatus>;
   agentContextByName: Record<string, string>;
+  forwardedAgentMessageByName: Record<string, string>;
   completedEdges: string[];
   edgeTriggerVersion: Record<string, number>;
   lastSignatureByAgent: Record<string, string>;
@@ -100,6 +101,7 @@ export function createEmptyGraphTaskState(input: {
     finishReason: null,
     agentStatusesByName: Object.fromEntries(topology.nodes.map((name) => [name, "idle"])),
     agentContextByName: {},
+    forwardedAgentMessageByName: {},
     completedEdges: [],
     edgeTriggerVersion: {},
     lastSignatureByAgent: {},
@@ -167,6 +169,7 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
     })),
     agentStatusesByName: { ...state.agentStatusesByName },
     agentContextByName: { ...state.agentContextByName },
+    forwardedAgentMessageByName: { ...state.forwardedAgentMessageByName },
     completedEdges: [...state.completedEdges],
     edgeTriggerVersion: { ...state.edgeTriggerVersion },
     lastSignatureByAgent: { ...state.lastSignatureByAgent },
