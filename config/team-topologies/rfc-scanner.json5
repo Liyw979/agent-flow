@@ -21,7 +21,7 @@ finding格式要求:\
   4. 涉及文件与函数\
   5. 可能造成的影响\
 回复要求（二选一）：\
-1. <continue> (finding)... \
+1. <continue> (下一个finding)... \
 2. <complete> (整个rfc已经分析完了，所有章节已经找不出来代码不一致的地方了)... \
 - 当系统再次要求你继续工作时，你要继续寻找下一个新的 finding。",
       "writable": true
