@@ -1,5 +1,5 @@
 import { DEFAULT_TOPOLOGY_TRIGGER } from "@shared/types";
-import { extractTrailingDecisionSignalBlock } from "@shared/decision-response";
+import { extractTrailingDecisionSignalBlock, stripDecisionResponseMarkup } from "@shared/decision-response";
 
 export interface AllowedDecisionTrigger {
   trigger: string;
@@ -29,6 +29,15 @@ export function stripStructuredSignals(content: string): string {
     .trim();
 }
 
+export function normalizeDecisionDisplayContent(
+  content: string,
+  allowedTriggerLiterals: readonly string[],
+): string {
+  return stripStructuredSignals(
+    stripDecisionResponseMarkup(content, allowedTriggerLiterals),
+  );
+}
+
 export function parseDecision(
   content: string,
   decisionAgent: boolean,
@@ -39,12 +48,15 @@ export function parseDecision(
     : [];
   const allowedTriggerLiterals = effectiveAllowedTriggers.map((item) => item.trigger);
   const signalMatch = extractTrailingDecisionSignalBlock(content, allowedTriggerLiterals);
-  if (signalMatch) {
+  if (signalMatch.kind === "found") {
     return {
-      cleanContent: stripStructuredSignals(signalMatch.body),
+      cleanContent: normalizeDecisionDisplayContent(
+        content,
+        allowedTriggerLiterals,
+      ),
       kind: "valid",
       trigger: signalMatch.trigger,
-      opinion: signalMatch.response,
+      opinion: stripStructuredSignals(signalMatch.response),
       rawDecisionBlock: signalMatch.rawBlock,
     };
   }

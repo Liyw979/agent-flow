@@ -2298,7 +2298,7 @@ export class Orchestrator {
         allowedDecisionTriggers.map((item) => item.trigger),
       );
       const displayContent = this.createDisplayContent(parsedDecision);
-      if (!displayContent) {
+      if (!displayContent && !(decisionAgent && parsedDecision.kind === "valid")) {
         throw new Error(`${runtimeAgentId} 未返回可展示的结果正文`);
       }
       const baseTaskMessage = {

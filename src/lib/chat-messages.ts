@@ -166,13 +166,18 @@ export function extractAgentFinalDisplayContent(message: MessageRecord): string 
     return "";
   }
 
+  if (isAgentFinalMessageRecord(message)) {
+    const normalized = rawContent
+      .replace(/\n(?:---|\*\*\*)(?:\s*\n?)*$/u, "")
+      .trim();
+    return hasMeaningfulText(normalized) ? normalized : message.content.trim();
+  }
+
   const normalizedRawContent = stripDecisionResponseMarkup(
     rawContent,
     getMessageAllowedDecisionTriggers(message),
   );
-  const trailingSection = isAgentFinalMessageRecord(message)
-    ? normalizedRawContent
-    : extractTrailingTopLevelSection(normalizedRawContent);
+  const trailingSection = extractTrailingTopLevelSection(normalizedRawContent);
   const normalized = trailingSection
     .replace(/\n(?:---|\*\*\*)(?:\s*\n?)*$/u, "")
     .trim();

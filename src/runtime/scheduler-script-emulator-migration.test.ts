@@ -229,6 +229,22 @@ test("rfc-scanner 拓扑里的双向 action_required 对弈在第 5 轮会升级
   assert.deepEqual(escalationStep.afterDecision.batch.jobs.map((job) => job.agentId), ["讨论总结-1"]);
 });
 
+test("rfc-scanner 拓扑接受前后重复 trigger 的挑战回复，并继续派发到漏洞论证", async () => {
+  const topology = compileBuiltinTopology("rfc-scanner.json5").topology;
+
+  const script = [
+    "user: @线索发现 RFC 5321 第 2.3.8 节",
+    "线索发现: <continue>发现了一个可疑点 @漏洞挑战-1",
+    "漏洞挑战-1: <continue>\n这更像协议严格性问题，不是安全漏洞。\n\n<continue> @漏洞论证-1",
+    "漏洞论证-1: <complete>当前可以进入讨论总结。 @讨论总结-1",
+    "讨论总结-1: 当前这轮讨论已经形成结论。 @线索发现",
+    "线索发现: <complete>当前没有新的可疑点 @线索完备性评估",
+    "线索完备性评估: <complete>当前项目可以结束本轮扫描。",
+  ];
+
+  await runSchedulerScriptDrived({ topology, script });
+});
+
 test("脚本模式支持用户首条直接 @decisionAgent 并沿 action_required 回路继续推进", async () => {
   const topology = createTopology({
     nodes: ["安全负责人", "漏洞分析人员", "结论归档"],

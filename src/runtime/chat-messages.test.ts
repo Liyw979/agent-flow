@@ -245,6 +245,170 @@ test("agent-final 已包含继续处理正文时，合并 action-required-reques
   );
 });
 
+test("尾部重复 trigger 的 agent-final 仍保留独立 responseNote，并用于 action-required-request 去重", () => {
+  const finalBody = "当前只能确认这里没有看到强制拒绝缺失主机标识的分支。";
+  const decisionBody =
+    "还需要补证：缺失 host 的 HTTP/2 请求是否真的会进入目标敏感应用。";
+
+  const merged = mergeTaskChatMessages([
+    createLabeledAgentFinalMessage(
+      "agent-final-with-repeated-tail-trigger",
+      `${finalBody}\n\n${decisionBody}`,
+      `<continue>\n${finalBody}\n\n${decisionBody}\n\n<continue>`,
+      decisionBody,
+      "<continue>",
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+    createActionRequiredRequestMessage(
+      "action-required-request-after-repeated-tail-trigger",
+      `${decisionBody}\n\n@漏洞论证-1`,
+      "agent-final-with-repeated-tail-trigger",
+      ["漏洞论证-1"],
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(
+    merged[0]?.content,
+    `${finalBody}\n\n${decisionBody}\n\n@漏洞论证-1`,
+  );
+});
+
+test("mixed-trigger 时聊天合并以最后一次命中的 trigger 语义为准", () => {
+  const merged = mergeTaskChatMessages([
+    createLabeledAgentFinalMessage(
+      "agent-final-mixed-trigger",
+      "前文旧回流意见后文",
+      "前文<continue>旧回流意见</continue>后文<complete>",
+      "前文旧回流意见后文",
+      "<complete>",
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+    createActionRequiredRequestMessage(
+      "action-required-request-after-mixed-trigger",
+      "前文旧回流意见后文\n\n@漏洞论证-1",
+      "agent-final-mixed-trigger",
+      ["漏洞论证-1"],
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(
+    merged[0]?.content,
+    "前文旧回流意见后文\n\n@漏洞论证-1",
+  );
+});
+
+test("开头 wrapped trigger 后的尾随正文会保留到聊天合并结果中", () => {
+  const merged = mergeTaskChatMessages([
+    createLabeledAgentFinalMessage(
+      "agent-final-leading-wrapped-with-tail-text",
+      "请继续补证。\n\n补充说明",
+      "<continue>请继续补证。</continue>补充说明",
+      "请继续补证。\n\n补充说明",
+      "<continue>",
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+    createActionRequiredRequestMessage(
+      "action-required-request-after-leading-wrapped-with-tail-text",
+      "请继续补证。\n\n补充说明\n\n@漏洞论证-1",
+      "agent-final-leading-wrapped-with-tail-text",
+      ["漏洞论证-1"],
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(
+    merged[0]?.content,
+    "请继续补证。\n\n补充说明\n\n@漏洞论证-1",
+  );
+});
+
+test("正文里的完整 trigger 包裹对会作为普通文本保留到聊天合并结果中", () => {
+  const merged = mergeTaskChatMessages([
+    createLabeledAgentFinalMessage(
+      "agent-final-with-wrapped-trigger-example",
+      "请检查示例 <complete>done</complete> 是否出现在文档中",
+      "<continue>请检查示例 <complete>done</complete> 是否出现在文档中</continue>",
+      "请检查示例 <complete>done</complete> 是否出现在文档中",
+      "<continue>",
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+    createActionRequiredRequestMessage(
+      "action-required-request-after-wrapped-trigger-example",
+      "请检查示例 <complete>done</complete> 是否出现在文档中\n\n@漏洞论证-1",
+      "agent-final-with-wrapped-trigger-example",
+      ["漏洞论证-1"],
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(
+    merged[0]?.content,
+    "请检查示例 <complete>done</complete> 是否出现在文档中\n\n@漏洞论证-1",
+  );
+});
+
+test("正文里的同名 trigger 包裹对会作为普通文本保留到聊天合并结果中", () => {
+  const merged = mergeTaskChatMessages([
+    createLabeledAgentFinalMessage(
+      "agent-final-with-same-trigger-example",
+      "请检查示例 <continue>done</continue> 是否出现在文档中",
+      "<continue>请检查示例 <continue>done</continue> 是否出现在文档中</continue>",
+      "请检查示例 <continue>done</continue> 是否出现在文档中",
+      "<continue>",
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+    createActionRequiredRequestMessage(
+      "action-required-request-after-same-trigger-example",
+      "请检查示例 <continue>done</continue> 是否出现在文档中\n\n@漏洞论证-1",
+      "agent-final-with-same-trigger-example",
+      ["漏洞论证-1"],
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(
+    merged[0]?.content,
+    "请检查示例 <continue>done</continue> 是否出现在文档中\n\n@漏洞论证-1",
+  );
+});
+
+test("agent-final 展示不会再次剥离已经进入正文的同名 trigger 示例", () => {
+  const merged = mergeTaskChatMessages([
+    createLabeledAgentFinalMessage(
+      "agent-final-display-with-same-trigger-example",
+      "请检查示例 <continue>done</continue> 是否出现在文档中",
+      "<continue>请检查示例 <continue>done</continue> 是否出现在文档中</continue>",
+      "请检查示例 <continue>done</continue> 是否出现在文档中",
+      "<continue>",
+      "漏洞挑战-1",
+      DEFAULT_TIMESTAMP,
+    ),
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(
+    merged[0]?.content,
+    "请检查示例 <continue>done</continue> 是否出现在文档中",
+  );
+});
+
 test("decisionAgent 的回流消息即使被其他消息隔开，也应继续合并回原结果卡片", () => {
   const decisionContent =
     "我不认同现在可以直接交付。请继续补充这些信息后再确认是否达到可交付标准。";
@@ -437,11 +601,11 @@ test("agent-final 展示时会移除结构化 trigger 标签，只保留正文",
   assert.equal(merged[0]?.content, "继续处理。\n\n请补充实现依据。");
 });
 
-test("labeled agent-final 的 content 以裸 trigger 开头时，聊天展示也会移除 trigger 标签", () => {
+test("labeled agent-final 的展示直接使用已归一化正文，而不是重新解析 rawResponse", () => {
   const merged = mergeTaskChatMessages([
     createLabeledAgentFinalMessage(
       "agent-final-leading-trigger",
-      `${EXAMPLE_TRIGGER_LABEL}发现新的可疑点，继续后续流程。`,
+      "发现新的可疑点，继续后续流程。",
       `${EXAMPLE_TRIGGER_LABEL}发现新的可疑点，继续后续流程。`,
       "发现新的可疑点，继续后续流程。",
       "<continue>",
@@ -452,6 +616,23 @@ test("labeled agent-final 的 content 以裸 trigger 开头时，聊天展示也
 
   assert.equal(merged.length, 1);
   assert.equal(merged[0]?.content, "发现新的可疑点，继续后续流程。");
+});
+
+test("labeled agent-final 的正文从第一个字符开始就是 trigger 示例时，聊天展示不会误删示例文本", () => {
+  const merged = mergeTaskChatMessages([
+    createLabeledAgentFinalMessage(
+      "agent-final-leading-trigger-example",
+      "<continue>done</continue> 是示例",
+      `<continue><continue>done</continue> 是示例</continue>`,
+      "<continue>done</continue> 是示例",
+      "<continue>",
+      "线索发现",
+      DEFAULT_TIMESTAMP,
+    ),
+  ]);
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]?.content, "<continue>done</continue> 是示例");
 });
 
 test("agent-final 展示时会保留非结构化孤立结束标签", () => {

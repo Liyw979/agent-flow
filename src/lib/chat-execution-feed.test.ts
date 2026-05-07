@@ -454,6 +454,66 @@ test("buildChatFeedItems 会在 final 出现后立即用普通消息替换动态
   );
 });
 
+test("buildChatFeedItems 会剥离重复 trigger，但保留 final 正文与回流目标", () => {
+  const messages = [
+    createMessage({
+      id: "dispatch-challenge",
+      sender: "线索发现",
+      kind: "agent-dispatch",
+      content: "@漏洞挑战-1",
+      targetAgentIds: ["漏洞挑战-1"],
+      timestamp: "2026-04-30T10:00:00.000Z",
+    }),
+    createMessage({
+      id: "challenge-final-repeated-trigger",
+      sender: "漏洞挑战-1",
+      kind: "agent-final",
+      content: "当前证据不足以证明这里一定能越界写入。",
+      routingKind: "labeled",
+      trigger: "<continue>",
+      responseNote: "当前证据不足以证明这里一定能越界写入。",
+      rawResponse: "<continue>\n当前证据不足以证明这里一定能越界写入。\n\n<continue>",
+      timestamp: "2026-04-30T10:00:02.000Z",
+    }),
+    createMessage({
+      id: "challenge-request-repeated-trigger",
+      sender: "漏洞挑战-1",
+      kind: "action-required-request",
+      content: formatActionRequiredRequestContent(
+        "当前证据不足以证明这里一定能越界写入。",
+        ["漏洞论证-1"],
+      ),
+      followUpMessageId: "challenge-final-repeated-trigger",
+      targetAgentIds: ["漏洞论证-1"],
+      timestamp: "2026-04-30T10:00:03.000Z",
+    }),
+  ];
+
+  const feedItems = buildChatFeedItems({
+    messages,
+    topology: vulnerabilityTopology,
+  });
+  const settledExecution = feedItems.find(
+    (item) =>
+      item.type === "execution" &&
+      item.status === "settled" &&
+      item.agentId === "漏洞挑战-1",
+  );
+
+  if (
+    !settledExecution ||
+    settledExecution.type !== "execution" ||
+    settledExecution.status !== "settled"
+  ) {
+    assert.fail("缺少漏洞挑战-1 的已完成执行项");
+  }
+
+  assert.equal(
+    settledExecution.message.content,
+    "当前证据不足以证明这里一定能越界写入。\n\n@漏洞论证-1",
+  );
+});
+
 test("buildChatFeedItems 会保证 漏洞挑战 final 先于 漏洞论证 progress 出现", () => {
   const messages = [
     createMessage({

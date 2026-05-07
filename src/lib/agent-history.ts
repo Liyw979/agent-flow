@@ -12,6 +12,7 @@ import {
   normalizeTopologyEdgeTrigger,
 } from "@shared/types";
 import { stripDecisionResponseMarkup } from "@shared/decision-response";
+import { normalizeDecisionDisplayContent } from "../runtime/decision-parser";
 import { getLoopLimitFailedDecisionAgentName } from "./decision-loop-limit";
 
 export interface AgentHistoryItem {
@@ -274,7 +275,12 @@ function buildFinalHistoryItems(input: {
         decisionAgent,
         status,
       });
-      const detail = normalizeHistoryDetail(message.content, allowedTriggers);
+      const detail = decisionAgent
+        ? normalizeDecisionDisplayContent(
+          message.rawResponse,
+          allowedTriggers,
+        ).replace(/\r\n?/gu, "\n").replace(/[ \t]+\n/gu, "\n").trim()
+        : normalizeHistoryDetail(message.content, allowedTriggers);
 
       return {
         id: message.id,

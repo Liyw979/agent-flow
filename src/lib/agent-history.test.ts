@@ -320,6 +320,114 @@ test("buildAgentHistoryItems 会把判定标签去掉并按当前状态展示结
   );
 });
 
+test("buildAgentHistoryItems 不会再次剥离已进入正文的同名 trigger 示例", () => {
+  const messages: MessageRecord[] = [
+    {
+      id: "decision-same-trigger-example",
+      taskId: "task-1",
+      sender: "TaskReview",
+      content: "请检查示例 <continue>done</continue> 是否出现在文档中",
+      timestamp: "2026-04-20T09:05:00.000Z",
+      kind: "agent-final",
+      runCount: 1,
+      responseNote: "请检查示例 <continue>done</continue> 是否出现在文档中",
+      rawResponse: "<continue>请检查示例 <continue>done</continue> 是否出现在文档中</continue>",
+      status: "completed",
+      routingKind: "labeled",
+      trigger: "<continue>",
+    },
+  ];
+
+  assert.deepEqual(
+    buildAgentHistoryItems({
+      agentId: "TaskReview",
+      messages,
+      topology,
+    }).map((item) => ({
+      label: item.label,
+      detail: item.detail,
+    })),
+    [
+      {
+        label: "已完成判定",
+        detail: "请检查示例 <continue>done</continue> 是否出现在文档中",
+      },
+    ],
+  );
+});
+
+test("buildAgentHistoryItems 遇到正文从第一个字符开始就是 trigger 示例时不会误删", () => {
+  const messages: MessageRecord[] = [
+    {
+      id: "decision-leading-trigger-example",
+      taskId: "task-1",
+      sender: "TaskReview",
+      content: "<continue>done</continue> 是示例",
+      timestamp: "2026-04-20T09:05:00.000Z",
+      kind: "agent-final",
+      runCount: 1,
+      responseNote: "<continue>done</continue> 是示例",
+      rawResponse: "<continue><continue>done</continue> 是示例</continue>",
+      status: "completed",
+      routingKind: "labeled",
+      trigger: "<continue>",
+    },
+  ];
+
+  assert.deepEqual(
+    buildAgentHistoryItems({
+      agentId: "TaskReview",
+      messages,
+      topology,
+    }).map((item) => ({
+      label: item.label,
+      detail: item.detail,
+    })),
+    [
+      {
+        label: "已完成判定",
+        detail: "<continue>done</continue> 是示例",
+      },
+    ],
+  );
+});
+
+test("buildAgentHistoryItems 会移除 rawResponse 里的结构化控制信号，和聊天展示保持一致", () => {
+  const messages: MessageRecord[] = [
+    {
+      id: "decision-with-structured-signals",
+      taskId: "task-1",
+      sender: "TaskReview",
+      content: "请继续补证。",
+      timestamp: "2026-04-20T09:05:00.000Z",
+      kind: "agent-final",
+      runCount: 1,
+      responseNote: "请继续补证。",
+      rawResponse: "<continue>请继续补证。\nNEXT_AGENTS: Build\nTASK_DONE\nSESSION_REF: abc</continue>",
+      status: "completed",
+      routingKind: "labeled",
+      trigger: "<continue>",
+    },
+  ];
+
+  assert.deepEqual(
+    buildAgentHistoryItems({
+      agentId: "TaskReview",
+      messages,
+      topology,
+    }).map((item) => ({
+      label: item.label,
+      detail: item.detail,
+    })),
+    [
+      {
+        label: "已完成判定",
+        detail: "请继续补证。",
+      },
+    ],
+  );
+});
+
 test("buildAgentHistoryItems 会移除历史消息中的多余空行，避免卡片里出现大块空白", () => {
   const messages: MessageRecord[] = [
     createAgentFinalMessage({
