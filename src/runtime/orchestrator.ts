@@ -548,17 +548,17 @@ export class Orchestrator {
 
     const taskId = options.taskId?.trim() || randomUUID();
     const normalizedCwd = path.resolve(cwd);
+    const createdAt = new Date().toISOString();
 
     const task: TaskRecord = {
       id: taskId,
       title: options.title,
       status: "pending",
       cwd: normalizedCwd,
-      opencodeSessionId: null,
       agentCount: agents.length,
-      createdAt: new Date().toISOString(),
-      completedAt: null,
-      initializedAt: null,
+      createdAt,
+      completedAt: "",
+      initializedAt: "",
     };
 
     this.store.insertTask(task);
@@ -608,7 +608,7 @@ export class Orchestrator {
     const normalizedCwd = path.resolve(cwd);
     const task = this.store.getTask(normalizedCwd, taskId);
     if (isTerminalTaskStatus(task.status)) {
-      this.store.updateTaskStatus(normalizedCwd, task.id, "running", null);
+      this.store.updateTaskStatus(normalizedCwd, task.id, "running");
     }
 
     this.syncTaskAgents(task, agents);
@@ -786,7 +786,7 @@ export class Orchestrator {
 
     const latestTask = this.store.getTask(task.cwd, task.id);
     if (isTerminalTaskStatus(latestTask.status)) {
-      if (latestTask.status === "failed" && latestTask.completedAt === null) {
+      if (latestTask.status === "failed" && latestTask.completedAt.length === 0) {
         await this.completeTask(task.cwd, task.id, "failed");
       }
       return;
@@ -862,7 +862,7 @@ export class Orchestrator {
     cwd: string,
     taskId: string,
     status: TaskRecord["status"],
-    completedAt: string | null = null,
+    completedAt = "",
   ): boolean {
     const task = this.store.getTask(cwd, taskId);
     if (isTerminalTaskStatus(task.status)) {
@@ -2004,7 +2004,7 @@ export class Orchestrator {
   ): Promise<GraphAgentResult> {
     this.setInjectedConfigForTask(task);
     this.store.updateTaskAgentRun(task.cwd, task.id, runtimeAgentId, "running");
-    this.updateTaskStatusIfActive(task.cwd, task.id, "running", null);
+    this.updateTaskStatusIfActive(task.cwd, task.id, "running");
     const currentAgent = this.store
       .listTaskAgents(task.cwd, task.id)
       .find((item) => item.id === runtimeAgentId);
@@ -2018,7 +2018,7 @@ export class Orchestrator {
         kind: "system-message",
       };
       this.store.insertMessage(cwd, missingAgentMessage);
-      this.updateTaskStatusIfActive(task.cwd, task.id, "failed", null);
+      this.updateTaskStatusIfActive(task.cwd, task.id, "failed");
       this.emit({
         type: "message-created",
         cwd,
@@ -2194,12 +2194,11 @@ export class Orchestrator {
           task.cwd,
           task.id,
           concurrentBatchSize > 1 ? "running" : "action_required",
-          null,
         );
       } else if (agentStatus === "failed") {
-        this.updateTaskStatusIfActive(task.cwd, task.id, "failed", null);
+        this.updateTaskStatusIfActive(task.cwd, task.id, "failed");
       } else {
-        this.updateTaskStatusIfActive(task.cwd, task.id, "running", null);
+        this.updateTaskStatusIfActive(task.cwd, task.id, "running");
       }
 
       this.emit({
@@ -2282,7 +2281,7 @@ export class Orchestrator {
         kind: "system-message",
       };
       this.store.insertMessage(cwd, failedMessage);
-      this.updateTaskStatusIfActive(task.cwd, task.id, "failed", null);
+      this.updateTaskStatusIfActive(task.cwd, task.id, "failed");
       this.emit({
         type: "message-created",
         cwd,
@@ -2335,10 +2334,7 @@ export class Orchestrator {
       return;
     }
 
-    const completedAt =
-      status === "finished" || status === "failed"
-        ? new Date().toISOString()
-        : null;
+    const completedAt = new Date().toISOString();
     this.store.updateTaskStatus(cwd, taskId, status, completedAt);
     const snapshot = this.hydrateTask(cwd, taskId);
     const completionTimestamp = this.createTrailingMessageTimestamp(

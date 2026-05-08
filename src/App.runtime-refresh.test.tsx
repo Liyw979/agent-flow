@@ -90,10 +90,9 @@ function createUiSnapshot(input: {
         title: "runtime refresh",
         status: "running",
         cwd: WORKSPACE_CWD,
-        opencodeSessionId: null,
         agentCount: 1,
         createdAt: "2026-04-29T10:00:00.000Z",
-        completedAt: null,
+        completedAt: "",
         initializedAt: "2026-04-29T10:00:00.000Z",
       },
       agents: [

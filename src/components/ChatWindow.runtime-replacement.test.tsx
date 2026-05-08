@@ -191,10 +191,9 @@ function createWorkspaceAndTask(): {
       title: "runtime replacement",
       status: "running",
       cwd: workspace.cwd,
-      opencodeSessionId: null,
       agentCount: 4,
       createdAt: "2026-04-30T10:00:00.000Z",
-      completedAt: null,
+      completedAt: "",
       initializedAt: "2026-04-30T10:00:00.000Z",
     },
     agents: [

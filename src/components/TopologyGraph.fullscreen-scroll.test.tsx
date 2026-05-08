@@ -60,10 +60,9 @@ function createTask(messages: MessageRecord[]): TaskSnapshot {
       title: "TopologyGraph fullscreen scroll test",
       status: "running",
       cwd: WORKSPACE_CWD,
-      opencodeSessionId: null,
       agentCount: 1,
       createdAt: "2026-04-28T10:00:00.000Z",
-      completedAt: null,
+      completedAt: "",
       initializedAt: "2026-04-28T10:00:00.000Z",
     },
     agents: [

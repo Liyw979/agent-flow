@@ -200,10 +200,9 @@ function createWorkspaceAndTask(): {
       title: "runtime badges",
       status: "running",
       cwd: workspace.cwd,
-      opencodeSessionId: null,
       agentCount: 5,
       createdAt: "2026-04-29T10:00:00.000Z",
-      completedAt: null,
+      completedAt: "",
       initializedAt: "2026-04-29T10:00:00.000Z",
     },
     agents: [

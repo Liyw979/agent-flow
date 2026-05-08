@@ -143,7 +143,7 @@ export class StoreService {
     this.taskLocatorById.delete(taskId);
   }
 
-  updateTaskStatus(cwd: string, taskId: string, status: TaskRecord["status"], completedAt: string | null = null) {
+  updateTaskStatus(cwd: string, taskId: string, status: TaskRecord["status"], completedAt = "") {
     this.updateWorkspaceState(cwd, (state) => ({
       ...state,
       tasks: state.tasks.map((task) =>

@@ -54,11 +54,10 @@ test("StoreService 会在内存里保存 topology / tasks / taskAgents / message
     title: "demo",
     status: "running",
     cwd,
-    opencodeSessionId: "runtime-session",
     agentCount: 1,
     createdAt: "2026-04-21T00:00:00.000Z",
-    completedAt: null,
-    initializedAt: null,
+    completedAt: "",
+    initializedAt: "",
   });
   store.insertTaskAgent(cwd, {
           taskId: "task-1",
@@ -78,7 +77,7 @@ test("StoreService 会在内存里保存 topology / tasks / taskAgents / message
   });
 
   assert.equal(store.getTopology(cwd).nodes[0], "Build");
-  assert.equal(store.getTask(cwd, "task-1").opencodeSessionId, "runtime-session");
+  assert.equal(store.getTask(cwd, "task-1").createdAt, "2026-04-21T00:00:00.000Z");
   assert.equal(store.listTaskAgents(cwd, "task-1")[0]?.opencodeAttachBaseUrl, "http://127.0.0.1:4999");
   assert.equal(store.listMessages(cwd, "task-1")[0]?.id, "message-1");
   assert.equal(fs.existsSync(path.join(cwd, ".agent-team", LEGACY_WORKSPACE_STATE_BASENAME)), false);
@@ -93,11 +92,10 @@ test("StoreService 会在内存里维护 task locator，并在删除任务时清
     title: "demo",
     status: "pending",
     cwd,
-    opencodeSessionId: null,
     agentCount: 0,
     createdAt: "2026-04-21T00:00:00.000Z",
-    completedAt: null,
-    initializedAt: null,
+    completedAt: "",
+    initializedAt: "",
   });
 
   assert.equal(store.getTaskLocatorCwd("task-1"), cwd);

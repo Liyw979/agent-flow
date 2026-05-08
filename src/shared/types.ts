@@ -36,11 +36,10 @@ export interface TaskRecord {
   title: string;
   status: TaskStatus;
   cwd: string;
-  opencodeSessionId: string | null;
   agentCount: number;
   createdAt: string;
-  completedAt: string | null;
-  initializedAt: string | null;
+  completedAt: string;
+  initializedAt: string;
 }
 
 export interface AgentRecord {
