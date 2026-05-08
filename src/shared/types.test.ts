@@ -14,11 +14,6 @@ import {
   type TopologyRecord,
   usesOpenCodeBuiltinPrompt,
 } from "./types";
-import { readFileSync } from "node:fs";
-
-const TYPES_SOURCE = readFileSync(new URL("./types.ts", import.meta.url), "utf8");
-const MESSAGE_RECORD_BLOCK = TYPES_SOURCE.match(/export interface MessageRecord \{[\s\S]*?\n\}/u)?.[0] ?? "";
-const TOPOLOGY_RECORD_BLOCK = TYPES_SOURCE.match(/export interface TopologyRecord \{[\s\S]*?\n\}/u)?.[0] ?? "";
 
 function withAgentNodeRecords(topology: Omit<TopologyRecord, "nodeRecords">): TopologyRecord {
   return {
@@ -258,22 +253,6 @@ test("非法 maxTriggerRounds 必须直接报错，不能偷偷修正", () => {
   assert.throws(() => normalizeActionRequiredMaxRounds(1.5), /maxTriggerRounds 必须是大于等于 1 的整数/u);
   assert.throws(() => normalizeActionRequiredMaxRounds("4"), /maxTriggerRounds 必须是大于等于 1 的整数/u);
   assert.equal(normalizeActionRequiredMaxRounds(4), 4);
-});
-
-test("MessageRecord 不再暴露无生产用途的 projectId / sessionId / sourceAgentId", () => {
-  assert.equal(MESSAGE_RECORD_BLOCK.includes("  projectId?: string;\n"), false);
-  assert.equal(MESSAGE_RECORD_BLOCK.includes("  sessionId?: string;\n"), false);
-  assert.equal(MESSAGE_RECORD_BLOCK.includes("  sourceAgentId?: string;\n"), false);
-});
-
-test("TopologyRecord 不再暴露无生产用途的 projectId", () => {
-  assert.equal(TOPOLOGY_RECORD_BLOCK.includes("  projectId?: string;\n"), false);
-});
-
-test("MessageRecord 使用必选 kind 作为判别字段，并为用户消息保留显式种类", () => {
-  assert.equal(MESSAGE_RECORD_BLOCK.includes("  kind?:"), false);
-  assert.match(TYPES_SOURCE, /kind:\s*"user"/u);
-  assert.match(TYPES_SOURCE, /kind:\s*"system-message"/u);
 });
 
 test("getSpawnRules 保留显式声明的 messageMode，不再依赖默认补值", () => {

@@ -1,9 +1,7 @@
 import {
-  DEFAULT_TOPOLOGY_TRIGGER,
   isDecisionAgentInTopology,
   isTaskCompletedMessageRecord,
   type MessageRecord,
-  type TopologyEdge,
   type TopologyRecord,
 } from "@shared/types";
 
@@ -14,7 +12,7 @@ export interface TopologyAgentStatusBadgePresentation {
   effectClassName: string;
 }
 
-export type TopologyNodeHeaderAction = "fullscreen" | "attach" | "status";
+type TopologyNodeHeaderAction = "fullscreen" | "attach" | "status";
 
 export function getTopologyNodeHeaderActionOrder(input: {
   showFullscreenButton: boolean;
@@ -85,14 +83,6 @@ export function getTopologyAgentStatusBadgePresentation(
   }
 }
 
-export function getTopologyAgentStatusLabel(
-  topology: Pick<TopologyRecord, "edges">,
-  agentId: string,
-  agentState: string,
-) {
-  return getTopologyAgentStatusBadgePresentation(topology, agentId, agentState).label;
-}
-
 export function getTopologyLoopLimitFailedDecisionAgentName(
   messages: MessageRecord[],
 ): string | null {
@@ -103,32 +93,4 @@ export function getTopologyLoopLimitFailedDecisionAgentName(
   const match = /^(.*?)\s*->\s*.*已连续交流\s+\d+\s+次，任务已结束$/u.exec(content);
   const decisionAgentName = match?.[1]?.trim() ?? "";
   return decisionAgentName || null;
-}
-
-export function getTopologyEdgeTriggerAppearance(trigger: TopologyEdge["trigger"]) {
-  switch (trigger) {
-    case DEFAULT_TOPOLOGY_TRIGGER:
-      return {
-        color: "#2C4A3F",
-        strokeWidth: 2,
-        strokeDasharray: undefined,
-        zIndex: 1,
-        animated: false,
-      };
-    default:
-      return {
-        color: "#2F5E9E",
-        strokeWidth: 2,
-        strokeDasharray: "6 4",
-        zIndex: 1,
-        animated: false,
-      };
-  }
-}
-
-export function getTopologyNodeOrder(
-  topology: Pick<TopologyRecord, "nodes">,
-  defaultAgentOrderIds: string[],
-) {
-  return topology.nodes.length > 0 ? topology.nodes : defaultAgentOrderIds;
 }

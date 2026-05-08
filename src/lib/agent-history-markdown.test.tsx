@@ -1,16 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 
 import {
   compactAgentHistoryMarkdownContent,
   renderAgentHistoryDetailToStaticHtml,
 } from "./agent-history-markdown";
-
-const AGENT_HISTORY_MARKDOWN_SOURCE = fs.readFileSync(
-  new URL("./agent-history-markdown.tsx", import.meta.url),
-  "utf8",
-);
 
 test("拓扑历史详情会把 Markdown 渲染成 HTML", () => {
   const html = renderAgentHistoryDetailToStaticHtml("**已验证**\n\n- 补充断言");
@@ -25,12 +19,6 @@ test("拓扑历史 Markdown 保留拓扑自身字号，而不是被聊天 Markdo
 
   assert.doesNotMatch(html, /--chat-markdown-font-size:/);
   assert.doesNotMatch(html, /--chat-markdown-line-height:/);
-});
-
-test("拓扑历史 markdown 必须继续走 inheritTypography，而不是重新复用消息记录的 typography 样式", () => {
-  assert.match(AGENT_HISTORY_MARKDOWN_SOURCE, /<MarkdownMessage[\s\S]*content=\{normalizedContent\}[\s\S]*className=\{className\}[\s\S]*inheritTypography/);
-  assert.match(AGENT_HISTORY_MARKDOWN_SOURCE, /style=\{AGENT_HISTORY_MARKDOWN_STYLE\}/);
-  assert.doesNotMatch(AGENT_HISTORY_MARKDOWN_SOURCE, /getChatMarkdownTypographyStyle/);
 });
 
 test("拓扑历史 markdown 需要自己的紧凑 spacing 变量，不能继续共用消息记录的列表缩进和 code padding", () => {

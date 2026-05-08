@@ -16,7 +16,7 @@ export type AgentRoutingKind = "default" | "labeled" | "invalid";
 
 export type PermissionMode = "allow" | "ask" | "deny";
 
-export const BUILD_AGENT_ID = "Build";
+const BUILD_AGENT_ID = "Build";
 
 export function usesOpenCodeBuiltinPrompt(agentId: string): boolean {
   return agentId.trim().toLowerCase() === BUILD_AGENT_ID.toLowerCase();
@@ -134,7 +134,7 @@ export type TopologyEdgeTrigger = TopologyTrigger;
 export type TopologyEdgeMessageMode = "none" | "last";
 
 export const DEFAULT_ACTION_REQUIRED_MAX_ROUNDS = 4;
-export const DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE: TopologyEdgeMessageMode =
+const DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE: TopologyEdgeMessageMode =
   "last";
 export const LANGGRAPH_START_NODE_ID = "__start__";
 export const LANGGRAPH_END_NODE_ID = "__end__";
@@ -147,9 +147,9 @@ export interface TopologyEdge {
   maxTriggerRounds?: number;
 }
 
-export type TopologyTriggerRouteKind = "labeled" | "action_required";
+type TopologyTriggerRouteKind = "labeled" | "action_required";
 
-export interface TopologyTriggerRoute {
+interface TopologyTriggerRoute {
   source: string;
   trigger: TopologyTrigger;
   routeKind: TopologyTriggerRouteKind;
@@ -297,7 +297,7 @@ export function parseInitialMessageRoutingFromDslInput(
   };
 }
 
-export function assertInitialMessageRouting(
+function assertInitialMessageRouting(
   value: unknown,
 ): asserts value is InitialMessageRouting {
   if (
@@ -581,10 +581,6 @@ export interface SubmitTaskPayload {
   mentionAgentId?: string;
 }
 
-export interface CopyToClipboardPayload {
-  text: string;
-}
-
 export interface InitializeTaskPayload {
   cwd: string;
   title?: string;
@@ -805,7 +801,7 @@ export function resolvePrimaryTopologyStartTarget(
   return topology.nodes[0] ?? null;
 }
 
-export function resolveTopologyStartAgent(
+function resolveTopologyStartAgent(
   agents: Array<Pick<TopologyAgentSeed, "id">>,
 ): string | null {
   return resolveBuildAgentId(agents);

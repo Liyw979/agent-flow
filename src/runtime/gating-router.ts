@@ -39,14 +39,14 @@ import {
 import { compileTopology } from "./topology-compiler";
 import { spawnRuntimeAgentsForItems } from "./gating-spawn";
 
-export interface GraphRawDispatchJob {
+interface GraphRawDispatchJob {
   agentId: string;
   sourceContent: string;
   displayContent: string;
   kind: "raw";
 }
 
-export interface GraphTransferDispatchJob {
+interface GraphTransferDispatchJob {
   agentId: string;
   sourceAgentId: string;
   sourceContent: string;
@@ -54,7 +54,7 @@ export interface GraphTransferDispatchJob {
   kind: "transfer";
 }
 
-export interface GraphLabeledDispatchJob {
+interface GraphLabeledDispatchJob {
   agentId: string;
   sourceAgentId: string;
   sourceMessageId: string;
@@ -63,7 +63,7 @@ export interface GraphLabeledDispatchJob {
   kind: "dispatch";
 }
 
-export interface GraphActionRequiredDispatchJob {
+interface GraphActionRequiredDispatchJob {
   agentId: string;
   sourceAgentId: string;
   sourceMessageId: string;
@@ -72,12 +72,12 @@ export interface GraphActionRequiredDispatchJob {
   kind: "action_required_request";
 }
 
-export type GraphDispatchJob =
+type GraphDispatchJob =
   | GraphRawDispatchJob
   | GraphTransferDispatchJob
   | GraphLabeledDispatchJob;
 
-export type GraphDispatchJobEntry = GraphDispatchJob | GraphActionRequiredDispatchJob;
+type GraphDispatchJobEntry = GraphDispatchJob | GraphActionRequiredDispatchJob;
 
 interface GraphDispatchBatchBase {
   routingKind: "default" | "labeled";

@@ -19,7 +19,7 @@ import {
 } from "@shared/types";
 import { z } from "zod";
 
-export interface TeamDslAgentRecord {
+interface TeamDslAgentRecord {
   id: string;
   prompt: string;
   writable: boolean;
@@ -848,12 +848,4 @@ export function matchesAppliedTeamDsl(
     return false;
   }
   return matchesAppliedTeamDslTopology(currentTopology, compiled);
-}
-
-export function toAgentRecord(agent: CompiledTeamDslAgent): AgentRecord {
-  return {
-    id: agent.id,
-    prompt: agent.prompt,
-    isWritable: agent.isWritable,
-  };
 }

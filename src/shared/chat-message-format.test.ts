@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import {
+  formatActionRequiredRequestContent,
+  parseTargetAgentIds,
+} from "./chat-message-format";
 
-const SOURCE = readFileSync(new URL("./chat-message-format.ts", import.meta.url), "utf8");
-
-test("聊天消息格式化只接受 string[] 目标列表，不再接受 string 或 undefined 混合输入", () => {
-  assert.equal(SOURCE.includes("string[] | string | undefined"), false);
-  assert.equal(SOURCE.includes("string[] | string"), false);
-  assert.match(SOURCE, /parseTargetAgentIds\(value: string\[\]\): string\[\]/u);
-  assert.match(SOURCE, /formatActionRequiredRequestContent\(content: string, targetAgentIds: string\[\]\): string/u);
+test("聊天消息格式化会清理目标列表里的空白项，并追加规范化的 @ 提及", () => {
+  assert.deepEqual(parseTargetAgentIds([" Build ", "", "  QA  "]), ["Build", "QA"]);
+  assert.equal(
+    formatActionRequiredRequestContent("@Build\n\n请继续推进", [" Build ", "", "QA "]),
+    "请继续推进\n\n@Build @QA",
+  );
 });

@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import fs from "node:fs";
 
-import { parseCliCommand } from "./cli-command";
-
-const CLI_SOURCE = fs.readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-const CLI_COMMAND_SOURCE = fs.readFileSync(new URL("./cli-command.ts", import.meta.url), "utf8");
-const LEGACY_CLI_NAME = ["agent", "flow"].join("-");
+import { buildCliHelpText, buildCliProgram, parseCliCommand } from "./cli-command";
 
 test("parseCliCommand 解析新建 task headless", () => {
   const parsed = parseCliCommand([
@@ -194,19 +189,28 @@ test("旧 task run 与旧 --ui 入口都会被拒绝", () => {
   ]));
 });
 
-test("Commander help 只包含 task headless/task ui 命令", () => {
-  assert.match(CLI_COMMAND_SOURCE, /\.name\("agent-team"\)/);
-  assert.doesNotMatch(CLI_COMMAND_SOURCE, new RegExp(`\\.name\\("${LEGACY_CLI_NAME}"\\)`));
-  assert.match(CLI_SOURCE, /task headless --file <topology-file> --message <message> \[--cwd <path>\] \[--show-message\]/);
-  assert.match(CLI_SOURCE, /task ui --file <topology-file> --message <message> \[--cwd <path>\] \[--show-message\]/);
-  assert.doesNotMatch(CLI_SOURCE, /task ui <taskId> \[--cwd <path>\]/);
-  assert.doesNotMatch(CLI_SOURCE, /task attach <taskId> <agentId>/);
-  assert.doesNotMatch(CLI_SOURCE, /task run --file <topology-file> --message <message>/);
-  assert.doesNotMatch(CLI_SOURCE, /task show <taskId>/);
-  assert.doesNotMatch(CLI_SOURCE, /task chat --file <topology-file> --message <message>/);
-  assert.doesNotMatch(CLI_SOURCE, /task chat --task <taskId>/);
-  assert.doesNotMatch(CLI_SOURCE, /--ui/);
-  assert.doesNotMatch(CLI_SOURCE, /task attach-agent <taskId> <agentId>/);
-  assert.doesNotMatch(CLI_SOURCE, /dsl run --file <dsl-file>/);
-  assert.doesNotMatch(CLI_SOURCE, /agent attach <agentId>/);
+test("Commander help 只展示保留的 task headless/task ui 命令", () => {
+  const program = buildCliProgram();
+  assert.deepEqual(program.commands.map((command) => command.name()), ["task"]);
+
+  const taskCommand = program.commands.find((command) => command.name() === "task");
+  assert.ok(taskCommand);
+  const help = buildCliHelpText();
+  const taskHelp = taskCommand.helpInformation();
+
+  assert.match(help, /Commands:\n\s+task/u);
+  assert.match(help, /task headless --file <topology-file> --message <message>/u);
+  assert.match(help, /task ui --file <topology-file> --message <message>/u);
+  assert.match(taskHelp, /headless \[options\]/u);
+  assert.match(taskHelp, /ui \[options\]/u);
+  assert.doesNotMatch(help, /task attach/u);
+  assert.doesNotMatch(help, /task show/u);
+  assert.doesNotMatch(help, /task chat/u);
+  assert.doesNotMatch(help, /task run/u);
+  assert.doesNotMatch(help, /dsl run/u);
+  assert.doesNotMatch(help, /agent attach/u);
+  assert.doesNotMatch(taskHelp, /attach/u);
+  assert.doesNotMatch(taskHelp, /show/u);
+  assert.doesNotMatch(taskHelp, /chat/u);
+  assert.doesNotMatch(taskHelp, /run/u);
 });
