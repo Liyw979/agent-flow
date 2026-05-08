@@ -244,8 +244,6 @@ async function renderTopologyGraph(task: TaskSnapshot) {
         <TopologyGraph
           workspace={workspace}
           task={nextTask}
-          selectedAgentId={null}
-          onSelectAgent={() => {}}
           onToggleMaximize={() => {}}
         />,
       );

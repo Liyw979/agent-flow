@@ -34,9 +34,7 @@ type GlobalDomPatch = {
 interface RenderTopologyGraphInput {
   workspace: WorkspaceSnapshot;
   task: TaskSnapshot;
-  selectedAgentId: string | null;
   openingAgentTerminalId: string;
-  onSelectAgent: (agentId: string) => void;
   onToggleMaximize: () => void;
   onOpenAgentTerminal?: (agentId: string) => void;
 }
@@ -131,8 +129,6 @@ export async function renderTopologyGraphInDom(input: RenderTopologyGraphInput) 
         <TopologyGraph
           workspace={nextInput.workspace}
           task={nextInput.task}
-          selectedAgentId={nextInput.selectedAgentId}
-          onSelectAgent={nextInput.onSelectAgent}
           onToggleMaximize={nextInput.onToggleMaximize}
           openingAgentTerminalId={nextInput.openingAgentTerminalId}
           {...(nextInput.onOpenAgentTerminal ? { onOpenAgentTerminal: nextInput.onOpenAgentTerminal } : {})}
