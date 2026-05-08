@@ -65,17 +65,39 @@ test("instantiateSpawnBundle 会为一个 finding 生成论证、挑战、summar
   });
 
   assert.equal(bundle.groupId, "finding-debate:finding-001");
+  assert.equal("sourceTemplateName" in bundle, false);
+  assert.equal("reportToTemplateName" in bundle, false);
+  assert.equal(bundle.nodes.some((node) => "spawnRuleId" in node), false);
   assert.deepEqual(
     bundle.nodes.map((node) => ({
       id: node.id,
       templateName: node.templateName,
       role: node.role,
       displayName: node.displayName,
+      groupId: node.groupId,
     })),
     [
-      { id: "漏洞论证模板-1", templateName: "漏洞论证模板", role: "pro", displayName: "漏洞论证模板-1" },
-      { id: "漏洞挑战模板-1", templateName: "漏洞挑战模板", role: "con", displayName: "漏洞挑战模板-1" },
-      { id: "Summary模板-1", templateName: "Summary模板", role: "summary", displayName: "Summary模板-1" },
+      {
+        id: "漏洞论证模板-1",
+        templateName: "漏洞论证模板",
+        role: "pro",
+        displayName: "漏洞论证模板-1",
+        groupId: "finding-debate:finding-001",
+      },
+      {
+        id: "漏洞挑战模板-1",
+        templateName: "漏洞挑战模板",
+        role: "con",
+        displayName: "漏洞挑战模板-1",
+        groupId: "finding-debate:finding-001",
+      },
+      {
+        id: "Summary模板-1",
+        templateName: "Summary模板",
+        role: "summary",
+        displayName: "Summary模板-1",
+        groupId: "finding-debate:finding-001",
+      },
     ],
   );
   assert.deepEqual(bundle.edges, [
