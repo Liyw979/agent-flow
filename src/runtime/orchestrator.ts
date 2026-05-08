@@ -1638,21 +1638,14 @@ export class Orchestrator {
   }
 
   private resolveDispatchInitialMessageRouting(
-    taskMessages: MessageRecord[],
-    targetAgentId: string,
+    targetAgentRunCount: number,
     routing: InitialMessageRouting,
   ): InitialMessageRouting {
     if (routing.mode !== "list") {
       return routing;
     }
-    for (const message of taskMessages) {
-      if (
-        (message.kind === "agent-dispatch"
-          || message.kind === "action-required-request")
-        && message.targetAgentIds.includes(targetAgentId)
-      ) {
-        return { mode: "none" };
-      }
+    if (targetAgentRunCount > 0) {
+      return { mode: "none" };
     }
     return routing;
   }
@@ -1836,8 +1829,7 @@ export class Orchestrator {
         );
         const dispatchInitialMessageRouting =
           this.resolveDispatchInitialMessageRouting(
-            taskMessages,
-            job.agentId,
+            this.getTaskAgentRunCount(cwd, taskId, job.agentId),
             edgeForwardingConfig.initialMessageRouting,
           );
         const initialMessageSourceAliasesByAgentId =
@@ -1928,8 +1920,7 @@ export class Orchestrator {
         );
         const dispatchInitialMessageRouting =
           this.resolveDispatchInitialMessageRouting(
-            taskMessages,
-            job.agentId,
+            this.getTaskAgentRunCount(cwd, taskId, job.agentId),
             edgeForwardingConfig.initialMessageRouting,
           );
         const initialMessageSourceAliasesByAgentId =
