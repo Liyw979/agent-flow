@@ -807,13 +807,15 @@ test("recoverExecutionResultAfterTransportError 没有正式回复时不能把 t
     },
   ];
 
-  const recovered = await client.recoverExecutionResultAfterTransportError(
-    runtimeTarget,
-    "session-1",
-    "2026-04-27T04:34:10.422Z",
-    "fetch failed",
-    1,
-  );
+  const recovered = await withFastForwardedTimeouts(() => (
+    client.recoverExecutionResultAfterTransportError(
+      runtimeTarget,
+      "session-1",
+      "2026-04-27T04:34:10.422Z",
+      "fetch failed",
+      1,
+    )
+  ));
 
   assert.equal(recovered, null);
   const logFilePath = buildTaskLogFilePath(userDataPath, runtimeTarget.runtimeKey);
