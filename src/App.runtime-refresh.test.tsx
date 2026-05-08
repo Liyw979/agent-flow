@@ -1,9 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { act } from "react";
+import { act, useEffect, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
+import {
+  QueryClient,
+  QueryClientProvider,
+  environmentManager,
+  notifyManager,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import {
   buildTopologyNodeRecords,
@@ -12,6 +21,9 @@ import {
 } from "@shared/types";
 
 import App from "./App";
+import { resolveAppUiSnapshot, type AppUiSnapshot } from "./lib/app-ui-snapshot";
+import { resolveUiSnapshotQueryStructuralSharing } from "./lib/ui-snapshot-refresh-gate";
+import { fetchUiSnapshot, submitTask } from "./lib/web-api";
 
 type GlobalPatchKey =
   | "window"
@@ -20,6 +32,7 @@ type GlobalPatchKey =
   | "HTMLElement"
   | "HTMLDivElement"
   | "HTMLButtonElement"
+  | "HTMLFormElement"
   | "HTMLTextAreaElement"
   | "Node"
   | "Event"
@@ -133,13 +146,28 @@ function createAgentFinalMessage() {
   ];
 }
 
-function setupDom(fetchImpl: typeof fetch) {
+function getRequestUrl(input: RequestInfo | URL) {
+  if (typeof input === "string") {
+    return new URL(input, "http://localhost");
+  }
+  if (input instanceof URL) {
+    return input;
+  }
+  return new URL(input.url, "http://localhost");
+}
+
+function setupDom(fetchImpl: typeof fetch, visibilityState: "visible" | "hidden" = "visible") {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: `http://localhost/?taskId=${TASK_ID}`,
     pretendToBeVisual: true,
   });
   const previousValues = new Map<GlobalPatchKey, GlobalPatch>();
   const intervalCallbacks: Array<() => void | Promise<void>> = [];
+
+  Object.defineProperty(dom.window.document, "visibilityState", {
+    configurable: true,
+    value: visibilityState,
+  });
 
   function setGlobal(key: GlobalPatchKey, value: unknown) {
     previousValues.set(key, {
@@ -159,6 +187,7 @@ function setupDom(fetchImpl: typeof fetch) {
   setGlobal("HTMLElement", dom.window.HTMLElement);
   setGlobal("HTMLDivElement", dom.window.HTMLDivElement);
   setGlobal("HTMLButtonElement", dom.window.HTMLButtonElement);
+  setGlobal("HTMLFormElement", dom.window.HTMLFormElement);
   setGlobal("HTMLTextAreaElement", dom.window.HTMLTextAreaElement);
   setGlobal("Node", dom.window.Node);
   setGlobal("Event", dom.window.Event);
@@ -184,6 +213,7 @@ function setupDom(fetchImpl: typeof fetch) {
       for (const callback of intervalCallbacks) {
         await callback();
       }
+      await Promise.resolve();
       await Promise.resolve();
     },
     cleanup() {
@@ -217,7 +247,105 @@ async function waitForAssertion(assertion: () => void, attempts = 20) {
   throw lastError;
 }
 
-test("App 只靠 ui-snapshot 轮询也会把新 final 消息展示出来", async () => {
+function restoreDefaultNotifyFunction() {
+  notifyManager.setNotifyFunction((callback) => {
+    callback();
+  });
+}
+
+function SubmitTaskInvalidationProbe() {
+  const queryClient = useQueryClient();
+  const uiSnapshotQueryKey = ["ui-snapshot", TASK_ID] as const;
+  const uiSnapshotQuery = useQuery<UiSnapshotPayload, Error, AppUiSnapshot>({
+    queryKey: uiSnapshotQueryKey,
+    retry: false,
+    queryFn: async () => fetchUiSnapshot({
+      taskId: TASK_ID,
+    }),
+    structuralSharing: resolveUiSnapshotQueryStructuralSharing,
+    select: resolveAppUiSnapshot,
+  });
+  const submitTaskMutation = useMutation({
+    mutationFn: submitTask,
+    retry: false,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: uiSnapshotQueryKey });
+    },
+  });
+
+  useEffect(() => {
+    void submitTaskMutation.mutateAsync({
+      cwd: WORKSPACE_CWD,
+      taskId: TASK_ID,
+      content: "请继续推进当前任务",
+    });
+  }, []);
+
+  const firstMessage =
+    uiSnapshotQuery.data?.taskView.kind === "ready"
+      ? uiSnapshotQuery.data.taskView.task.messages[0]
+      : null;
+
+  return (
+    <div>
+      {firstMessage ? firstMessage.content : "还没有消息"}
+    </div>
+  );
+}
+
+function setupAppTest(fetchImpl: typeof fetch, visibilityState: "visible" | "hidden" = "visible") {
+  const domContext = setupDom(fetchImpl, visibilityState);
+  const container = domContext.dom.window.document.createElement("div");
+  domContext.dom.window.document.body.append(container);
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+      mutations: {
+        retry: false,
+      },
+    },
+  });
+
+  notifyManager.setNotifyFunction((callback) => {
+    act(() => {
+      callback();
+    });
+  });
+  environmentManager.setIsServer(() => false);
+
+  return {
+    async render(element: ReactNode = <App />) {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            {element}
+          </QueryClientProvider>,
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    },
+    async tickPolling() {
+      await act(async () => {
+        await domContext.tickIntervals();
+      });
+    },
+    async cleanup() {
+      await act(async () => {
+        root.unmount();
+      });
+      queryClient.clear();
+      restoreDefaultNotifyFunction();
+      environmentManager.setIsServer(() => typeof window === "undefined");
+      domContext.cleanup();
+    },
+  };
+}
+
+test("App 在 ui-snapshot 自动轮询后会把新 final 消息展示出来", async () => {
   let uiSnapshotRequestCount = 0;
   const snapshots = [
     createUiSnapshot({
@@ -235,37 +363,27 @@ test("App 只靠 ui-snapshot 轮询也会把新 final 消息展示出来", async
     return new Response(JSON.stringify(next), { status: 200 });
   }) as typeof fetch;
 
-  const domContext = setupDom(fetchImpl);
-  const container = domContext.dom.window.document.createElement("div");
-  domContext.dom.window.document.body.append(container);
-  const root = createRoot(container);
+  const appTest = setupAppTest(fetchImpl);
 
   try {
-    await act(async () => {
-      root.render(<App />);
-    });
+    await appTest.render();
 
     await waitForAssertion(() => {
       assert.match(document.body.textContent ?? "", /还没有消息/u);
       assert.equal(uiSnapshotRequestCount >= 1, true);
     });
 
-    await act(async () => {
-      await domContext.tickIntervals();
-    });
+    await appTest.tickPolling();
 
     await waitForAssertion(() => {
       assert.match(document.body.textContent ?? "", /挑战结论：这里的消息应当在轮询拿到全量 snapshot 后立即出现。/u);
     });
   } finally {
-    await act(async () => {
-      root.unmount();
-    });
-    domContext.cleanup();
+    await appTest.cleanup();
   }
 });
 
-test("App 会把 snapshot 里的 attach 状态更新到界面", async () => {
+test("App 会把自动轮询带回的 attach 状态更新到界面", async () => {
   let uiSnapshotRequestCount = 0;
   const snapshots = [
     createUiSnapshot({
@@ -283,15 +401,10 @@ test("App 会把 snapshot 里的 attach 状态更新到界面", async () => {
     return new Response(JSON.stringify(next), { status: 200 });
   }) as typeof fetch;
 
-  const domContext = setupDom(fetchImpl);
-  const container = domContext.dom.window.document.createElement("div");
-  domContext.dom.window.document.body.append(container);
-  const root = createRoot(container);
+  const appTest = setupAppTest(fetchImpl);
 
   try {
-    await act(async () => {
-      root.render(<App />);
-    });
+    await appTest.render();
 
     await waitForAssertion(() => {
       const attachButton = document.querySelector('button[aria-label="打开 漏洞挑战-1 的 attach 终端"]');
@@ -299,9 +412,7 @@ test("App 会把 snapshot 里的 attach 状态更新到界面", async () => {
       assert.equal(attachButton.disabled, true);
     });
 
-    await act(async () => {
-      await domContext.tickIntervals();
-    });
+    await appTest.tickPolling();
 
     await waitForAssertion(() => {
       const attachButton = document.querySelector('button[aria-label="打开 漏洞挑战-1 的 attach 终端"]');
@@ -309,9 +420,85 @@ test("App 会把 snapshot 里的 attach 状态更新到界面", async () => {
       assert.equal(attachButton.disabled, false);
     });
   } finally {
-    await act(async () => {
-      root.unmount();
+    await appTest.cleanup();
+  }
+});
+
+test("App 在后台标签页也会继续自动轮询", async () => {
+  let uiSnapshotRequestCount = 0;
+  const snapshots = [
+    createUiSnapshot({
+      agentSessionId: null,
+      messages: [],
+    }),
+    createUiSnapshot({
+      agentSessionId: "session-challenge-1",
+      messages: createAgentFinalMessage(),
+    }),
+  ];
+  const fetchImpl = (async () => {
+    const next = snapshots[Math.min(uiSnapshotRequestCount, snapshots.length - 1)]!;
+    uiSnapshotRequestCount += 1;
+    return new Response(JSON.stringify(next), { status: 200 });
+  }) as typeof fetch;
+
+  const appTest = setupAppTest(fetchImpl, "hidden");
+
+  try {
+    await appTest.render();
+
+    await waitForAssertion(() => {
+      assert.match(document.body.textContent ?? "", /还没有消息/u);
+      assert.equal(uiSnapshotRequestCount >= 1, true);
     });
-    domContext.cleanup();
+
+    await appTest.tickPolling();
+
+    await waitForAssertion(() => {
+      assert.equal(uiSnapshotRequestCount >= 2, true);
+      assert.match(document.body.textContent ?? "", /挑战结论：这里的消息应当在轮询拿到全量 snapshot 后立即出现。/u);
+    });
+  } finally {
+    await appTest.cleanup();
+  }
+});
+
+test("submitTaskMutation 成功后会失效 ui-snapshot 查询并立即重拉", async () => {
+  let uiSnapshotRequestCount = 0;
+  let submitTaskRequestCount = 0;
+  let currentSnapshot = createUiSnapshot({
+    agentSessionId: null,
+    messages: [],
+  });
+  const refreshedSnapshot = createUiSnapshot({
+    agentSessionId: "session-challenge-1",
+    messages: createAgentFinalMessage(),
+  });
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = getRequestUrl(input);
+    if (requestUrl.pathname === "/api/ui-snapshot") {
+      uiSnapshotRequestCount += 1;
+      return new Response(JSON.stringify(currentSnapshot), { status: 200 });
+    }
+    if (requestUrl.pathname === "/api/tasks/submit") {
+      submitTaskRequestCount += 1;
+      currentSnapshot = refreshedSnapshot;
+      return new Response(JSON.stringify(refreshedSnapshot.task), { status: 200 });
+    }
+    throw new Error(`unexpected request: ${requestUrl.pathname} ${init?.method ?? "GET"}`);
+  }) as typeof fetch;
+
+  const appTest = setupAppTest(fetchImpl);
+
+  try {
+    await appTest.render(<SubmitTaskInvalidationProbe />);
+
+    await waitForAssertion(() => {
+      assert.equal(submitTaskRequestCount, 1);
+      assert.equal(uiSnapshotRequestCount >= 2, true);
+      assert.match(document.body.textContent ?? "", /挑战结论：这里的消息应当在轮询拿到全量 snapshot 后立即出现。/u);
+    });
+  } finally {
+    await appTest.cleanup();
   }
 });

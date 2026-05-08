@@ -50,7 +50,7 @@ function isTerminalTaskStatus(status: string) {
   return status === "failed";
 }
 
-function isSemanticallyOlderUiSnapshot(
+export function isSemanticallyOlderUiSnapshot(
   baseline: UiSnapshotPayload,
   candidate: UiSnapshotPayload,
 ) {
@@ -78,9 +78,9 @@ function isSemanticallyOlderUiSnapshot(
   }
 
   if (
-    baselineTask.task.completedAt &&
-    !candidateTask.task.completedAt &&
-    isTerminalTaskStatus(candidateTask.task.status)
+    baselineTask.task.completedAt
+    && !candidateTask.task.completedAt
+    && isTerminalTaskStatus(candidateTask.task.status)
   ) {
     return true;
   }
@@ -99,8 +99,8 @@ function isSemanticallyOlderUiSnapshot(
     }
 
     if (
-      candidateAgent.runCount === baselineAgent.runCount &&
-      getAgentProgressRank(candidateAgent.status) < getAgentProgressRank(baselineAgent.status)
+      candidateAgent.runCount === baselineAgent.runCount
+      && getAgentProgressRank(candidateAgent.status) < getAgentProgressRank(baselineAgent.status)
     ) {
       return true;
     }
@@ -226,4 +226,32 @@ export function decideUiSnapshotRefreshAcceptance(
       payload: input.payload,
     },
   };
+}
+
+export function resolveUiSnapshotQueryData(
+  previousPayload: UiSnapshotPayload,
+  nextPayload: UiSnapshotPayload,
+) {
+  if (!previousPayload.task) {
+    return nextPayload;
+  }
+
+  if (isSemanticallyOlderUiSnapshot(previousPayload, nextPayload)) {
+    return previousPayload;
+  }
+
+  return isSemanticallyNewerUiSnapshot(previousPayload, nextPayload)
+    ? nextPayload
+    : previousPayload;
+}
+
+export function resolveUiSnapshotQueryStructuralSharing(
+  oldData: unknown,
+  newData: unknown,
+) {
+  const nextPayload = newData as UiSnapshotPayload;
+  if (!oldData || typeof oldData !== "object") {
+    return nextPayload;
+  }
+  return resolveUiSnapshotQueryData(oldData as UiSnapshotPayload, nextPayload);
 }

@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefCallback } from "react";
+import { useCallback, useEffect, useMemo, useState, type RefCallback } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { UiSnapshotPayload } from "@shared/types";
 import { withOptionalString } from "@shared/object-utils";
 import { ChatWindow } from "./components/ChatWindow";
 import { TopologyGraph } from "./components/TopologyGraph";
@@ -11,6 +13,7 @@ import {
 import { getAgentColorToken } from "./lib/agent-colors";
 import { calculateAgentCardPanelLayout } from "./lib/agent-card-layout";
 import { getAppShellClassName } from "./lib/app-shell-layout";
+import { resolveAppUiSnapshot, createInitialAppUiSnapshot, type AppUiSnapshot } from "./lib/app-ui-snapshot";
 import { getAppWorkspaceLayoutMetrics } from "./lib/app-workspace-layout";
 import { buildAgentPromptSnippetText } from "./lib/agent-prompt-snippet";
 import {
@@ -29,17 +32,9 @@ import {
   buildAgentPromptDialogState,
   type AgentPromptDialogState,
 } from "./lib/agent-prompt-dialog";
+import { resolveUiSnapshotQueryStructuralSharing } from "./lib/ui-snapshot-refresh-gate";
 import { getUiSnapshotPollingIntervalMs } from "./lib/ui-snapshot-polling";
 import { resolveAppPanelVisibility, type AppPanelMode } from "./lib/app-panel-visibility";
-import {
-  createInitialAppUiSnapshot,
-  type AppUiSnapshot,
-} from "./lib/app-ui-snapshot";
-import {
-  INITIAL_LATEST_ACCEPTED_UI_SNAPSHOT_STATE,
-  type LatestAcceptedUiSnapshotState,
-} from "./lib/ui-snapshot-refresh-gate";
-import { decideAppUiSnapshotRefresh } from "./lib/app-ui-snapshot";
 
 type AgentPromptDialogViewState =
   | {
@@ -67,12 +62,10 @@ const UNMOUNTED_AGENT_PANEL_VIEWPORT: AgentPanelViewportState = {
 };
 
 function App() {
+  const queryClient = useQueryClient();
   const launchParams = useMemo(() => readLaunchParams(), []);
   const appShellClassName = getAppShellClassName();
   const workspaceLayoutMetrics = getAppWorkspaceLayoutMetrics();
-  const [uiSnapshot, setUiSnapshot] = useState<AppUiSnapshot>(() =>
-    createInitialAppUiSnapshot(),
-  );
   const [openingAgentTerminalId, setOpeningAgentTerminalId] = useState("");
   const [agentTerminalActionError, setAgentTerminalActionError] = useState("");
   const [promptLineCount, setPromptLineCount] = useState(1);
@@ -84,63 +77,31 @@ function App() {
   const [agentPanelViewport, setAgentPanelViewport] = useState<AgentPanelViewportState>(
     UNMOUNTED_AGENT_PANEL_VIEWPORT,
   );
-  const latestAcceptedPayloadRef = useRef<LatestAcceptedUiSnapshotState>(
-    INITIAL_LATEST_ACCEPTED_UI_SNAPSHOT_STATE,
-  );
-  const nextUiSnapshotRequestIdRef = useRef(0);
-  const latestAcceptedUiSnapshotRequestIdRef = useRef(0);
 
   const launchTaskId = launchParams.taskId ?? "";
   const uiSnapshotPollingIntervalMs = getUiSnapshotPollingIntervalMs(launchTaskId);
   const panelVisibility = resolveAppPanelVisibility(panelMode);
-
-  function applyUiSnapshotRefreshResult(requestId: number, payload: Awaited<ReturnType<typeof fetchUiSnapshot>>) {
-    const acceptance = decideAppUiSnapshotRefresh({
-      latestAcceptedRequestId: latestAcceptedUiSnapshotRequestIdRef.current,
-      latestAcceptedState: latestAcceptedPayloadRef.current,
-      requestId,
-      payload,
-    });
-    if (!acceptance.accepted) {
-      return;
-    }
-
-    latestAcceptedUiSnapshotRequestIdRef.current = acceptance.latestAcceptedRequestId;
-    latestAcceptedPayloadRef.current = acceptance.latestAcceptedState;
-    setUiSnapshot(acceptance.appSnapshot);
-  }
-
-  async function refreshUiSnapshot() {
-    const requestId = nextUiSnapshotRequestIdRef.current + 1;
-    nextUiSnapshotRequestIdRef.current = requestId;
-
-    if (!launchTaskId) {
-      return;
-    }
-
-    const next = await fetchUiSnapshot({
+  const uiSnapshotQueryKey = ["ui-snapshot", launchTaskId] as const;
+  const uiSnapshotQuery = useQuery<UiSnapshotPayload, Error, AppUiSnapshot>({
+    queryKey: uiSnapshotQueryKey,
+    enabled: launchTaskId.length > 0,
+    retry: false,
+    queryFn: async () => fetchUiSnapshot({
       taskId: launchTaskId,
-    });
-    applyUiSnapshotRefreshResult(requestId, next);
-  }
-
-  useEffect(() => {
-    void refreshUiSnapshot();
-  }, []);
-
-  useEffect(() => {
-    if (!uiSnapshotPollingIntervalMs) {
-      return;
-    }
-
-    const timer = setInterval(() => {
-      void refreshUiSnapshot();
-    }, uiSnapshotPollingIntervalMs);
-
-    return () => {
-      clearInterval(timer);
-    };
-  }, [launchTaskId, uiSnapshotPollingIntervalMs]);
+    }),
+    refetchInterval: uiSnapshotPollingIntervalMs ?? false,
+    refetchIntervalInBackground: true,
+    structuralSharing: resolveUiSnapshotQueryStructuralSharing,
+    select: resolveAppUiSnapshot,
+  });
+  const submitTaskMutation = useMutation({
+    mutationFn: submitTask,
+    retry: false,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: uiSnapshotQueryKey });
+    },
+  });
+  const uiSnapshot = uiSnapshotQuery.data ?? createInitialAppUiSnapshot();
 
   const bindAgentPanelViewport: RefCallback<HTMLDivElement> = useCallback((element) => {
     setAgentPanelViewport((current) => {
@@ -322,7 +283,7 @@ function App() {
                 void handleOpenAgentTerminal(agentId);
               }}
               onSubmit={async ({ content, mentionAgentId }) => {
-                await submitTask(withOptionalString({
+                await submitTaskMutation.mutateAsync(withOptionalString({
                   cwd: workspace.cwd,
                   taskId: task.task.id,
                   content,
@@ -371,7 +332,7 @@ function App() {
                     void handleOpenAgentTerminal(agentId);
                   }}
                   onSubmit={async ({ content, mentionAgentId }) => {
-                    await submitTask(withOptionalString({
+                    await submitTaskMutation.mutateAsync(withOptionalString({
                       cwd: workspace.cwd,
                       taskId: task.task.id,
                       content,

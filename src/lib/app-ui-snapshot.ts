@@ -1,13 +1,8 @@
 import type {
-  TaskSnapshot,
   UiSnapshotPayload,
+  TaskSnapshot,
   WorkspaceSnapshot,
 } from "@shared/types";
-
-import {
-  decideUiSnapshotRefreshAcceptance,
-  type LatestAcceptedUiSnapshotState,
-} from "./ui-snapshot-refresh-gate";
 
 type AppTaskView =
   | {
@@ -49,50 +44,10 @@ function buildTaskView(payload: UiSnapshotPayload): AppTaskView {
   };
 }
 
-function projectAppUiSnapshot(payload: UiSnapshotPayload): AppUiSnapshot {
+export function resolveAppUiSnapshot(payload: UiSnapshotPayload): AppUiSnapshot {
   return {
     taskView: buildTaskView(payload),
     taskLogFilePath: payload.taskLogFilePath ?? "",
     taskUrl: payload.taskUrl ?? "",
-  };
-}
-
-export function decideAppUiSnapshotRefresh(input: {
-  latestAcceptedRequestId: number;
-  latestAcceptedState: LatestAcceptedUiSnapshotState;
-  requestId: number;
-  payload: UiSnapshotPayload;
-}):
-  | {
-      accepted: false;
-      latestAcceptedRequestId: number;
-      latestAcceptedState: LatestAcceptedUiSnapshotState;
-    }
-  | {
-      accepted: true;
-      latestAcceptedRequestId: number;
-      latestAcceptedState: LatestAcceptedUiSnapshotState;
-      appSnapshot: AppUiSnapshot;
-    } {
-  const acceptance = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: input.latestAcceptedRequestId,
-    latestAcceptedState: input.latestAcceptedState,
-    requestId: input.requestId,
-    payload: input.payload,
-  });
-
-  if (!acceptance.accepted) {
-    return {
-      accepted: false,
-      latestAcceptedRequestId: acceptance.latestAcceptedRequestId,
-      latestAcceptedState: acceptance.latestAcceptedState,
-    };
-  }
-
-  return {
-    accepted: true,
-    latestAcceptedRequestId: acceptance.latestAcceptedRequestId,
-    latestAcceptedState: acceptance.latestAcceptedState,
-    appSnapshot: projectAppUiSnapshot(acceptance.latestAcceptedState.payload),
   };
 }
