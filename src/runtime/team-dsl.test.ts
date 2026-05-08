@@ -480,7 +480,7 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出论证挑战多轮 spaw
     compiled.topology.nodeRecords.find((node) => node.id === "讨论总结")?.initialMessageRouting,
     {
       mode: "list",
-      agentIds: ["漏洞挑战", "漏洞论证"],
+      agentIds: ["线索发现", "漏洞挑战", "漏洞论证"],
     },
   );
   assert.deepEqual(compiled.topology.langgraph?.end, {

@@ -1,18 +1,21 @@
-import { spawnSync } from "node:child_process";
+import * as childProcess from "node:child_process";
 
 export async function ensureOpencodePreflightPassed() {
-  const result = spawnSync("opencode", ["--help"], {
+  const result = childProcess.spawnSync("opencode", ["--help"], {
     encoding: "utf8",
     windowsHide: true,
     shell: true,
-    env: process.env
+    env: process.env,
   });
 
-  const errorMessage = result.error ? result.error.message : null;
-  if (!errorMessage) {
+  const exitStatus = typeof result.status === "number" ? result.status : -1;
+  if (!result.error && exitStatus === 0) {
     return;
   }
-  const message = `\`opencode --help\` 执行失败（${errorMessage.trim() || "未知原因"}），说明 opencode 无法正常使用，无法启动本应用`
-  console.log(message)
-  throw new Error(message);
+  const stderrMessage = typeof result.stderr === "string" ? result.stderr.trim() : "";
+  const stdoutMessage = typeof result.stdout === "string" ? result.stdout.trim() : "";
+  const errorMessage = result.error
+    ? result.error.message.trim()
+    : stderrMessage || stdoutMessage || `退出码 ${exitStatus}`;
+  throw new Error(`\`opencode --help\` 执行失败（${errorMessage}），说明 opencode 无法正常使用，无法启动本应用`);
 }

@@ -42,7 +42,7 @@ test("compileTeamDsl 支持 v8 递归式图 DSL，并保留 spawn 子图定义",
   assert.equal(summaryNode.templateName, "讨论总结");
   assert.deepEqual(summaryNode.initialMessageRouting, {
     mode: "list",
-    agentIds: ["漏洞挑战", "漏洞论证"],
+    agentIds: ["线索发现", "漏洞挑战", "漏洞论证"],
   });
   assert.equal(summaryNode.writable, true);
 });
