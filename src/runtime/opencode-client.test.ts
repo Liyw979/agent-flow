@@ -51,6 +51,29 @@ function createClient(projectPath = createTempDir()) {
   };
 }
 
+async function withFastForwardedTimeouts<T>(
+  callback: () => Promise<T>,
+  stepMs = 400,
+): Promise<T> {
+  const originalDateNow = Date.now;
+  const originalSetTimeout = globalThis.setTimeout;
+  let nowMs = originalDateNow();
+
+  Date.now = () => nowMs;
+  globalThis.setTimeout = (((handler: (...args: unknown[]) => void, _timeout?: number, ...args: unknown[]) => {
+    nowMs += stepMs;
+    handler(...args);
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout);
+
+  try {
+    return await callback();
+  } finally {
+    Date.now = originalDateNow;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+}
+
 test("request 会跟随当前 serverHandle 的实际端口", async () => {
   const { client, projectPath } = createClient();
   const typed = client as OpenCodeClient & {
@@ -400,13 +423,15 @@ test("recoverExecutionResultAfterTransportError 在 fetch failed 后会从 sessi
     ];
   };
 
-  const recovered = await client.recoverExecutionResultAfterTransportError(
-    projectPath,
-    "session-1",
-    "2026-04-27T03:48:30.000Z",
-    "fetch failed",
-    1000,
-  );
+  const recovered = await withFastForwardedTimeouts(() => (
+    client.recoverExecutionResultAfterTransportError(
+      projectPath,
+      "session-1",
+      "2026-04-27T03:48:30.000Z",
+      "fetch failed",
+      1000,
+    )
+  ));
 
   assert.notEqual(recovered, null);
   assert.equal(recovered?.status, "completed");
@@ -613,13 +638,15 @@ test("recoverExecutionResultAfterTransportError 不会跨到后续 user 子树�
     },
   ];
 
-  const recovered = await client.recoverExecutionResultAfterTransportError(
-    runtimeTarget,
-    "session-1",
-    "2026-04-27T07:33:41.201Z",
-    "fetch failed",
-    1,
-  );
+  const recovered = await withFastForwardedTimeouts(() => (
+    client.recoverExecutionResultAfterTransportError(
+      runtimeTarget,
+      "session-1",
+      "2026-04-27T07:33:41.201Z",
+      "fetch failed",
+      1,
+    )
+  ));
 
   assert.equal(recovered, null);
   const logFilePath = buildTaskLogFilePath(userDataPath, runtimeTarget.runtimeKey);
