@@ -320,8 +320,8 @@ test("ChatWindow 只根据消息流展示运行中面板与最终消息", async 
           workspace={workspace}
           task={nextTask}
           availableAgents={["Build", "QA", "线索发现"]}
-          taskLogFilePath={null}
-          taskUrl={null}
+          taskLogFilePath=""
+          taskUrl=""
           openingAgentTerminalId=""
           onSubmit={async () => undefined}
         />,

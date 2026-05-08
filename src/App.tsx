@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { UiSnapshotPayload } from "@shared/types";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefCallback } from "react";
 import { withOptionalString } from "@shared/object-utils";
 import { ChatWindow } from "./components/ChatWindow";
 import { TopologyGraph } from "./components/TopologyGraph";
@@ -24,67 +23,91 @@ import {
 import {
   buildAvailableAgentIdsForFrontend,
   orderAgentsForFrontend,
-  resolveDefaultSelectedAgentIdForFrontend,
 } from "./lib/frontend-agent-order";
 import { MarkdownMessage } from "./lib/chat-markdown";
 import {
   buildAgentPromptDialogState,
   type AgentPromptDialogState,
 } from "./lib/agent-prompt-dialog";
-import {
-  decideUiSnapshotRefreshAcceptance,
-} from "./lib/ui-snapshot-refresh-gate";
 import { getUiSnapshotPollingIntervalMs } from "./lib/ui-snapshot-polling";
 import { resolveAppPanelVisibility, type AppPanelMode } from "./lib/app-panel-visibility";
+import {
+  createInitialAppUiSnapshot,
+  type AppUiSnapshot,
+} from "./lib/app-ui-snapshot";
+import {
+  INITIAL_LATEST_ACCEPTED_UI_SNAPSHOT_STATE,
+  type LatestAcceptedUiSnapshotState,
+} from "./lib/ui-snapshot-refresh-gate";
+import { decideAppUiSnapshotRefresh } from "./lib/app-ui-snapshot";
+
+type AgentPromptDialogViewState =
+  | {
+      kind: "closed";
+    }
+  | ({
+      kind: "open";
+    } & AgentPromptDialogState);
+
+const CLOSED_AGENT_PROMPT_DIALOG: AgentPromptDialogViewState = {
+  kind: "closed",
+};
+
+type AgentPanelViewportState =
+  | {
+      kind: "unmounted";
+    }
+  | {
+      kind: "mounted";
+      element: HTMLDivElement;
+    };
+
+const UNMOUNTED_AGENT_PANEL_VIEWPORT: AgentPanelViewportState = {
+  kind: "unmounted",
+};
 
 function App() {
   const launchParams = useMemo(() => readLaunchParams(), []);
   const appShellClassName = getAppShellClassName();
   const workspaceLayoutMetrics = getAppWorkspaceLayoutMetrics();
-  const [uiSnapshot, setUiSnapshot] = useState<UiSnapshotPayload | null>(null);
-  const [selectedAgentId, setSelectedAgentId] = useState("");
+  const [uiSnapshot, setUiSnapshot] = useState<AppUiSnapshot>(() =>
+    createInitialAppUiSnapshot(),
+  );
   const [openingAgentTerminalId, setOpeningAgentTerminalId] = useState("");
-  const [agentTerminalActionError, setAgentTerminalActionError] = useState<string | null>(null);
+  const [agentTerminalActionError, setAgentTerminalActionError] = useState("");
   const [promptLineCount, setPromptLineCount] = useState(1);
   const [agentCardGapPx, setAgentCardGapPx] = useState(6);
   const [panelMode, setPanelMode] = useState<AppPanelMode>("default");
-  const [selectedAgentPromptDialog, setSelectedAgentPromptDialog] = useState<AgentPromptDialogState | null>(null);
-  const agentPanelViewportRef = useRef<HTMLDivElement | null>(null);
-  const latestUiSnapshotRef = useRef<UiSnapshotPayload | null>(null);
+  const [selectedAgentPromptDialog, setSelectedAgentPromptDialog] = useState<AgentPromptDialogViewState>(
+    CLOSED_AGENT_PROMPT_DIALOG,
+  );
+  const [agentPanelViewport, setAgentPanelViewport] = useState<AgentPanelViewportState>(
+    UNMOUNTED_AGENT_PANEL_VIEWPORT,
+  );
+  const latestAcceptedPayloadRef = useRef<LatestAcceptedUiSnapshotState>(
+    INITIAL_LATEST_ACCEPTED_UI_SNAPSHOT_STATE,
+  );
   const nextUiSnapshotRequestIdRef = useRef(0);
   const latestAcceptedUiSnapshotRequestIdRef = useRef(0);
 
-  const workspace = uiSnapshot?.workspace ?? null;
-  const task = uiSnapshot?.task ?? null;
   const launchTaskId = launchParams.taskId ?? "";
   const uiSnapshotPollingIntervalMs = getUiSnapshotPollingIntervalMs(launchTaskId);
   const panelVisibility = resolveAppPanelVisibility(panelMode);
 
-  function applyUiSnapshotRefreshResult(nextUiSnapshot: UiSnapshotPayload, requestId: number) {
-    const acceptance = decideUiSnapshotRefreshAcceptance({
+  function applyUiSnapshotRefreshResult(requestId: number, payload: Awaited<ReturnType<typeof fetchUiSnapshot>>) {
+    const acceptance = decideAppUiSnapshotRefresh({
       latestAcceptedRequestId: latestAcceptedUiSnapshotRequestIdRef.current,
-      latestAcceptedPayload: latestUiSnapshotRef.current,
+      latestAcceptedState: latestAcceptedPayloadRef.current,
       requestId,
-      payload: nextUiSnapshot,
+      payload,
     });
-    if (!acceptance.accepted || !acceptance.payload) {
+    if (!acceptance.accepted) {
       return;
     }
 
     latestAcceptedUiSnapshotRequestIdRef.current = acceptance.latestAcceptedRequestId;
-    latestUiSnapshotRef.current = acceptance.payload;
-    setUiSnapshot(acceptance.payload);
-    setSelectedAgentId((currentSelectedAgentId) =>
-      resolveDefaultSelectedAgentIdForFrontend({
-        selectedAgentId: currentSelectedAgentId,
-        workspaceAgents: acceptance.payload?.workspace?.agents ?? [],
-        taskAgents: acceptance.payload?.task?.agents ?? [],
-        orderedAgentIds:
-          acceptance.payload?.task?.topology?.nodes
-          ?? acceptance.payload?.workspace?.topology?.nodes
-          ?? [],
-      }),
-    );
+    latestAcceptedPayloadRef.current = acceptance.latestAcceptedState;
+    setUiSnapshot(acceptance.appSnapshot);
   }
 
   async function refreshUiSnapshot() {
@@ -92,21 +115,13 @@ function App() {
     nextUiSnapshotRequestIdRef.current = requestId;
 
     if (!launchTaskId) {
-      applyUiSnapshotRefreshResult({
-        workspace: null,
-        task: null,
-        launchCwd: null,
-        launchTaskId: launchParams.taskId,
-        taskLogFilePath: null,
-        taskUrl: null,
-      }, requestId);
       return;
     }
 
     const next = await fetchUiSnapshot({
       taskId: launchTaskId,
     });
-    applyUiSnapshotRefreshResult(next, requestId);
+    applyUiSnapshotRefreshResult(requestId, next);
   }
 
   useEffect(() => {
@@ -127,26 +142,43 @@ function App() {
     };
   }, [launchTaskId, uiSnapshotPollingIntervalMs]);
 
-  useEffect(() => {
-    latestUiSnapshotRef.current = uiSnapshot;
-  }, [uiSnapshot]);
+  const bindAgentPanelViewport: RefCallback<HTMLDivElement> = useCallback((element) => {
+    setAgentPanelViewport((current) => {
+      if (!element) {
+        return current.kind === "unmounted"
+          ? current
+          : UNMOUNTED_AGENT_PANEL_VIEWPORT;
+      }
+      return current.kind === "mounted"
+        && current.element === element
+        ? current
+        : {
+            kind: "mounted",
+            element,
+          };
+    });
+  }, []);
 
   const availableAgents = useMemo(
-    () => buildAvailableAgentIdsForFrontend(
-      workspace?.agents ?? [],
-      task?.topology?.nodes ?? workspace?.topology?.nodes ?? [],
-    ),
-    [task?.topology, workspace?.agents, workspace?.topology],
+    () =>
+      uiSnapshot.taskView.kind === "ready"
+        ? buildAvailableAgentIdsForFrontend(
+            uiSnapshot.taskView.workspace.agents,
+            uiSnapshot.taskView.task.topology.nodes,
+          )
+        : [],
+    [uiSnapshot],
   );
   const agentCards = useMemo(() => {
-    if (!workspace || !task) {
+    if (uiSnapshot.taskView.kind !== "ready") {
       return [];
     }
 
+    const { workspace, task } = uiSnapshot.taskView;
     const taskAgents = new Map(task.agents.map((agent) => [agent.id, agent]));
     return orderAgentsForFrontend(
       workspace.agents,
-      task.topology?.nodes ?? workspace.topology?.nodes ?? [],
+      task.topology.nodes,
     ).map((agent) => {
       const taskAgent = taskAgents.get(agent.id);
       const promptSnippet = buildAgentPromptSnippetText({
@@ -160,50 +192,55 @@ function App() {
         status: taskAgent?.status ?? "idle",
       };
     });
-  }, [workspace, task]);
+  }, [uiSnapshot]);
 
   useEffect(() => {
-    const viewport = agentPanelViewportRef.current;
-    if (!viewport || agentCards.length === 0) {
+    if (agentPanelViewport.kind !== "mounted" || agentCards.length === 0) {
       setPromptLineCount(1);
       setAgentCardGapPx(6);
       return;
     }
 
+    const viewport = agentPanelViewport.element;
     const updatePromptLineCount = () => {
       const layout = calculateAgentCardPanelLayout({
         viewportHeight: viewport.clientHeight,
         cardCount: agentCards.length,
         promptCardCount: agentCards.filter((agent) => agent.promptSnippet !== "-").length,
-        hasErrorBanner: agentTerminalActionError !== null,
+        hasErrorBanner: agentTerminalActionError.length > 0,
       });
       setPromptLineCount(layout.promptLineCount);
       setAgentCardGapPx(layout.gapPx);
     };
 
     updatePromptLineCount();
-    const resizeObserver =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver(() => {
-            updatePromptLineCount();
-          });
-    resizeObserver?.observe(viewport);
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updatePromptLineCount);
+      return () => {
+        window.removeEventListener("resize", updatePromptLineCount);
+      };
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      updatePromptLineCount();
+    });
+    resizeObserver.observe(viewport);
     window.addEventListener("resize", updatePromptLineCount);
 
     return () => {
-      resizeObserver?.disconnect();
+      resizeObserver.disconnect();
       window.removeEventListener("resize", updatePromptLineCount);
     };
-  }, [agentCards.length, agentTerminalActionError]);
+  }, [agentCards.length, agentPanelViewport, agentTerminalActionError]);
 
   async function handleOpenAgentTerminal(agentId: string) {
-    if (!workspace || !task || openingAgentTerminalId === agentId) {
+    if (uiSnapshot.taskView.kind !== "ready" || openingAgentTerminalId === agentId) {
       return;
     }
 
+    const { workspace, task } = uiSnapshot.taskView;
     setOpeningAgentTerminalId(agentId);
-    setAgentTerminalActionError(null);
+    setAgentTerminalActionError("");
     try {
       await openAgentTerminal({
         cwd: workspace.cwd,
@@ -223,16 +260,18 @@ function App() {
     id: string;
     prompt: string;
   }) {
-    setSelectedAgentId(agent.id);
     setSelectedAgentPromptDialog(
-      buildAgentPromptDialogState({
-        agentId: agent.id,
-        prompt: agent.prompt,
-      }),
+      {
+        kind: "open",
+        ...buildAgentPromptDialogState({
+          agentId: agent.id,
+          prompt: agent.prompt,
+        }),
+      },
     );
   }
 
-  if (!workspace || !task) {
+  if (uiSnapshot.taskView.kind !== "ready") {
     return (
       <div className="flex h-screen items-center justify-center bg-background px-6 text-foreground">
         <div className="PANEL-surface max-w-xl rounded-[12px] p-6 text-center">
@@ -246,6 +285,8 @@ function App() {
     );
   }
 
+  const { workspace, task } = uiSnapshot.taskView;
+
   return (
     <div className="flex h-screen flex-col overflow-hidden text-foreground">
       <main className={`min-h-0 flex-1 overflow-hidden ${appShellClassName}`}>
@@ -254,8 +295,6 @@ function App() {
             <TopologyGraph
               workspace={workspace}
               task={task}
-              selectedAgentId={selectedAgentId || null}
-              onSelectAgent={setSelectedAgentId}
               isMaximized={panelMode === "topology-only"}
               onToggleMaximize={() => {
                 setPanelMode((current) => (current === "topology-only" ? "default" : "topology-only"));
@@ -272,8 +311,8 @@ function App() {
               workspace={workspace}
               task={task}
               availableAgents={availableAgents}
-              taskLogFilePath={uiSnapshot?.taskLogFilePath ?? null}
-              taskUrl={uiSnapshot?.taskUrl ?? null}
+              taskLogFilePath={uiSnapshot.taskLogFilePath}
+              taskUrl={uiSnapshot.taskUrl}
               isMaximized={panelMode === "chat-only"}
               onToggleMaximize={() => {
                 setPanelMode((current) => (current === "chat-only" ? "default" : "chat-only"));
@@ -299,8 +338,6 @@ function App() {
             <TopologyGraph
               workspace={workspace}
               task={task}
-              selectedAgentId={selectedAgentId || null}
-              onSelectAgent={setSelectedAgentId}
               isMaximized={panelMode === "topology-only"}
               onToggleMaximize={() => {
                 setPanelMode((current) => (current === "topology-only" ? "default" : "topology-only"));
@@ -323,8 +360,8 @@ function App() {
                   workspace={workspace}
                   task={task}
                   availableAgents={availableAgents}
-                  taskLogFilePath={uiSnapshot?.taskLogFilePath ?? null}
-                  taskUrl={uiSnapshot?.taskUrl ?? null}
+                  taskLogFilePath={uiSnapshot.taskLogFilePath}
+                  taskUrl={uiSnapshot.taskUrl}
                   isMaximized={panelMode === "chat-only"}
                   onToggleMaximize={() => {
                     setPanelMode((current) => (current === "chat-only" ? "default" : "chat-only"));
@@ -351,14 +388,14 @@ function App() {
                 </header>
 
                 <div
-                  ref={agentPanelViewportRef}
+                  ref={bindAgentPanelViewport}
                   className={`min-h-0 flex-1 overflow-y-auto ${PANEL_SECTION_BODY_CLASS}`}
                 >
-                  {agentTerminalActionError ? (
+                  {agentTerminalActionError && (
                     <div className="mb-1.5 rounded-[8px] border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-700">
                       {agentTerminalActionError}
                     </div>
-                  ) : null}
+                  )}
 
                   <div className="flex flex-col" style={{ gap: `${agentCardGapPx}px` }}>
                     {agentCards.map((agent) => {
@@ -429,10 +466,10 @@ function App() {
         )}
       </main>
 
-      {selectedAgentPromptDialog ? (
+      {selectedAgentPromptDialog.kind === "open" && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/28 px-6 py-6"
-          onClick={() => setSelectedAgentPromptDialog(null)}
+          onClick={() => setSelectedAgentPromptDialog(CLOSED_AGENT_PROMPT_DIALOG)}
         >
           <div
             role="dialog"
@@ -469,7 +506,7 @@ function App() {
               </div>
               <button
                 type="button"
-                onClick={() => setSelectedAgentPromptDialog(null)}
+                onClick={() => setSelectedAgentPromptDialog(CLOSED_AGENT_PROMPT_DIALOG)}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/70 bg-background/90 text-lg leading-none text-foreground/68 transition hover:bg-background"
                 aria-label="关闭 Prompt 详情"
               >
@@ -485,7 +522,7 @@ function App() {
             </div>
           </div>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }

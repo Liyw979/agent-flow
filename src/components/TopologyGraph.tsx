@@ -38,8 +38,6 @@ import type { TaskSnapshot, WorkspaceSnapshot } from "@shared/types";
 interface TopologyGraphProps {
   workspace: WorkspaceSnapshot;
   task: TaskSnapshot;
-  selectedAgentId: string | null;
-  onSelectAgent: (agentId: string) => void;
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
   openingAgentTerminalId?: string;
@@ -218,8 +216,6 @@ function renderAttachButtonIcon() {
 export function TopologyGraph({
   workspace,
   task,
-  selectedAgentId: _selectedAgentId,
-  onSelectAgent,
   isMaximized = false,
   onToggleMaximize,
   openingAgentTerminalId = "",
@@ -610,15 +606,6 @@ export function TopologyGraph({
               return (
                 <div
                   key={node.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onSelectAgent(node.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      onSelectAgent(node.id);
-                    }
-                  }}
                   className="absolute flex flex-col overflow-hidden rounded-[14px] text-left transition"
                   style={{
                     left: `${node.x}px`,
@@ -655,7 +642,6 @@ export function TopologyGraph({
                                 title={`${agentFullscreenButtonCopy.label}查看 ${node.id} 详情`}
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  onSelectAgent(node.id);
                                   setMaximizedAgentId(node.id);
                                 }}
                                 className="inline-flex h-6 items-center justify-center rounded-full border border-[#d8cdbd] bg-[#fffaf2] px-2 text-[10px] font-semibold text-foreground/76 shadow-[0_1px_0_rgba(255,255,255,0.45)] transition hover:border-[#cda27d] hover:bg-white"

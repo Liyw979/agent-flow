@@ -1,17 +1,36 @@
 import type { UiSnapshotPayload } from "@shared/types";
 
+export type LatestAcceptedUiSnapshotState =
+  | {
+      kind: "initial";
+    }
+  | {
+      kind: "accepted";
+      payload: UiSnapshotPayload;
+    };
+
+export const INITIAL_LATEST_ACCEPTED_UI_SNAPSHOT_STATE: LatestAcceptedUiSnapshotState = {
+  kind: "initial",
+};
+
 interface UiSnapshotRefreshAcceptanceInput {
   latestAcceptedRequestId: number;
-  latestAcceptedPayload: UiSnapshotPayload | null;
+  latestAcceptedState: LatestAcceptedUiSnapshotState;
   requestId: number;
   payload: UiSnapshotPayload;
 }
 
-interface UiSnapshotRefreshAcceptance {
-  accepted: boolean;
-  latestAcceptedRequestId: number;
-  payload: UiSnapshotPayload | null;
-}
+type UiSnapshotRefreshAcceptance =
+  | {
+      accepted: false;
+      latestAcceptedRequestId: number;
+      latestAcceptedState: LatestAcceptedUiSnapshotState;
+    }
+  | {
+      accepted: true;
+      latestAcceptedRequestId: number;
+      latestAcceptedState: Extract<LatestAcceptedUiSnapshotState, { kind: "accepted" }>;
+    };
 
 function getAgentProgressRank(status: string) {
   switch (status) {
@@ -150,30 +169,36 @@ export function isSemanticallyNewerUiSnapshot(
 export function decideUiSnapshotRefreshAcceptance(
   input: UiSnapshotRefreshAcceptanceInput,
 ): UiSnapshotRefreshAcceptance {
-  if (!input.latestAcceptedPayload) {
+  if (input.latestAcceptedState.kind === "initial") {
     return {
       accepted: true,
       latestAcceptedRequestId: input.requestId,
-      payload: input.payload,
+      latestAcceptedState: {
+        kind: "accepted",
+        payload: input.payload,
+      },
     };
   }
 
   if (input.requestId < input.latestAcceptedRequestId) {
     if (
-      isSemanticallyNewerUiSnapshot(input.latestAcceptedPayload, input.payload)
-      && !isSemanticallyOlderUiSnapshot(input.latestAcceptedPayload, input.payload)
+      isSemanticallyNewerUiSnapshot(input.latestAcceptedState.payload, input.payload)
+      && !isSemanticallyOlderUiSnapshot(input.latestAcceptedState.payload, input.payload)
     ) {
       return {
         accepted: true,
         latestAcceptedRequestId: input.latestAcceptedRequestId,
-        payload: input.payload,
+        latestAcceptedState: {
+          kind: "accepted",
+          payload: input.payload,
+        },
       };
     }
 
     return {
       accepted: false,
       latestAcceptedRequestId: input.latestAcceptedRequestId,
-      payload: null,
+      latestAcceptedState: input.latestAcceptedState,
     };
   }
 
@@ -181,21 +206,24 @@ export function decideUiSnapshotRefreshAcceptance(
     return {
       accepted: false,
       latestAcceptedRequestId: input.latestAcceptedRequestId,
-      payload: null,
+      latestAcceptedState: input.latestAcceptedState,
     };
   }
 
-  if (isSemanticallyOlderUiSnapshot(input.latestAcceptedPayload, input.payload)) {
+  if (isSemanticallyOlderUiSnapshot(input.latestAcceptedState.payload, input.payload)) {
     return {
       accepted: false,
       latestAcceptedRequestId: input.latestAcceptedRequestId,
-      payload: null,
+      latestAcceptedState: input.latestAcceptedState,
     };
   }
 
   return {
     accepted: true,
     latestAcceptedRequestId: input.requestId,
-    payload: input.payload,
+    latestAcceptedState: {
+      kind: "accepted",
+      payload: input.payload,
+    },
   };
 }

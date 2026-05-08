@@ -41,8 +41,8 @@ interface ChatWindowProps {
   workspace: WorkspaceSnapshot;
   task: TaskSnapshot;
   availableAgents: string[];
-  taskLogFilePath: string | null;
-  taskUrl: string | null;
+  taskLogFilePath: string;
+  taskUrl: string;
   isMaximized?: boolean;
   onToggleMaximize?: () => void;
   openingAgentTerminalId?: string;
@@ -452,8 +452,8 @@ export function ChatWindow({
   workspace,
   task,
   availableAgents,
-  taskLogFilePath = null,
-  taskUrl = null,
+  taskLogFilePath,
+  taskUrl,
   isMaximized = false,
   onToggleMaximize,
   openingAgentTerminalId = "",
