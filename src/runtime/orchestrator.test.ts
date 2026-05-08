@@ -991,7 +991,7 @@ test("漏洞团队里讨论总结以 transfer + none 回到线索发现时，会
     assert.fail("缺少线索发现转发记录");
   }
   const secondPrompt = clueFinderPrompts[1] ?? "";
-  assert.equal(secondPrompt, "[no-forwarded-message]");
+  assert.equal(secondPrompt, "continue");
   assert.doesNotMatch(secondPrompt, /更像误报|稳定判断/u);
 });
 

@@ -14,7 +14,7 @@ import {
 } from "@shared/types";
 
 type MinimalMessage = MessageRecord;
-export const NONE_MODE_PLACEHOLDER_MESSAGE = "[no-forwarded-message]";
+export const NONE_MODE_PLACEHOLDER_MESSAGE = "continue";
 
 type DownstreamForwardedContext =
   | {
