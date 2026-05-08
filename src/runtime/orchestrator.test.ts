@@ -187,7 +187,7 @@ class StandaloneRunTestOrchestrator extends TestOrchestrator {
   }
 }
 
-class BatchRunnerTestOrchestrator extends TestOrchestrator {
+class BatchRunnerTestOrchestrator extends StandaloneRunTestOrchestrator {
   public runBatchRunners(
     cwd: string,
     taskId: string,
@@ -2485,6 +2485,196 @@ test("initialMessage 已包含当前触发 agent 时，最终 prompt 不会重�
   assert.equal((cPrompt.match(/\[From A Agent\]/gu) ?? []).length, 1);
   assert.equal((cPrompt.match(/\[From B Agent\]/gu) ?? []).length, 1);
   assert.doesNotMatch(cPrompt, /\[From B Agent\][\s\S]*\[From B Agent\]/u);
+});
+
+test("同一个目标 Agent 的首次自动派发仍应注入 initialMessage，后续自动派发不应重复注入", async () => {
+  const orchestrator = new BatchRunnerTestOrchestrator({
+    userDataPath: createTempDir(),
+    enableEventStream: false,
+  });
+  const projectPath = createTempDir();
+  await orchestrator.applyTeamDsl({
+    cwd: projectPath,
+    compiled: compileTeamDsl({
+      entry: "A",
+      nodes: [
+        {
+          type: "agent",
+          id: "A",
+          prompt: "你是 A。",
+          writable: false,
+        },
+        {
+          type: "agent",
+          id: "B",
+          prompt: "你是 B。完成时返回 <complete>。",
+          writable: false,
+        },
+        {
+          type: "agent",
+          id: "C",
+          prompt: "你是 C。",
+          writable: false,
+          initialMessage: ["A"],
+        },
+      ],
+      links: [
+        {
+          from: "B",
+          to: "C",
+          trigger: "<complete>",
+          message_type: "last",
+        },
+      ],
+    }),
+  });
+
+  stubOpenCodeAttachBaseUrl(orchestrator);
+  stubOpenCodeReloadConfig(orchestrator);
+  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+
+  const promptByAgent = new Map<string, string[]>();
+  orchestrator.opencodeRunner.run = async ({ agent, content }) => {
+    const current = promptByAgent.get(agent) ?? [];
+    current.push(content);
+    promptByAgent.set(agent, current);
+    return buildCompletedExecutionResult({
+      agent,
+      finalMessage: `${agent} 已收到上下文。`,
+      messageId: `message:${agent}:${current.length}`,
+      timestamp: "2026-05-08T00:00:00.000Z",
+    });
+  };
+
+  const initializedTask = await orchestrator.initializeTask({
+    cwd: projectPath,
+    title: "initial-message-repeat-check",
+  });
+
+  await orchestrator.runStandaloneAgent({
+    cwd: projectPath,
+    task: initializedTask.task,
+    agentId: "A",
+    prompt: {
+      mode: "raw",
+      from: "User",
+      content: "请先给出首条背景事实。",
+    },
+  });
+
+  await orchestrator.runStandaloneAgent({
+    cwd: projectPath,
+    task: initializedTask.task,
+    agentId: "C",
+    prompt: {
+      mode: "raw",
+      from: "User",
+      content: "这是手动执行，不应消耗自动派发的 initialMessage。",
+    },
+  });
+
+  const taskRecord = orchestrator.store.getTask(projectPath, initializedTask.task.id);
+  const topology = orchestrator.store.getTopology(projectPath);
+  const state = createGraphTaskState({
+    taskId: taskRecord.id,
+    topology,
+  });
+
+  const firstBMessage: MessageRecord = {
+    id: "message:B:1",
+    taskId: taskRecord.id,
+    sender: "B",
+    senderDisplayName: "B",
+    timestamp: "2026-05-08T00:00:01.000Z",
+    content: "B 的第 1 条结论。",
+    kind: "agent-final",
+    runCount: 1,
+    status: "completed",
+    routingKind: "labeled",
+    trigger: "<complete>",
+    responseNote: "",
+    rawResponse: "<complete>\nB 的第 1 条结论。",
+  };
+  orchestrator.store.insertMessage(projectPath, firstBMessage);
+
+  const firstRunners = await orchestrator.runBatchRunners(
+    projectPath,
+    taskRecord.id,
+    state,
+    {
+      routingKind: "labeled",
+      trigger: "<complete>",
+      sourceAgentId: "B",
+      sourceContent: firstBMessage.content,
+      displayContent: firstBMessage.content,
+      triggerTargets: ["C"],
+      jobs: [
+        {
+          kind: "dispatch",
+          agentId: "C",
+          sourceAgentId: "B",
+          sourceMessageId: firstBMessage.id,
+          sourceContent: firstBMessage.content,
+          displayContent: firstBMessage.content,
+        },
+      ],
+    },
+  );
+  await Promise.all(firstRunners.map((runner) => runner.promise));
+
+  const secondBMessage: MessageRecord = {
+    id: "message:B:2",
+    taskId: taskRecord.id,
+    sender: "B",
+    senderDisplayName: "B",
+    timestamp: "2026-05-08T00:00:02.000Z",
+    content: "B 的第 2 条结论。",
+    kind: "agent-final",
+    runCount: 2,
+    status: "completed",
+    routingKind: "labeled",
+    trigger: "<complete>",
+    responseNote: "",
+    rawResponse: "<complete>\nB 的第 2 条结论。",
+  };
+  orchestrator.store.insertMessage(projectPath, secondBMessage);
+
+  const secondRunners = await orchestrator.runBatchRunners(
+    projectPath,
+    taskRecord.id,
+    state,
+    {
+      routingKind: "labeled",
+      trigger: "<complete>",
+      sourceAgentId: "B",
+      sourceContent: secondBMessage.content,
+      displayContent: secondBMessage.content,
+      triggerTargets: ["C"],
+      jobs: [
+        {
+          kind: "dispatch",
+          agentId: "C",
+          sourceAgentId: "B",
+          sourceMessageId: secondBMessage.id,
+          sourceContent: secondBMessage.content,
+          displayContent: secondBMessage.content,
+        },
+      ],
+    },
+  );
+  await Promise.all(secondRunners.map((runner) => runner.promise));
+
+  const prompts = promptByAgent.get("C");
+  if (!prompts || prompts.length < 3) {
+    assert.fail("缺少 C 的手动执行与两轮自动派发 prompt");
+  }
+
+  const firstAutomaticPrompt = prompts[1] ?? "";
+  const secondAutomaticPrompt = prompts[2] ?? "";
+  assert.match(firstAutomaticPrompt, /\[From A Agent\]\nA 已收到上下文。/u);
+  assert.match(firstAutomaticPrompt, /\[From B Agent\]\nB 的第 1 条结论。/u);
+  assert.doesNotMatch(secondAutomaticPrompt, /\[From A Agent\]/u);
+  assert.match(secondAutomaticPrompt, /\[From B Agent\]\nB 的第 2 条结论。/u);
 });
 
 test("多个 spawn 实例并存时，initialMessage 不会串组注入其他实例的来源消息", async () => {

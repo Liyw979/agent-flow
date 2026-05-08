@@ -1637,6 +1637,26 @@ export class Orchestrator {
     return true;
   }
 
+  private resolveDispatchInitialMessageRouting(
+    taskMessages: MessageRecord[],
+    targetAgentId: string,
+    routing: InitialMessageRouting,
+  ): InitialMessageRouting {
+    if (routing.mode !== "list") {
+      return routing;
+    }
+    for (const message of taskMessages) {
+      if (
+        (message.kind === "agent-dispatch"
+          || message.kind === "action-required-request")
+        && message.targetAgentIds.includes(targetAgentId)
+      ) {
+        return { mode: "none" };
+      }
+    }
+    return routing;
+  }
+
   private resolveInitialMessageSourceAliases(
     state: GraphTaskState,
     sourceAgentId: string,
@@ -1728,6 +1748,7 @@ export class Orchestrator {
   ) {
     const task = this.store.getTask(cwd, taskId);
     const batchSize = batch.jobs.length;
+    const taskMessages = this.store.listMessages(task.cwd, taskId);
 
     if (
       batch.jobs.every(
@@ -1782,7 +1803,6 @@ export class Orchestrator {
     const includeInitialTask = shouldForwardInitialTask
       ? this.consumeInitialTaskForwardingAllowanceFromGraphState(state)
       : false;
-    const taskMessages = this.store.listMessages(task.cwd, taskId);
     return batch.jobs.map((job, index) => {
       this.ensureRuntimeTaskAgent(task, job.agentId);
       const executableAgentId = this.resolveExecutableAgentId(
@@ -1814,12 +1834,18 @@ export class Orchestrator {
             ? DEFAULT_TOPOLOGY_TRIGGER
             : batch.trigger,
         );
+        const dispatchInitialMessageRouting =
+          this.resolveDispatchInitialMessageRouting(
+            taskMessages,
+            job.agentId,
+            edgeForwardingConfig.initialMessageRouting,
+          );
         const initialMessageSourceAliasesByAgentId =
           this.resolveInitialMessageSourceAliases(
             state,
             job.sourceAgentId,
             job.agentId,
-            edgeForwardingConfig.initialMessageRouting,
+            dispatchInitialMessageRouting,
           );
         const forwardedContext = buildDownstreamForwardedContextFromMessages(
           taskMessages,
@@ -1827,14 +1853,13 @@ export class Orchestrator {
           {
             includeInitialTask,
             messageMode: edgeForwardingConfig.messageMode,
-            initialMessageRouting:
-              edgeForwardingConfig.initialMessageRouting,
+            initialMessageRouting: dispatchInitialMessageRouting,
             sourceAgentId: job.sourceAgentId,
             initialMessageSourceAliasesByAgentId,
             initialMessageForwardedAgentMessageByAgentId:
               this.resolveInitialMessageForwardedAgentMessages(
                 state,
-                edgeForwardingConfig.initialMessageRouting,
+                dispatchInitialMessageRouting,
                 initialMessageSourceAliasesByAgentId,
               ),
             sourceForwardedAgentMessage: this.resolveSourceForwardedAgentMessage(
@@ -1901,12 +1926,18 @@ export class Orchestrator {
             ? DEFAULT_TOPOLOGY_TRIGGER
             : batch.trigger,
         );
+        const dispatchInitialMessageRouting =
+          this.resolveDispatchInitialMessageRouting(
+            taskMessages,
+            job.agentId,
+            edgeForwardingConfig.initialMessageRouting,
+          );
         const initialMessageSourceAliasesByAgentId =
           this.resolveInitialMessageSourceAliases(
             state,
             batch.sourceAgentId,
             job.agentId,
-            edgeForwardingConfig.initialMessageRouting,
+            dispatchInitialMessageRouting,
           );
         const forwardedContext = buildDownstreamForwardedContextFromMessages(
           taskMessages,
@@ -1914,14 +1945,13 @@ export class Orchestrator {
           {
             includeInitialTask,
             messageMode: edgeForwardingConfig.messageMode,
-            initialMessageRouting:
-              edgeForwardingConfig.initialMessageRouting,
+            initialMessageRouting: dispatchInitialMessageRouting,
             sourceAgentId: batch.sourceAgentId,
             initialMessageSourceAliasesByAgentId,
             initialMessageForwardedAgentMessageByAgentId:
               this.resolveInitialMessageForwardedAgentMessages(
                 state,
-                edgeForwardingConfig.initialMessageRouting,
+                dispatchInitialMessageRouting,
                 initialMessageSourceAliasesByAgentId,
               ),
             sourceForwardedAgentMessage: this.resolveSourceForwardedAgentMessage(
