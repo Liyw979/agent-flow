@@ -658,7 +658,7 @@ export class OpenCodeClient {
             "/d",
             "/s",
             "/c",
-            ["opencode", ...launchArgs].join(" "),
+            `cd /d ${state.projectPath} && opencode ${launchArgs.join(" ")}`,
           ],
         }
       : {
@@ -669,7 +669,6 @@ export class OpenCodeClient {
       spawnSpec.command,
       spawnSpec.args,
       {
-        cwd: state.projectPath,
         env: serverEnv,
         stdio: "pipe",
       },
