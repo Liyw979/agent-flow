@@ -14,9 +14,7 @@ test("orderAgentsForFrontend 会严格按 JSON topology.nodes 排序成员", () 
       { id: "TaskReview", prompt: "", isWritable: false },
       { id: "BA", prompt: "", isWritable: false },
     ],
-    {
-      nodes: ["BA", "Build", "TaskReview"],
-    },
+    ["BA", "Build", "TaskReview"],
   );
 
   assert.deepEqual(ordered.map((agent) => agent.id), ["BA", "Build", "TaskReview"]);
@@ -29,9 +27,7 @@ test("buildAvailableAgentIdsForFrontend 会按 JSON topology.nodes 输出可 @ �
       { id: "TaskReview", prompt: "", isWritable: false },
       { id: "BA", prompt: "", isWritable: false },
     ],
-    {
-      nodes: ["BA", "Build", "TaskReview"],
-    },
+    ["BA", "Build", "TaskReview"],
   );
 
   assert.deepEqual(available, ["BA", "Build", "TaskReview"]);
@@ -39,7 +35,7 @@ test("buildAvailableAgentIdsForFrontend 会按 JSON topology.nodes 输出可 @ �
 
 test("resolveDefaultSelectedAgentIdForFrontend 会回到 JSON 中的第一个 agent，而不是 workspace.agents 的第一个", () => {
   const selected = resolveDefaultSelectedAgentIdForFrontend({
-    selectedAgentId: null,
+    selectedAgentId: "",
     workspaceAgents: [
       { id: "Build", prompt: "", isWritable: false },
       { id: "TaskReview", prompt: "", isWritable: false },
@@ -50,10 +46,19 @@ test("resolveDefaultSelectedAgentIdForFrontend 会回到 JSON 中的第一个 ag
       { taskId: "task-1", id: "TaskReview", opencodeSessionId: null, opencodeAttachBaseUrl: null, status: "idle", runCount: 0 },
       { taskId: "task-1", id: "BA", opencodeSessionId: null, opencodeAttachBaseUrl: null, status: "completed", runCount: 1 },
     ],
-    topology: {
-      nodes: ["BA", "Build", "TaskReview"],
-    },
+    orderedAgentIds: ["BA", "Build", "TaskReview"],
   });
 
   assert.equal(selected, "BA");
+});
+
+test("resolveDefaultSelectedAgentIdForFrontend 在没有可选 agent 时返回空串", () => {
+  const selected = resolveDefaultSelectedAgentIdForFrontend({
+    selectedAgentId: "",
+    workspaceAgents: [],
+    taskAgents: [],
+    orderedAgentIds: [],
+  });
+
+  assert.equal(selected, "");
 });

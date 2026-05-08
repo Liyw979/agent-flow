@@ -1,11 +1,10 @@
-import type { AgentRecord, TaskAgentRecord, TopologyRecord } from "@shared/types";
+import type { AgentRecord, TaskAgentRecord } from "@shared/types";
 
 export function orderAgentsForFrontend<T extends { id: string }>(
   agents: T[],
-  topology: Pick<TopologyRecord, "nodes"> | null | undefined,
+  orderedAgentIds: readonly string[],
 ): T[] {
-  const order = topology?.nodes ?? [];
-  if (order.length === 0) {
+  if (orderedAgentIds.length === 0) {
     return [...agents];
   }
 
@@ -13,7 +12,7 @@ export function orderAgentsForFrontend<T extends { id: string }>(
   const consumed = new Set<string>();
   const ordered: T[] = [];
 
-  for (const name of order) {
+  for (const name of orderedAgentIds) {
     const matched = agentByName.get(name);
     if (!matched || consumed.has(name)) {
       continue;
@@ -35,21 +34,22 @@ export function orderAgentsForFrontend<T extends { id: string }>(
 
 export function buildAvailableAgentIdsForFrontend(
   agents: AgentRecord[],
-  topology: Pick<TopologyRecord, "nodes"> | null | undefined,
+  orderedAgentIds: readonly string[],
 ): string[] {
-  return orderAgentsForFrontend(agents, topology).map((agent) => agent.id);
+  return orderAgentsForFrontend(agents, orderedAgentIds).map((agent) => agent.id);
 }
 
 export function resolveDefaultSelectedAgentIdForFrontend(input: {
-  selectedAgentId: string | null;
+  selectedAgentId: string;
   workspaceAgents: AgentRecord[];
   taskAgents: TaskAgentRecord[];
-  topology: Pick<TopologyRecord, "nodes"> | null | undefined;
-}): string | null {
-  const preserved = input.taskAgents.find((agent) => agent.id === input.selectedAgentId)?.id;
+  orderedAgentIds: readonly string[];
+}): string {
+  const preserved = input.taskAgents.find((agent) => agent.id === input.selectedAgentId);
   if (preserved) {
-    return preserved;
+    return preserved.id;
   }
-
-  return orderAgentsForFrontend(input.workspaceAgents, input.topology)[0]?.id ?? null;
+  const orderedAgents = orderAgentsForFrontend(input.workspaceAgents, input.orderedAgentIds);
+  const firstAgent = orderedAgents[0];
+  return firstAgent ? firstAgent.id : "";
 }

@@ -42,7 +42,7 @@ function App() {
   const appShellClassName = getAppShellClassName();
   const workspaceLayoutMetrics = getAppWorkspaceLayoutMetrics();
   const [uiSnapshot, setUiSnapshot] = useState<UiSnapshotPayload | null>(null);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState("");
   const [openingAgentTerminalId, setOpeningAgentTerminalId] = useState("");
   const [agentTerminalActionError, setAgentTerminalActionError] = useState<string | null>(null);
   const [promptLineCount, setPromptLineCount] = useState(1);
@@ -79,7 +79,10 @@ function App() {
         selectedAgentId: currentSelectedAgentId,
         workspaceAgents: acceptance.payload?.workspace?.agents ?? [],
         taskAgents: acceptance.payload?.task?.agents ?? [],
-        topology: acceptance.payload?.task?.topology ?? acceptance.payload?.workspace?.topology ?? null,
+        orderedAgentIds:
+          acceptance.payload?.task?.topology?.nodes
+          ?? acceptance.payload?.workspace?.topology?.nodes
+          ?? [],
       }),
     );
   }
@@ -131,7 +134,7 @@ function App() {
   const availableAgents = useMemo(
     () => buildAvailableAgentIdsForFrontend(
       workspace?.agents ?? [],
-      task?.topology ?? workspace?.topology ?? null,
+      task?.topology?.nodes ?? workspace?.topology?.nodes ?? [],
     ),
     [task?.topology, workspace?.agents, workspace?.topology],
   );
@@ -141,7 +144,10 @@ function App() {
     }
 
     const taskAgents = new Map(task.agents.map((agent) => [agent.id, agent]));
-    return orderAgentsForFrontend(workspace.agents, task.topology ?? workspace.topology).map((agent) => {
+    return orderAgentsForFrontend(
+      workspace.agents,
+      task.topology?.nodes ?? workspace.topology?.nodes ?? [],
+    ).map((agent) => {
       const taskAgent = taskAgents.get(agent.id);
       const promptSnippet = buildAgentPromptSnippetText({
         agentId: agent.id,
@@ -248,7 +254,7 @@ function App() {
             <TopologyGraph
               workspace={workspace}
               task={task}
-              selectedAgentId={selectedAgentId}
+              selectedAgentId={selectedAgentId || null}
               onSelectAgent={setSelectedAgentId}
               isMaximized={panelMode === "topology-only"}
               onToggleMaximize={() => {
@@ -293,7 +299,7 @@ function App() {
             <TopologyGraph
               workspace={workspace}
               task={task}
-              selectedAgentId={selectedAgentId}
+              selectedAgentId={selectedAgentId || null}
               onSelectAgent={setSelectedAgentId}
               isMaximized={panelMode === "topology-only"}
               onToggleMaximize={() => {
