@@ -1703,13 +1703,6 @@ export class Orchestrator {
     return [...aliases].filter(Boolean);
   }
 
-  private resolveSourceForwardedAgentMessage(
-    state: GraphTaskState,
-    sourceAgentId: string,
-  ): string {
-    return state.forwardedAgentMessageByName[sourceAgentId] ?? "";
-  }
-
   private resolveInitialMessageForwardedAgentMessages(
     state: GraphTaskState,
     routing: InitialMessageRouting,
@@ -1854,10 +1847,6 @@ export class Orchestrator {
                 dispatchInitialMessageRouting,
                 initialMessageSourceAliasesByAgentId,
               ),
-            sourceForwardedAgentMessage: this.resolveSourceForwardedAgentMessage(
-              state,
-              job.sourceAgentId,
-            ),
             globalSourceOrder: this.resolveGlobalSourceOrder(state),
           },
         );
@@ -1945,10 +1934,6 @@ export class Orchestrator {
                 dispatchInitialMessageRouting,
                 initialMessageSourceAliasesByAgentId,
               ),
-            sourceForwardedAgentMessage: this.resolveSourceForwardedAgentMessage(
-              state,
-              batch.sourceAgentId,
-            ),
             globalSourceOrder: this.resolveGlobalSourceOrder(state),
           },
         );

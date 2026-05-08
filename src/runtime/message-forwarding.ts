@@ -98,7 +98,6 @@ export function buildDownstreamForwardedContextFromMessages(
     sourceAgentId: string;
     initialMessageSourceAliasesByAgentId: Record<string, string[]>;
     initialMessageForwardedAgentMessageByAgentId: Record<string, string>;
-    sourceForwardedAgentMessage: string;
     globalSourceOrder: string[];
   },
 ): DownstreamForwardedContext {
@@ -114,7 +113,6 @@ export function buildDownstreamForwardedContextFromMessages(
     options.sourceAgentId,
     options.initialMessageSourceAliasesByAgentId,
     options.initialMessageForwardedAgentMessageByAgentId,
-    options.sourceForwardedAgentMessage,
     options.globalSourceOrder,
   );
   if (!agentMessage) {
@@ -140,7 +138,6 @@ function resolveForwardedAgentMessage(
   sourceAgentId: string,
   initialMessageSourceAliasesByAgentId: Record<string, string[]>,
   initialMessageForwardedAgentMessageByAgentId: Record<string, string>,
-  sourceForwardedAgentMessage: string,
   globalSourceOrder: string[],
 ): string {
   const orderedEntries = buildOrderedForwardingEntries(
@@ -151,7 +148,6 @@ function resolveForwardedAgentMessage(
     sourceAgentId,
     initialMessageSourceAliasesByAgentId,
     initialMessageForwardedAgentMessageByAgentId,
-    sourceForwardedAgentMessage,
     globalSourceOrder,
   );
   const aggregatedSections = aggregateForwardingEntries(orderedEntries);
@@ -179,26 +175,13 @@ function buildDefaultForwardingEntries(
   latestSourceContent: string,
   messageMode: TopologyEdgeMessageMode,
   sourceAgentId: string,
-  sourceForwardedAgentMessage: string,
 ): ForwardingEntry[] {
   if (messageMode === "none") {
     return [];
   }
 
   const content = latestSourceContent || "（该上游 Agent 未返回可继续流转的正文。）";
-  const forwardedPrefixEntries = extractForwardingEntriesFromContent(
-    sourceForwardedAgentMessage.trim(),
-  );
-  if (forwardedPrefixEntries.length === 0) {
-    return [{ sourceAgentId, content }];
-  }
-  return [
-    ...forwardedPrefixEntries,
-    {
-      sourceAgentId,
-      content,
-    },
-  ];
+  return [{ sourceAgentId, content }];
 }
 
 function buildOrderedForwardingEntries(
@@ -209,14 +192,12 @@ function buildOrderedForwardingEntries(
   sourceAgentId: string,
   initialMessageSourceAliasesByAgentId: Record<string, string[]>,
   initialMessageForwardedAgentMessageByAgentId: Record<string, string>,
-  sourceForwardedAgentMessage: string,
   globalSourceOrder: string[],
 ): ForwardingEntry[] {
   const defaultEntries = buildDefaultForwardingEntries(
     latestSourceContent,
     messageMode,
     sourceAgentId,
-    sourceForwardedAgentMessage,
   );
   const initialEntries = buildInitialMessageEntries(
     messages,
