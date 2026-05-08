@@ -3,7 +3,7 @@ import {
   getTopologyNodeRecords,
   isActionRequiredTopologyTrigger,
   type RuntimeTopologyEdge,
-  type RuntimeTopologyNode,
+  type SpawnBundleRuntimeNode,
   type SpawnBundleInstantiation,
   type SpawnItemPayload,
   type SpawnRule,
@@ -67,19 +67,31 @@ export function instantiateSpawnBundle(input: {
   }
 
   const groupId = `${sanitizeInstanceSegment(rule.id)}:${sanitizeInstanceSegment(input.item.id)}`;
-  const nodes: RuntimeTopologyNode[] = rule.spawnedAgents.map((agent) => {
+  const nodes: SpawnBundleRuntimeNode[] = rule.spawnedAgents.map((agent) => {
     const templateNode = topologyNodes.find(
       (node) => node.id === agent.templateName || node.templateName === agent.templateName,
     );
-    return {
+    const sharedNode = {
       id: buildRuntimeNodeId(agent.templateName, input.item.id, input.instanceIndex),
-      kind: templateNode?.kind === "spawn" ? "spawn" : "agent",
       templateName: agent.templateName,
       displayName: buildRuntimeNodeId(agent.templateName, input.item.id, input.instanceIndex),
       sourceNodeId: sourceNode.id,
       groupId,
       role: agent.role,
-      ...(templateNode?.spawnRuleId ? { spawnRuleId: templateNode.spawnRuleId } : {}),
+    };
+    if (templateNode?.kind === "spawn") {
+      if (!templateNode.spawnRuleId) {
+        throw new Error(`spawn template 缺少 spawnRuleId：${agent.templateName}`);
+      }
+      return {
+        ...sharedNode,
+        kind: "spawn",
+        spawnRuleId: templateNode.spawnRuleId,
+      };
+    }
+    return {
+      ...sharedNode,
+      kind: "agent",
     };
   });
 
@@ -161,8 +173,6 @@ export function instantiateSpawnBundle(input: {
     item: input.item,
     nodes,
     edges,
-    ...(rule.sourceTemplateName ? { sourceTemplateName: rule.sourceTemplateName } : {}),
-    ...(rule.reportToTemplateName ? { reportToTemplateName: rule.reportToTemplateName } : {}),
   };
 }
 

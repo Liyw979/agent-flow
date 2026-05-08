@@ -202,6 +202,24 @@ export interface RuntimeTopologyNode {
   spawnRuleId?: string;
 }
 
+interface SpawnBundleRuntimeNodeBase {
+  id: string;
+  templateName: string;
+  displayName: string;
+  sourceNodeId: string;
+  groupId: string;
+  role: SpawnedAgentRole;
+}
+
+export type SpawnBundleRuntimeNode =
+  | (SpawnBundleRuntimeNodeBase & {
+      kind: "agent";
+    })
+  | (SpawnBundleRuntimeNodeBase & {
+      kind: "spawn";
+      spawnRuleId: string;
+    });
+
 export interface RuntimeTopologyEdge {
   source: string;
   target: string;
@@ -219,10 +237,8 @@ export interface SpawnBundleInstantiation {
   groupId: string;
   activationId: string;
   spawnNodeName: string;
-  sourceTemplateName?: string;
-  reportToTemplateName?: string;
   item: SpawnItemPayload;
-  nodes: RuntimeTopologyNode[];
+  nodes: SpawnBundleRuntimeNode[];
   edges: RuntimeTopologyEdge[];
 }
 
