@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UiSnapshotPayload } from "@shared/types";
 import { withOptionalString } from "@shared/object-utils";
 import { ChatWindow } from "./components/ChatWindow";
@@ -31,17 +32,15 @@ import {
   buildAgentPromptDialogState,
   type AgentPromptDialogState,
 } from "./lib/agent-prompt-dialog";
-import {
-  decideUiSnapshotRefreshAcceptance,
-} from "./lib/ui-snapshot-refresh-gate";
+import { resolveUiSnapshotQueryData } from "./lib/ui-snapshot-refresh-gate";
 import { getUiSnapshotPollingIntervalMs } from "./lib/ui-snapshot-polling";
 import { resolveAppPanelVisibility, type AppPanelMode } from "./lib/app-panel-visibility";
 
 function App() {
+  const queryClient = useQueryClient();
   const launchParams = useMemo(() => readLaunchParams(), []);
   const appShellClassName = getAppShellClassName();
   const workspaceLayoutMetrics = getAppWorkspaceLayoutMetrics();
-  const [uiSnapshot, setUiSnapshot] = useState<UiSnapshotPayload | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [openingAgentTerminalId, setOpeningAgentTerminalId] = useState("");
   const [agentTerminalActionError, setAgentTerminalActionError] = useState<string | null>(null);
@@ -50,98 +49,73 @@ function App() {
   const [panelMode, setPanelMode] = useState<AppPanelMode>("default");
   const [selectedAgentPromptDialog, setSelectedAgentPromptDialog] = useState<AgentPromptDialogState | null>(null);
   const agentPanelViewportRef = useRef<HTMLDivElement | null>(null);
-  const latestUiSnapshotRef = useRef<UiSnapshotPayload | null>(null);
-  const nextUiSnapshotRequestIdRef = useRef(0);
-  const latestAcceptedUiSnapshotRequestIdRef = useRef(0);
-
-  const workspace = uiSnapshot?.workspace ?? null;
-  const task = uiSnapshot?.task ?? null;
   const launchTaskId = launchParams.taskId ?? "";
   const uiSnapshotPollingIntervalMs = getUiSnapshotPollingIntervalMs(launchTaskId);
   const panelVisibility = resolveAppPanelVisibility(panelMode);
+  const uiSnapshotQuery = useQuery<UiSnapshotPayload, Error>({
+    queryKey: ["ui-snapshot", launchTaskId] as const,
+    enabled: launchTaskId.length > 0,
+    retry: false,
+    queryFn: async (): Promise<UiSnapshotPayload> => fetchUiSnapshot({
+      taskId: launchTaskId,
+    }),
+    refetchInterval: uiSnapshotPollingIntervalMs ?? false,
+    structuralSharing: (previousPayload, nextPayload) =>
+      previousPayload
+        ? resolveUiSnapshotQueryData(
+            previousPayload as UiSnapshotPayload,
+            nextPayload as UiSnapshotPayload,
+          )
+        : (nextPayload as UiSnapshotPayload),
+  });
+  const submitTaskMutation = useMutation({
+    mutationFn: submitTask,
+    retry: false,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["ui-snapshot", launchTaskId] as const });
+    },
+  });
+  const uiSnapshot = uiSnapshotQuery.data;
+  const taskViewState = useMemo(() => (
+    uiSnapshot && uiSnapshot.workspace && uiSnapshot.task
+      ? {
+          uiSnapshot,
+          workspace: uiSnapshot.workspace,
+          task: uiSnapshot.task,
+        }
+      : null
+  ), [uiSnapshot]);
 
-  function applyUiSnapshotRefreshResult(nextUiSnapshot: UiSnapshotPayload, requestId: number) {
-    const acceptance = decideUiSnapshotRefreshAcceptance({
-      latestAcceptedRequestId: latestAcceptedUiSnapshotRequestIdRef.current,
-      latestAcceptedPayload: latestUiSnapshotRef.current,
-      requestId,
-      payload: nextUiSnapshot,
-    });
-    if (!acceptance.accepted || !acceptance.payload) {
-      return;
-    }
-
-    latestAcceptedUiSnapshotRequestIdRef.current = acceptance.latestAcceptedRequestId;
-    latestUiSnapshotRef.current = acceptance.payload;
-    setUiSnapshot(acceptance.payload);
+  useEffect(() => {
     setSelectedAgentId((currentSelectedAgentId) =>
       resolveDefaultSelectedAgentIdForFrontend({
         selectedAgentId: currentSelectedAgentId,
-        workspaceAgents: acceptance.payload?.workspace?.agents ?? [],
-        taskAgents: acceptance.payload?.task?.agents ?? [],
-        topology: acceptance.payload?.task?.topology ?? acceptance.payload?.workspace?.topology ?? null,
+        workspaceAgents: taskViewState ? taskViewState.workspace.agents : [],
+        taskAgents: taskViewState ? taskViewState.task.agents : [],
+        topology: taskViewState ? (taskViewState.task.topology ?? taskViewState.workspace.topology ?? null) : null,
       }),
     );
-  }
-
-  async function refreshUiSnapshot() {
-    const requestId = nextUiSnapshotRequestIdRef.current + 1;
-    nextUiSnapshotRequestIdRef.current = requestId;
-
-    if (!launchTaskId) {
-      applyUiSnapshotRefreshResult({
-        workspace: null,
-        task: null,
-        launchCwd: null,
-        launchTaskId: launchParams.taskId,
-        taskLogFilePath: null,
-        taskUrl: null,
-      }, requestId);
-      return;
-    }
-
-    const next = await fetchUiSnapshot({
-      taskId: launchTaskId,
-    });
-    applyUiSnapshotRefreshResult(next, requestId);
-  }
-
-  useEffect(() => {
-    void refreshUiSnapshot();
-  }, []);
-
-  useEffect(() => {
-    if (!uiSnapshotPollingIntervalMs) {
-      return;
-    }
-
-    const timer = setInterval(() => {
-      void refreshUiSnapshot();
-    }, uiSnapshotPollingIntervalMs);
-
-    return () => {
-      clearInterval(timer);
-    };
-  }, [launchTaskId, uiSnapshotPollingIntervalMs]);
-
-  useEffect(() => {
-    latestUiSnapshotRef.current = uiSnapshot;
-  }, [uiSnapshot]);
+  }, [taskViewState]);
 
   const availableAgents = useMemo(
-    () => buildAvailableAgentIdsForFrontend(
-      workspace?.agents ?? [],
-      task?.topology ?? workspace?.topology ?? null,
-    ),
-    [task?.topology, workspace?.agents, workspace?.topology],
+    () => taskViewState
+      ? buildAvailableAgentIdsForFrontend(
+          taskViewState.workspace.agents,
+          taskViewState.task.topology ?? taskViewState.workspace.topology ?? null,
+        )
+      : [],
+    [taskViewState],
   );
   const agentCards = useMemo(() => {
-    if (!workspace || !task) {
+    if (!taskViewState) {
       return [];
     }
 
-    const taskAgents = new Map(task.agents.map((agent) => [agent.id, agent]));
-    return orderAgentsForFrontend(workspace.agents, task.topology ?? workspace.topology).map((agent) => {
+    const taskAgents = new Map(taskViewState.task.agents.map((agent) => [agent.id, agent]));
+    return orderAgentsForFrontend(
+      taskViewState.workspace.agents,
+      taskViewState.task.topology ?? taskViewState.workspace.topology,
+    ).map((agent) => {
       const taskAgent = taskAgents.get(agent.id);
       const promptSnippet = buildAgentPromptSnippetText({
         agentId: agent.id,
@@ -154,7 +128,7 @@ function App() {
         status: taskAgent?.status ?? "idle",
       };
     });
-  }, [workspace, task]);
+  }, [taskViewState]);
 
   useEffect(() => {
     const viewport = agentPanelViewportRef.current;
@@ -226,7 +200,7 @@ function App() {
     );
   }
 
-  if (!workspace || !task) {
+  if (!taskViewState) {
     return (
       <div className="flex h-screen items-center justify-center bg-background px-6 text-foreground">
         <div className="PANEL-surface max-w-xl rounded-[12px] p-6 text-center">
@@ -239,6 +213,8 @@ function App() {
       </div>
     );
   }
+
+  const { uiSnapshot: currentUiSnapshot, workspace, task } = taskViewState;
 
   return (
     <div className="flex h-screen flex-col overflow-hidden text-foreground">
@@ -266,8 +242,8 @@ function App() {
               workspace={workspace}
               task={task}
               availableAgents={availableAgents}
-              taskLogFilePath={uiSnapshot?.taskLogFilePath ?? null}
-              taskUrl={uiSnapshot?.taskUrl ?? null}
+              taskLogFilePath={currentUiSnapshot.taskLogFilePath}
+              taskUrl={currentUiSnapshot.taskUrl}
               isMaximized={panelMode === "chat-only"}
               onToggleMaximize={() => {
                 setPanelMode((current) => (current === "chat-only" ? "default" : "chat-only"));
@@ -277,7 +253,7 @@ function App() {
                 void handleOpenAgentTerminal(agentId);
               }}
               onSubmit={async ({ content, mentionAgentId }) => {
-                await submitTask(withOptionalString({
+                await submitTaskMutation.mutateAsync(withOptionalString({
                   cwd: workspace.cwd,
                   taskId: task.task.id,
                   content,
@@ -317,8 +293,8 @@ function App() {
                   workspace={workspace}
                   task={task}
                   availableAgents={availableAgents}
-                  taskLogFilePath={uiSnapshot?.taskLogFilePath ?? null}
-                  taskUrl={uiSnapshot?.taskUrl ?? null}
+                  taskLogFilePath={currentUiSnapshot.taskLogFilePath}
+                  taskUrl={currentUiSnapshot.taskUrl}
                   isMaximized={panelMode === "chat-only"}
                   onToggleMaximize={() => {
                     setPanelMode((current) => (current === "chat-only" ? "default" : "chat-only"));
@@ -328,7 +304,7 @@ function App() {
                     void handleOpenAgentTerminal(agentId);
                   }}
                   onSubmit={async ({ content, mentionAgentId }) => {
-                    await submitTask(withOptionalString({
+                    await submitTaskMutation.mutateAsync(withOptionalString({
                       cwd: workspace.cwd,
                       taskId: task.task.id,
                       content,

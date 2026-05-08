@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
+import { QueryClient, QueryClientProvider, environmentManager, notifyManager } from "@tanstack/react-query";
 
 import {
   buildTopologyNodeRecords,
@@ -142,6 +143,11 @@ function setupDom(fetchImpl: typeof fetch) {
   const previousValues = new Map<GlobalPatchKey, GlobalPatch>();
   const intervalCallbacks: Array<() => void | Promise<void>> = [];
 
+  Object.defineProperty(dom.window.document, "visibilityState", {
+    configurable: true,
+    value: "visible",
+  });
+
   function setGlobal(key: GlobalPatchKey, value: unknown) {
     previousValues.set(key, {
       existed: key in globalThis,
@@ -186,6 +192,7 @@ function setupDom(fetchImpl: typeof fetch) {
         await callback();
       }
       await Promise.resolve();
+      await Promise.resolve();
     },
     cleanup() {
       for (const [key, patch] of previousValues) {
@@ -218,7 +225,65 @@ async function waitForAssertion(assertion: () => void, attempts = 20) {
   throw lastError;
 }
 
-test("App 只靠 ui-snapshot 轮询也会把新 final 消息展示出来", async () => {
+function restoreDefaultNotifyFunction() {
+  notifyManager.setNotifyFunction((callback) => {
+    callback();
+  });
+}
+
+function setupAppTest(fetchImpl: typeof fetch) {
+  const domContext = setupDom(fetchImpl);
+  const container = domContext.dom.window.document.createElement("div");
+  domContext.dom.window.document.body.append(container);
+  const root = createRoot(container);
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+      mutations: {
+        retry: false,
+      },
+    },
+  });
+
+  notifyManager.setNotifyFunction((callback) => {
+    act(() => {
+      callback();
+    });
+  });
+  environmentManager.setIsServer(() => false);
+
+  return {
+    async render() {
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <App />
+          </QueryClientProvider>,
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    },
+    async tickPolling() {
+      await act(async () => {
+        await domContext.tickIntervals();
+      });
+    },
+    async cleanup() {
+      await act(async () => {
+        root.unmount();
+      });
+      queryClient.clear();
+      restoreDefaultNotifyFunction();
+      environmentManager.setIsServer(() => typeof window === "undefined");
+      domContext.cleanup();
+    },
+  };
+}
+
+test("App 在 ui-snapshot 自动轮询后会把新 final 消息展示出来", async () => {
   let uiSnapshotRequestCount = 0;
   const snapshots = [
     createUiSnapshot({
@@ -236,37 +301,27 @@ test("App 只靠 ui-snapshot 轮询也会把新 final 消息展示出来", async
     return new Response(JSON.stringify(next), { status: 200 });
   }) as typeof fetch;
 
-  const domContext = setupDom(fetchImpl);
-  const container = domContext.dom.window.document.createElement("div");
-  domContext.dom.window.document.body.append(container);
-  const root = createRoot(container);
+  const appTest = setupAppTest(fetchImpl);
 
   try {
-    await act(async () => {
-      root.render(<App />);
-    });
+    await appTest.render();
 
     await waitForAssertion(() => {
       assert.match(document.body.textContent ?? "", /还没有消息/u);
       assert.equal(uiSnapshotRequestCount >= 1, true);
     });
 
-    await act(async () => {
-      await domContext.tickIntervals();
-    });
+    await appTest.tickPolling();
 
     await waitForAssertion(() => {
       assert.match(document.body.textContent ?? "", /挑战结论：这里的消息应当在轮询拿到全量 snapshot 后立即出现。/u);
     });
   } finally {
-    await act(async () => {
-      root.unmount();
-    });
-    domContext.cleanup();
+    await appTest.cleanup();
   }
 });
 
-test("App 会把 snapshot 里的 attach 状态更新到界面", async () => {
+test("App 会把自动轮询带回的 attach 状态更新到界面", async () => {
   let uiSnapshotRequestCount = 0;
   const snapshots = [
     createUiSnapshot({
@@ -284,15 +339,10 @@ test("App 会把 snapshot 里的 attach 状态更新到界面", async () => {
     return new Response(JSON.stringify(next), { status: 200 });
   }) as typeof fetch;
 
-  const domContext = setupDom(fetchImpl);
-  const container = domContext.dom.window.document.createElement("div");
-  domContext.dom.window.document.body.append(container);
-  const root = createRoot(container);
+  const appTest = setupAppTest(fetchImpl);
 
   try {
-    await act(async () => {
-      root.render(<App />);
-    });
+    await appTest.render();
 
     await waitForAssertion(() => {
       const attachButton = document.querySelector('button[aria-label="打开 漏洞挑战-1 的 attach 终端"]');
@@ -300,9 +350,7 @@ test("App 会把 snapshot 里的 attach 状态更新到界面", async () => {
       assert.equal(attachButton.disabled, true);
     });
 
-    await act(async () => {
-      await domContext.tickIntervals();
-    });
+    await appTest.tickPolling();
 
     await waitForAssertion(() => {
       const attachButton = document.querySelector('button[aria-label="打开 漏洞挑战-1 的 attach 终端"]');
@@ -310,9 +358,6 @@ test("App 会把 snapshot 里的 attach 状态更新到界面", async () => {
       assert.equal(attachButton.disabled, false);
     });
   } finally {
-    await act(async () => {
-      root.unmount();
-    });
-    domContext.cleanup();
+    await appTest.cleanup();
   }
 });

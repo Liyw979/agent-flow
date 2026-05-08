@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  decideUiSnapshotRefreshAcceptance,
-  isSemanticallyNewerUiSnapshot,
+  isSemanticallyOlderUiSnapshot,
+  resolveUiSnapshotQueryData,
 } from "./ui-snapshot-refresh-gate";
 import {
   buildTopologyNodeRecords,
@@ -125,7 +125,7 @@ function createUiSnapshotPayload(input: {
   };
 }
 
-test("较新的 ui snapshot 响应一旦已被接受，较旧响应必须被拒绝，避免把 UnitTest 运行中回滚成 BA 运行中", () => {
+test("语义更旧的 ui snapshot 必须被识别出来，避免把 UnitTest 运行中回滚成 BA 运行中", () => {
   const newerPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "running",
@@ -135,322 +135,174 @@ test("较新的 ui snapshot 响应一旦已被接受，较旧响应必须被拒�
     unitTestStatus: "idle",
   });
 
-  const acceptedNewer = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: 0,
-    requestId: 2,
-    latestAcceptedPayload: null,
-    payload: newerPayload,
-  });
-  assert.equal(acceptedNewer.accepted, true);
-  assert.equal(acceptedNewer.latestAcceptedRequestId, 2);
-  assert.equal(acceptedNewer.payload?.task?.agents.find((agent) => agent.id === "UnitTest")?.status, "running");
-
-  const rejectedOlder = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: acceptedNewer.latestAcceptedRequestId,
-    requestId: 1,
-    latestAcceptedPayload: acceptedNewer.payload,
-    payload: olderPayload,
-  });
-  assert.equal(rejectedOlder.accepted, false);
-  assert.equal(rejectedOlder.latestAcceptedRequestId, 2);
-  assert.equal(rejectedOlder.payload, null);
+  assert.equal(isSemanticallyOlderUiSnapshot(newerPayload, olderPayload), true);
 });
 
-test("ui snapshot 门禁允许首次响应和更大请求号通过，但拒绝相同请求号重复回写", () => {
-  const firstPayload = createUiSnapshotPayload({
+test("缓存里已有较新 snapshot 时，语义更旧的结果必须被拒绝", () => {
+  const acceptedFresh = createUiSnapshotPayload({
+    baStatus: "completed",
+    buildStatus: "running",
+    unitTestStatus: "idle",
+    messageCount: 3,
+  });
+  const olderPayload = createUiSnapshotPayload({
+    baStatus: "running",
+    buildStatus: "idle",
+    unitTestStatus: "idle",
+    messageCount: 2,
+  });
+
+  assert.equal(resolveUiSnapshotQueryData(acceptedFresh, olderPayload), acceptedFresh);
+});
+
+test("合法 reopen 的 running snapshot 仍然应当被接受", () => {
+  const finishedPayload = createUiSnapshotPayload({
+    baStatus: "completed",
+    unitTestStatus: "idle",
+    taskStatus: "finished",
+    completedAt: "2026-04-21T03:22:20.000Z",
+    messageCount: 2,
+  });
+  const reopenedRunning = createUiSnapshotPayload({
     baStatus: "running",
     unitTestStatus: "idle",
+    taskStatus: "running",
+    completedAt: null,
+    messageCount: 3,
+    baRunCount: 2,
   });
-  const newerPayload = createUiSnapshotPayload({
+
+  assert.equal(isSemanticallyOlderUiSnapshot(finishedPayload, reopenedRunning), false);
+  assert.equal(resolveUiSnapshotQueryData(finishedPayload, reopenedRunning), reopenedRunning);
+});
+
+test("语义上更新的 snapshot 必须覆盖旧缓存，避免群聊停留在旧快照", () => {
+  const previousPayload = createUiSnapshotPayload({
+    baStatus: "running",
+    unitTestStatus: "idle",
+    buildStatus: "idle",
+    messageCount: 1,
+  });
+  const nextPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "running",
+    buildStatus: "idle",
+    messageCount: 3,
   });
 
-  const firstAccepted = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: 0,
-    requestId: 1,
-    latestAcceptedPayload: null,
-    payload: firstPayload,
-  });
-  assert.equal(firstAccepted.accepted, true);
-  assert.equal(firstAccepted.latestAcceptedRequestId, 1);
-
-  const duplicatedRequest = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: firstAccepted.latestAcceptedRequestId,
-    requestId: 1,
-    latestAcceptedPayload: firstAccepted.payload,
-    payload: newerPayload,
-  });
-  assert.equal(duplicatedRequest.accepted, false);
-  assert.equal(duplicatedRequest.latestAcceptedRequestId, 1);
-  assert.equal(duplicatedRequest.payload, null);
-
-  const newerAccepted = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: firstAccepted.latestAcceptedRequestId,
-    requestId: 3,
-    latestAcceptedPayload: firstAccepted.payload,
-    payload: newerPayload,
-  });
-  assert.equal(newerAccepted.accepted, true);
-  assert.equal(newerAccepted.latestAcceptedRequestId, 3);
-  assert.equal(newerAccepted.payload?.task?.agents.find((agent) => agent.id === "BA")?.status, "completed");
-});
-
-test("较大的请求号若带回更旧的任务快照，必须被拒绝，避免把 BA 已完成和 Build 已启动回滚成旧画面", () => {
-  const acceptedFresh = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: 0,
-    requestId: 4,
-    latestAcceptedPayload: null,
-    payload: createUiSnapshotPayload({
-      baStatus: "completed",
-      buildStatus: "running",
-      unitTestStatus: "idle",
-      messageCount: 3,
-    }),
-  });
-  assert.equal(acceptedFresh.accepted, true);
-
-  const rejectedSemanticallyOlder = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: acceptedFresh.latestAcceptedRequestId,
-    requestId: 5,
-    latestAcceptedPayload: acceptedFresh.payload,
-    payload: createUiSnapshotPayload({
-      baStatus: "running",
-      buildStatus: "idle",
-      unitTestStatus: "idle",
-      messageCount: 2,
-    }),
-  });
-  assert.equal(rejectedSemanticallyOlder.accepted, false);
-  assert.equal(rejectedSemanticallyOlder.latestAcceptedRequestId, acceptedFresh.latestAcceptedRequestId);
-  assert.equal(rejectedSemanticallyOlder.payload, null);
-});
-
-test("较新的请求号把任务从 finished 重新带回 running 时，门禁必须接受这次合法 reopen", () => {
-  const acceptedFinished = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: 0,
-    requestId: 7,
-    latestAcceptedPayload: null,
-    payload: createUiSnapshotPayload({
-      baStatus: "completed",
-      unitTestStatus: "idle",
-      taskStatus: "finished",
-      completedAt: "2026-04-21T03:22:20.000Z",
-      messageCount: 2,
-    }),
-  });
-  assert.equal(acceptedFinished.accepted, true);
-
-  const reopenedRunning = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: acceptedFinished.latestAcceptedRequestId,
-    requestId: 8,
-    latestAcceptedPayload: acceptedFinished.payload,
-    payload: createUiSnapshotPayload({
-      baStatus: "running",
-      unitTestStatus: "idle",
-      taskStatus: "running",
-      completedAt: null,
-      messageCount: 3,
-      baRunCount: 2,
-    }),
-  });
-
-  assert.equal(reopenedRunning.accepted, true);
-  assert.equal(reopenedRunning.payload?.task?.task.status, "running");
-});
-
-test("较小请求号若晚返回且语义上更新，门禁仍必须接受，避免并发刷新把群聊卡在旧快照", () => {
-  const acceptedStaleHigherRequest = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: 0,
-    requestId: 9,
-    latestAcceptedPayload: null,
-    payload: createUiSnapshotPayload({
-      baStatus: "running",
-      unitTestStatus: "idle",
-      buildStatus: "idle",
-      messageCount: 1,
-    }),
-  });
-  assert.equal(acceptedStaleHigherRequest.accepted, true);
-
-  const acceptedFreshLowerRequest = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: acceptedStaleHigherRequest.latestAcceptedRequestId,
-    requestId: 8,
-    latestAcceptedPayload: acceptedStaleHigherRequest.payload,
-    payload: createUiSnapshotPayload({
-      baStatus: "completed",
-      unitTestStatus: "running",
-      buildStatus: "idle",
-      messageCount: 3,
-    }),
-  });
-
-  assert.equal(acceptedFreshLowerRequest.accepted, true);
-  assert.equal(acceptedFreshLowerRequest.latestAcceptedRequestId, 9);
-  assert.equal(acceptedFreshLowerRequest.payload?.task?.messages.length, 3);
+  const acceptedPayload = resolveUiSnapshotQueryData(previousPayload, nextPayload);
+  assert.equal(acceptedPayload, nextPayload);
+  assert.equal(acceptedPayload.task?.messages.length, 3);
   assert.equal(
-    acceptedFreshLowerRequest.payload?.task?.agents.find((agent) => agent.id === "UnitTest")?.status,
+    acceptedPayload.task?.agents.find((agent) => agent.id === "UnitTest")?.status,
     "running",
   );
 });
 
-test("语义前进判定会把消息条数增加识别为更新，供事件追平停止条件复用", () => {
-  const baselinePayload = createUiSnapshotPayload({
+test("消息条数增加时，查询缓存应接受新 snapshot", () => {
+  const previousPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "idle",
     buildStatus: "idle",
     messageCount: 1,
   });
-  const newerPayload = createUiSnapshotPayload({
+  const nextPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "idle",
     buildStatus: "idle",
     messageCount: 2,
   });
 
-  assert.equal(isSemanticallyNewerUiSnapshot(baselinePayload, newerPayload), true);
-  assert.equal(isSemanticallyNewerUiSnapshot(newerPayload, baselinePayload), false);
+  assert.equal(resolveUiSnapshotQueryData(previousPayload, nextPayload), nextPayload);
+  assert.equal(resolveUiSnapshotQueryData(nextPayload, previousPayload), nextPayload);
 });
 
-test("较小请求号若仅补齐 session 与 attach，也必须被视为语义更新并接受", () => {
-  const higherRequestPayload = createUiSnapshotPayload({
+test("补齐 session 与 attach 的 snapshot 必须被视为语义更新并接受", () => {
+  const previousPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "idle",
     messageCount: 2,
   });
-  const acceptedHigherRequest = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: 0,
-    requestId: 12,
-    latestAcceptedPayload: null,
-    payload: higherRequestPayload,
-  });
-  assert.equal(acceptedHigherRequest.accepted, true);
 
-  const lowerRequestPayloadWithAttach = createUiSnapshotPayload({
+  const nextPayloadWithAttach = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "idle",
     messageCount: 2,
   });
-  const lowerRequestBaAgent = lowerRequestPayloadWithAttach.task?.agents.find((agent) => agent.id === "BA");
-  assert.ok(lowerRequestBaAgent, "应存在 BA agent 测试夹具");
-  lowerRequestBaAgent.opencodeSessionId = "session-ba-2";
-  lowerRequestBaAgent.opencodeAttachBaseUrl = "http://localhost:4310";
+  const nextBaAgent = nextPayloadWithAttach.task?.agents.find((agent) => agent.id === "BA");
+  assert.ok(nextBaAgent, "应存在 BA agent 测试夹具");
+  nextBaAgent.opencodeSessionId = "session-ba-2";
+  nextBaAgent.opencodeAttachBaseUrl = "http://localhost:4310";
 
-  const acceptedLowerRequestWithAttach = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: acceptedHigherRequest.latestAcceptedRequestId,
-    requestId: 11,
-    latestAcceptedPayload: acceptedHigherRequest.payload,
-    payload: lowerRequestPayloadWithAttach,
-  });
-
-  assert.equal(acceptedLowerRequestWithAttach.accepted, true);
+  const acceptedPayload = resolveUiSnapshotQueryData(previousPayload, nextPayloadWithAttach);
   assert.equal(
-    acceptedLowerRequestWithAttach.payload?.task?.agents.find((agent) => agent.id === "BA")?.opencodeSessionId,
+    acceptedPayload.task?.agents.find((agent) => agent.id === "BA")?.opencodeSessionId,
     "session-ba-2",
   );
   assert.equal(
-    acceptedLowerRequestWithAttach.payload?.task?.agents.find((agent) => agent.id === "BA")?.opencodeAttachBaseUrl,
+    acceptedPayload.task?.agents.find((agent) => agent.id === "BA")?.opencodeAttachBaseUrl,
     "http://localhost:4310",
   );
 });
 
-test("较小请求号若只把旧的非空 session 与 attach 换成另一组非空值，门禁必须拒绝，避免回退到不可证明更晚的连接状态", () => {
-  const higherRequestPayload = createUiSnapshotPayload({
+test("仅把旧的非空 session 与 attach 换成另一组非空值时，不应误判为语义回退", () => {
+  const previousPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "idle",
     messageCount: 2,
   });
-  const higherRequestBaAgent = higherRequestPayload.task?.agents.find((agent) => agent.id === "BA");
-  assert.ok(higherRequestBaAgent, "应存在 BA agent 测试夹具");
-  higherRequestBaAgent.opencodeSessionId = "session-ba-1";
-  higherRequestBaAgent.opencodeAttachBaseUrl = "http://localhost:4310/old";
+  const previousBaAgent = previousPayload.task?.agents.find((agent) => agent.id === "BA");
+  assert.ok(previousBaAgent, "应存在 BA agent 测试夹具");
+  previousBaAgent.opencodeSessionId = "session-ba-1";
+  previousBaAgent.opencodeAttachBaseUrl = "http://localhost:4310/old";
 
-  const acceptedHigherRequest = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: 0,
-    requestId: 14,
-    latestAcceptedPayload: null,
-    payload: higherRequestPayload,
-  });
-  assert.equal(acceptedHigherRequest.accepted, true);
-
-  const lowerRequestPayload = createUiSnapshotPayload({
+  const nextPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "idle",
     messageCount: 2,
   });
-  const lowerRequestBaAgent = lowerRequestPayload.task?.agents.find((agent) => agent.id === "BA");
-  assert.ok(lowerRequestBaAgent, "应存在 BA agent 测试夹具");
-  lowerRequestBaAgent.opencodeSessionId = "session-ba-2";
-  lowerRequestBaAgent.opencodeAttachBaseUrl = "http://localhost:4310/new";
+  const nextBaAgent = nextPayload.task?.agents.find((agent) => agent.id === "BA");
+  assert.ok(nextBaAgent, "应存在 BA agent 测试夹具");
+  nextBaAgent.opencodeSessionId = "session-ba-2";
+  nextBaAgent.opencodeAttachBaseUrl = "http://localhost:4310/new";
 
-  const rejectedLowerRequest = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: acceptedHigherRequest.latestAcceptedRequestId,
-    requestId: 13,
-    latestAcceptedPayload: acceptedHigherRequest.payload,
-    payload: lowerRequestPayload,
-  });
-
-  assert.equal(rejectedLowerRequest.accepted, false);
-  assert.equal(rejectedLowerRequest.payload, null);
+  assert.equal(isSemanticallyOlderUiSnapshot(previousPayload, nextPayload), false);
+  assert.equal(resolveUiSnapshotQueryData(previousPayload, nextPayload), previousPayload);
 });
 
-test("较小请求号即使补齐了 attach，只要消息数发生回退也必须拒绝", () => {
-  const higherRequestPayload = createUiSnapshotPayload({
+test("即使补齐了 attach，只要消息数发生回退也必须拒绝", () => {
+  const previousPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "running",
     messageCount: 3,
   });
 
-  const acceptedHigherRequest = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: 0,
-    requestId: 16,
-    latestAcceptedPayload: null,
-    payload: higherRequestPayload,
-  });
-  assert.equal(acceptedHigherRequest.accepted, true);
-
-  const lowerRequestPayload = createUiSnapshotPayload({
+  const olderPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "idle",
     messageCount: 2,
   });
-  const lowerRequestBaAgent = lowerRequestPayload.task?.agents.find((agent) => agent.id === "BA");
-  assert.ok(lowerRequestBaAgent, "应存在 BA agent 测试夹具");
-  lowerRequestBaAgent.opencodeSessionId = "session-ba-2";
-  lowerRequestBaAgent.opencodeAttachBaseUrl = "http://localhost:4310";
+  const olderBaAgent = olderPayload.task?.agents.find((agent) => agent.id === "BA");
+  assert.ok(olderBaAgent, "应存在 BA agent 测试夹具");
+  olderBaAgent.opencodeSessionId = "session-ba-2";
+  olderBaAgent.opencodeAttachBaseUrl = "http://localhost:4310";
 
-  const rejectedLowerRequest = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: acceptedHigherRequest.latestAcceptedRequestId,
-    requestId: 15,
-    latestAcceptedPayload: acceptedHigherRequest.payload,
-    payload: lowerRequestPayload,
-  });
-
-  assert.equal(rejectedLowerRequest.accepted, false);
-  assert.equal(rejectedLowerRequest.payload, null);
+  assert.equal(resolveUiSnapshotQueryData(previousPayload, olderPayload), previousPayload);
 });
 
-test("较小请求号若首次带回新的 runtime agent，也必须被视为语义前进并接受", () => {
-  const higherRequestPayload = createUiSnapshotPayload({
+test("首次带回新的 runtime agent 时，也必须被视为语义前进并接受", () => {
+  const previousPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "idle",
     messageCount: 1,
   });
 
-  const acceptedHigherRequest = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: 0,
-    requestId: 18,
-    latestAcceptedPayload: null,
-    payload: higherRequestPayload,
-  });
-  assert.equal(acceptedHigherRequest.accepted, true);
-
-  const lowerRequestPayload = createUiSnapshotPayload({
+  const nextPayload = createUiSnapshotPayload({
     baStatus: "completed",
     unitTestStatus: "idle",
     messageCount: 1,
   });
-  lowerRequestPayload.task?.agents.push({
+  nextPayload.task?.agents.push({
     id: "漏洞挑战-2",
     taskId: "task-1",
     opencodeSessionId: "session-challenge-2",
@@ -459,16 +311,9 @@ test("较小请求号若首次带回新的 runtime agent，也必须被视为语
     runCount: 1,
   });
 
-  const acceptedLowerRequest = decideUiSnapshotRefreshAcceptance({
-    latestAcceptedRequestId: acceptedHigherRequest.latestAcceptedRequestId,
-    requestId: 17,
-    latestAcceptedPayload: acceptedHigherRequest.payload,
-    payload: lowerRequestPayload,
-  });
-
-  assert.equal(acceptedLowerRequest.accepted, true);
+  const acceptedPayload = resolveUiSnapshotQueryData(previousPayload, nextPayload);
   assert.equal(
-    acceptedLowerRequest.payload?.task?.agents.some((agent) => agent.id === "漏洞挑战-2"),
+    acceptedPayload.task?.agents.some((agent) => agent.id === "漏洞挑战-2"),
     true,
   );
 });
