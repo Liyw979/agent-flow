@@ -37,8 +37,12 @@ function createSpawnTopology(): TopologyRecord {
           { sourceRole: "con", targetRole: "summary", trigger: "<complete>", messageMode: "last" },
         ],
         exitWhen: "one_side_agrees",
-        reportToTemplateName: "线索发现",
-        reportToTrigger: "<default>",
+        report: {
+          templateName: "线索发现",
+          trigger: "<default>",
+          messageMode: "last",
+          maxTriggerRounds: false,
+        },
       },
     ],
   };

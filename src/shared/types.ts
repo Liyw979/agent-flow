@@ -94,19 +94,20 @@ interface SpawnRuleBase {
   exitWhen: "one_side_agrees" | "all_completed";
 }
 
-export type SpawnRule =
-  | (SpawnRuleBase & {
-      reportToTemplateName: string;
-      reportToTrigger: TopologyTrigger;
-      reportToMessageMode?: TopologyEdgeMessageMode;
-      reportToMaxTriggerRounds?: number;
-    })
-  | (SpawnRuleBase & {
-      reportToTemplateName?: undefined;
-      reportToTrigger?: undefined;
-      reportToMessageMode?: undefined;
-      reportToMaxTriggerRounds?: undefined;
-    });
+export type SpawnRuleWithReport = SpawnRuleBase & {
+  report: {
+    templateName: string;
+    trigger: TopologyTrigger;
+    messageMode: TopologyEdgeMessageMode;
+    maxTriggerRounds: number | false;
+  };
+};
+
+export type SpawnRuleWithoutReport = SpawnRuleBase & {
+  report: false;
+};
+
+export type SpawnRule = SpawnRuleWithReport | SpawnRuleWithoutReport;
 
 export interface TopologyNodeRecord {
   id: string;
@@ -969,71 +970,79 @@ export function getTopologyNodeRecords(
   return topology.nodeRecords;
 }
 
-export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
-  const spawnNodeNameByRuleId = new Map(
-    getTopologyNodeRecords(topology)
-      .filter((node) => node.kind === "spawn")
-      .map((node) => [node.spawnRuleId!, node.id]),
-  );
-  return (topology.spawnRules ?? []).map((rule) => {
-    if (rule.reportToTemplateName && !rule.reportToTrigger) {
-      throw new Error(
-        `spawn rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`,
-      );
-    }
-    const reportToTrigger =
-      typeof rule.reportToTrigger === "string"
-        ? normalizeTopologyEdgeTrigger(rule.reportToTrigger)
-        : null;
+export function normalizeSpawnRule(
+  rule: SpawnRule,
+  spawnNodeNameFallback: string,
+): SpawnRule {
+  const normalizedBase = {
+    id: rule.id,
+    spawnNodeName: rule.spawnNodeName ?? spawnNodeNameFallback ?? rule.id,
+    ...(rule.sourceTemplateName
+      ? { sourceTemplateName: rule.sourceTemplateName }
+      : {}),
+    entryRole: rule.entryRole,
+    spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
+    edges: rule.edges.map((edge) => {
+      const trigger = normalizeTopologyEdgeTrigger(edge.trigger);
+      return {
+        ...edge,
+        trigger,
+        ...(isActionRequiredTopologyTrigger(trigger, edge.maxTriggerRounds) &&
+        typeof edge.maxTriggerRounds === "number"
+          ? {
+              maxTriggerRounds: normalizeActionRequiredMaxRounds(
+                edge.maxTriggerRounds,
+              ),
+            }
+          : {}),
+      };
+    }),
+    exitWhen: rule.exitWhen,
+  } satisfies SpawnRuleBase;
 
-    const normalizedBase = {
-      id: rule.id,
-      spawnNodeName:
-        rule.spawnNodeName ?? spawnNodeNameByRuleId.get(rule.id) ?? rule.id,
-      ...(rule.sourceTemplateName
-        ? { sourceTemplateName: rule.sourceTemplateName }
-        : {}),
-      entryRole: rule.entryRole,
-      spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
-      edges: rule.edges.map((edge) => {
-        const trigger = normalizeTopologyEdgeTrigger(edge.trigger);
-        return {
-          ...edge,
-          trigger,
-          ...(isActionRequiredTopologyTrigger(trigger, edge.maxTriggerRounds) &&
-          typeof edge.maxTriggerRounds === "number"
-            ? {
-                maxTriggerRounds: normalizeActionRequiredMaxRounds(
-                  edge.maxTriggerRounds,
-                ),
-              }
-            : {}),
-        };
-      }),
-      exitWhen: rule.exitWhen,
-    };
-    if (!reportToTrigger || !rule.reportToTemplateName) {
-      return normalizedBase;
-    }
+  if (rule.report === false) {
     return {
       ...normalizedBase,
-      reportToTemplateName: rule.reportToTemplateName,
-      reportToTrigger,
-      ...(rule.reportToMessageMode
-        ? { reportToMessageMode: rule.reportToMessageMode }
-        : {}),
-      ...(isActionRequiredTopologyTrigger(
-        reportToTrigger,
-        rule.reportToMaxTriggerRounds,
-      ) && typeof rule.reportToMaxTriggerRounds === "number"
-        ? {
-            reportToMaxTriggerRounds: normalizeActionRequiredMaxRounds(
-              rule.reportToMaxTriggerRounds,
-            ),
-          }
-        : {}),
+      report: false,
     };
-  });
+  }
+  const { templateName, trigger, messageMode, maxTriggerRounds } = rule.report;
+  if (!templateName) {
+    throw new Error(`spawn rule ${rule.id} 存在 report target 时，必须显式声明目标模板。`);
+  }
+  if (!trigger) {
+    throw new Error(`spawn rule ${rule.id} 存在 report target 时，必须显式声明 report trigger。`);
+  }
+  const normalizedTrigger = normalizeTopologyEdgeTrigger(trigger);
+  return {
+    ...normalizedBase,
+    report: {
+      templateName,
+      trigger: normalizedTrigger,
+      messageMode,
+      maxTriggerRounds:
+        isActionRequiredTopologyTrigger(
+          normalizedTrigger,
+          maxTriggerRounds === false ? undefined : maxTriggerRounds,
+        ) && maxTriggerRounds !== false
+          ? normalizeActionRequiredMaxRounds(maxTriggerRounds)
+          : false,
+    },
+  };
+}
+
+export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
+  const spawnNodeNameByRuleId = new Map(
+    topology.nodeRecords
+      .filter((node) => node.kind === "spawn")
+      .flatMap((node) => (node.spawnRuleId ? [[node.spawnRuleId, node.id] as const] : [])),
+  );
+  return (topology.spawnRules ?? []).map((rule) =>
+    normalizeSpawnRule(
+      rule,
+      spawnNodeNameByRuleId.get(rule.id) ?? rule.id,
+    ),
+  );
 }
 
 export function createTopologyLangGraphRecord(input: {

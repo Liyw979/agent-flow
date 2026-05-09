@@ -122,8 +122,12 @@ test("getTopologyDisplayNodeIds 会用 runtime 实例替换已展开的静态模
           },
         ],
         exitWhen: "all_completed",
-        reportToTemplateName: "线索发现",
-        reportToTrigger: "<default>",
+        report: {
+          templateName: "线索发现",
+          trigger: "<default>",
+          messageMode: "last",
+          maxTriggerRounds: false,
+        },
       },
     ],
   };
@@ -171,8 +175,12 @@ test("getTopologyDisplayNodeIds 在同模板多次 spawn 时只保留最新实�
         ],
         edges: [],
         exitWhen: "all_completed",
-        reportToTemplateName: "线索发现",
-        reportToTrigger: "<default>",
+        report: {
+          templateName: "线索发现",
+          trigger: "<default>",
+          messageMode: "last",
+          maxTriggerRounds: false,
+        },
       },
     ],
   };
@@ -226,7 +234,11 @@ test("upsertDebateSpawnDraft 会生成 GUI 需要保存的 spawn 节点、spawnR
     true,
   );
   assert.equal(next.spawnRules?.[0]?.id, "spawn-rule:疑点辩论工厂");
-  assert.equal(next.spawnRules?.[0]?.reportToTrigger, "<default>");
+  const firstRule = next.spawnRules ? next.spawnRules[0] : undefined;
+  if (!firstRule || firstRule.report === false) {
+    throw new Error("缺少 spawn report 配置");
+  }
+  assert.equal(firstRule.report.trigger, "<default>");
   assert.deepEqual(next.edges, [
     {
       source: "线索发现",

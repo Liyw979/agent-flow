@@ -69,8 +69,12 @@ test("createTopology 支持把 spawn 作为下游模式写进 DSL", () => {
       spawnedAgents: [{ role: "entry", templateName: "TaskReview" }],
       edges: [],
       exitWhen: "one_side_agrees",
-      reportToTemplateName: "Build",
-      reportToTrigger: "<default>",
+      report: {
+        templateName: "Build",
+        trigger: "<default>",
+        messageMode: "last",
+        maxTriggerRounds: false,
+      },
     },
   ]);
 });

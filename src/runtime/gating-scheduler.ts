@@ -543,14 +543,15 @@ export class GatingScheduler {
   }
 
   private isSpawnReportEdgeSatisfiedByRuntimeReport(edge: TopologyEdge, completedEdges: Set<string>): boolean {
-    const spawnRule = (this.topology.spawnRules ?? []).find((rule) => {
+    const spawnRule = this.topology.spawnRules?.find((rule) => {
       const spawnNodeName = rule.spawnNodeName
         || getTopologyNodeRecords(this.topology).find((node) => node.spawnRuleId === rule.id)?.id
         || "";
       return (
         spawnNodeName === edge.source
-        && rule.reportToTemplateName === edge.target
-        && rule.reportToTrigger === edge.trigger
+        && rule.report !== false
+        && rule.report.templateName === edge.target
+        && rule.report.trigger === edge.trigger
       );
     });
     if (!spawnRule) {

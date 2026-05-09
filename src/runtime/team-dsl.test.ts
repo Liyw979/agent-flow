@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildTopologyNodeRecords } from "@shared/types";
+import { buildTopologyNodeRecords, type SpawnRule, type SpawnRuleWithReport } from "@shared/types";
 
 import {
   readBuiltinTopology,
@@ -19,6 +19,13 @@ const BA_PROMPT = "你是 BA。";
 const CODE_DECISION_PROMPT = "你是 CodeReview。必须输出 <continue> 或 <complete>。";
 const UNIT_TEST_PROMPT = "你是 UnitTest。必须输出 <continue> 或 <complete>。";
 const TASK_DECISION_PROMPT = "你是 TaskReview。必须输出 <continue> 或 <complete>。";
+
+function expectReportRule(rule: SpawnRule | undefined): SpawnRuleWithReport {
+  if (!rule || rule.report === false) {
+    throw new Error("缺少 spawn report 配置");
+  }
+  return rule;
+}
 
 function promptWithTriggers(prompt: string, ...triggers: Array<`<${string}>`>): string {
   const normalizedTriggers = [...new Set(triggers)];
@@ -472,10 +479,11 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出论证挑战多轮 spaw
     { role: "漏洞论证", templateName: "漏洞论证" },
     { role: "讨论总结", templateName: "讨论总结" },
   ]);
-  assert.equal(compiled.topology.spawnRules?.[0]?.sourceTemplateName, "线索发现");
-  assert.equal(compiled.topology.spawnRules?.[0]?.reportToTemplateName, "线索发现");
-  assert.equal(compiled.topology.spawnRules?.[0]?.reportToTrigger, "<default>");
-  assert.equal(compiled.topology.spawnRules?.[0]?.reportToMessageMode, "none");
+  const firstRule = expectReportRule(compiled.topology.spawnRules?.[0]);
+  assert.equal(firstRule?.sourceTemplateName, "线索发现");
+  assert.equal(firstRule.report.templateName, "线索发现");
+  assert.equal(firstRule.report.trigger, "<default>");
+  assert.equal(firstRule.report.messageMode, "none");
   assert.deepEqual(
     compiled.topology.nodeRecords.find((node) => node.id === "讨论总结")?.initialMessageRouting,
     {
@@ -694,9 +702,10 @@ test("compileTeamDsl 会保留 spawn 子图回到外层的示例回流 label 边
     ],
   });
 
-  assert.equal(compiled.topology.spawnRules?.[0]?.reportToTrigger, "<continue>");
-  assert.equal(compiled.topology.spawnRules?.[0]?.reportToMessageMode, "none");
-  assert.equal(compiled.topology.spawnRules?.[0]?.reportToMaxTriggerRounds, 7);
+  const firstRule = expectReportRule(compiled.topology.spawnRules?.[0]);
+  assert.equal(firstRule.report.trigger, "<continue>");
+  assert.equal(firstRule.report.messageMode, "none");
+  assert.equal(firstRule.report.maxTriggerRounds, 7);
 });
 
 test("compileTeamDsl 会拒绝旧的 all message_type", () => {

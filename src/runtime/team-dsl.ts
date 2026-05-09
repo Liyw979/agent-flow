@@ -327,7 +327,7 @@ function assertTopologyAgentsDeclared(
     ...(topology.spawnRules?.flatMap((rule) => [
       rule.spawnNodeName,
       rule.sourceTemplateName,
-      rule.reportToTemplateName,
+      ...(("report" in rule && rule.report !== false) ? [rule.report.templateName] : []),
       ...rule.spawnedAgents.map((agent) => agent.templateName),
     ].filter((value): value is string => typeof value === "string" && value.length > 0)) ?? []),
   ]);
@@ -611,6 +611,20 @@ function collectGraphDslNodeDefinitions(
       isRootGraph: false,
       availableExternalTargets: childAvailableExternalTargets,
     });
+    const reportConfig = reportToTemplateName && reportToTrigger
+      ? ({
+          report: {
+            templateName: reportToTemplateName,
+            trigger: reportToTrigger,
+            messageMode: reportToMessageMode ?? "last",
+            maxTriggerRounds:
+              isActionRequiredTopologyTrigger(reportToTrigger, reportToMaxTriggerRounds)
+              && typeof reportToMaxTriggerRounds === "number"
+                ? reportToMaxTriggerRounds
+                : false,
+          },
+        } as const)
+      : ({ report: false as const });
     context.spawnRules.set(spawnRuleId, {
       id: spawnRuleId,
       spawnNodeName: parsedNode.id,
@@ -635,13 +649,7 @@ function collectGraphDslNodeDefinitions(
             : {}),
         })),
       exitWhen: "all_completed",
-      ...(reportToTemplateName ? { reportToTemplateName } : {}),
-      ...(reportToTrigger ? { reportToTrigger } : {}),
-      ...(reportToMessageMode ? { reportToMessageMode } : {}),
-      ...(reportToTrigger && isActionRequiredTopologyTrigger(reportToTrigger, reportToMaxTriggerRounds)
-        && typeof reportToMaxTriggerRounds === "number"
-        ? { reportToMaxTriggerRounds }
-        : {}),
+      ...reportConfig,
     });
   }
 }

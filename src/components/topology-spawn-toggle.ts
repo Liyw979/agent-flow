@@ -62,8 +62,12 @@ function buildSpawnRuleFromReachable(topology: TopologyRecord, sourceNodeId: str
       messageMode: "last" as const,
     })),
     exitWhen: "one_side_agrees",
-    reportToTemplateName: reportTarget,
-    reportToTrigger: DEFAULT_TOPOLOGY_TRIGGER,
+    report: {
+      templateName: reportTarget,
+      trigger: DEFAULT_TOPOLOGY_TRIGGER,
+      messageMode: "last",
+      maxTriggerRounds: false,
+    },
   };
 }
 

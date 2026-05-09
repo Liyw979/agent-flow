@@ -29,6 +29,7 @@ const topology: TopologyRecord = {
       ],
       edges: [],
       exitWhen: "all_completed",
+      report: false,
     },
   ],
 };
