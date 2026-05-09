@@ -122,8 +122,8 @@ export interface TopologyNodeRecord {
 export interface TaskAgentRecord {
   id: string;
   taskId: string;
-  opencodeSessionId: string | null;
-  opencodeAttachBaseUrl: string | null;
+  opencodeSessionId: string;
+  opencodeAttachBaseUrl: string;
   status: AgentStatus;
   runCount: number;
 }

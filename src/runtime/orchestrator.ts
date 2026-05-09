@@ -147,7 +147,7 @@ interface TaskRuntimeOverlay {
   taskId: string;
   cwd: string;
   runtimeTarget: OpenCodeRuntimeTarget;
-  attachBaseUrl: string | null;
+  attachBaseUrl: string;
   agentSessions: Map<string, string>;
   persistedActivityIdsByAgent: Map<string, Set<string>>;
   activityFreshnessByMessageId: Map<string, RuntimeActivityFreshness>;
@@ -548,8 +548,8 @@ export class Orchestrator {
       this.store.insertTaskAgent(normalizedCwd, {
         taskId,
         id: agent.id,
-        opencodeSessionId: null,
-        opencodeAttachBaseUrl: null,
+        opencodeSessionId: "",
+        opencodeAttachBaseUrl: "",
         status: "idle",
         runCount: 0,
       });
@@ -704,8 +704,8 @@ export class Orchestrator {
       this.store.insertTaskAgent(task.cwd, {
         taskId: task.id,
         id: agent.id,
-        opencodeSessionId: null,
-        opencodeAttachBaseUrl: null,
+        opencodeSessionId: "",
+        opencodeAttachBaseUrl: "",
         status: "idle",
         runCount: 0,
       });
@@ -727,8 +727,8 @@ export class Orchestrator {
     this.store.insertTaskAgent(task.cwd, {
       taskId: task.id,
       id: runtimeAgentId,
-      opencodeSessionId: null,
-      opencodeAttachBaseUrl: null,
+      opencodeSessionId: "",
+      opencodeAttachBaseUrl: "",
       status: "idle",
       runCount: 0,
     });
@@ -1082,7 +1082,7 @@ export class Orchestrator {
       taskId: task.id,
       cwd: task.cwd,
       runtimeTarget: this.getTaskRuntimeTarget(task),
-      attachBaseUrl: null,
+      attachBaseUrl: "",
       agentSessions: new Map(),
       persistedActivityIdsByAgent: new Map(),
       activityFreshnessByMessageId: new Map(),
@@ -1098,8 +1098,8 @@ export class Orchestrator {
     const overlay = this.taskRuntimeOverlays.get(task.id);
     return agents.map((agent) => ({
       ...agent,
-      opencodeSessionId: overlay?.agentSessions.get(agent.id) ?? null,
-      opencodeAttachBaseUrl: overlay?.attachBaseUrl ?? null,
+      opencodeSessionId: overlay?.agentSessions.get(agent.id) ?? "",
+      opencodeAttachBaseUrl: overlay ? overlay.attachBaseUrl : "",
     }));
   }
 
@@ -1108,22 +1108,22 @@ export class Orchestrator {
     agent: TaskAgentRecord,
   ): Promise<string> {
     const overlay = this.ensureTaskRuntimeOverlay(task);
-    const existingSessionId = overlay.agentSessions.get(agent.id) ?? null;
+    const existingSessionId = overlay.agentSessions.get(agent.id) ?? "";
     if (existingSessionId) {
       return existingSessionId;
     }
 
     this.setInjectedConfigForTask(task);
+    if (!overlay.attachBaseUrl) {
+      overlay.attachBaseUrl = await this.opencodeClient.getAttachBaseUrl(
+        overlay.runtimeTarget,
+      );
+    }
     const sessionId = await this.opencodeClient.createSession(
       overlay.runtimeTarget,
       `${task.title}:${agent.id}`,
     );
     overlay.agentSessions.set(agent.id, sessionId);
-    if (!overlay.attachBaseUrl) {
-      overlay.attachBaseUrl = await this.opencodeClient
-        .getAttachBaseUrl(overlay.runtimeTarget)
-        .catch(() => null);
-    }
     return sessionId;
   }
 
@@ -1198,7 +1198,7 @@ export class Orchestrator {
   private async launchAgentTerminal(
     projectPath: string,
     opencodeSessionId: string,
-    sessionAttachBaseUrl: string | null,
+    sessionAttachBaseUrl: string,
   ) {
     if (!sessionAttachBaseUrl) {
       throw new Error("当前 Agent 还没有可 attach 的 OpenCode 地址。");

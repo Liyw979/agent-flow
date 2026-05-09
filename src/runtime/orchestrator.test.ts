@@ -569,9 +569,9 @@ test("漏洞团队任务初始化时不会为仅作为 spawn 模板存在的静�
   }
 
   assert.equal(clueFinder.opencodeSessionId, "session:vuln-demo:线索发现");
-  assert.equal(vulnerabilityArguer.opencodeSessionId, null);
-  assert.equal(vulnerabilityChallenger.opencodeSessionId, null);
-  assert.equal(summaryAgent.opencodeSessionId, null);
+  assert.equal(vulnerabilityArguer.opencodeSessionId, "");
+  assert.equal(vulnerabilityChallenger.opencodeSessionId, "");
+  assert.equal(summaryAgent.opencodeSessionId, "");
 });
 
 test("单节点任务进入 finished 时不会因为缺少 workspace cwd 而在后台崩溃", async () => {

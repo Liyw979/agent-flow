@@ -69,8 +69,8 @@ function createTask(messages: MessageRecord[]): TaskSnapshot {
       {
         id: AGENT_ID,
         taskId: TASK_ID,
-        opencodeSessionId: null,
-        opencodeAttachBaseUrl: null,
+        opencodeSessionId: "",
+        opencodeAttachBaseUrl: "",
         status: "running",
         runCount: messages.length,
       },

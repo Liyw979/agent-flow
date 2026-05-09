@@ -79,7 +79,7 @@ function createSingleAgentTopology(agentId: string) {
 }
 
 function createUiSnapshot(input: {
-  agentSessionId: string | null;
+  agentSessionId: string;
   messages: TaskSnapshot["messages"];
 }): UiSnapshotPayload {
   return {
@@ -113,7 +113,7 @@ function createUiSnapshot(input: {
           id: "漏洞挑战-1",
           taskId: TASK_ID,
           opencodeSessionId: input.agentSessionId,
-          opencodeAttachBaseUrl: input.agentSessionId ? "http://localhost:4310" : null,
+          opencodeAttachBaseUrl: input.agentSessionId ? "http://localhost:4310" : "",
           status: "completed",
           runCount: 1,
         },
@@ -349,7 +349,7 @@ test("App 在 ui-snapshot 自动轮询后会把新 final 消息展示出来", as
   let uiSnapshotRequestCount = 0;
   const snapshots = [
     createUiSnapshot({
-      agentSessionId: null,
+      agentSessionId: "",
       messages: [],
     }),
     createUiSnapshot({
@@ -387,7 +387,7 @@ test("App 会把自动轮询带回的 attach 状态更新到界面", async () =>
   let uiSnapshotRequestCount = 0;
   const snapshots = [
     createUiSnapshot({
-      agentSessionId: null,
+      agentSessionId: "",
       messages: createAgentFinalMessage(),
     }),
     createUiSnapshot({
@@ -428,7 +428,7 @@ test("App 在后台标签页也会继续自动轮询", async () => {
   let uiSnapshotRequestCount = 0;
   const snapshots = [
     createUiSnapshot({
-      agentSessionId: null,
+      agentSessionId: "",
       messages: [],
     }),
     createUiSnapshot({
@@ -467,7 +467,7 @@ test("submitTaskMutation 成功后会失效 ui-snapshot 查询并立即重拉", 
   let uiSnapshotRequestCount = 0;
   let submitTaskRequestCount = 0;
   let currentSnapshot = createUiSnapshot({
-    agentSessionId: null,
+    agentSessionId: "",
     messages: [],
   });
   const refreshedSnapshot = createUiSnapshot({

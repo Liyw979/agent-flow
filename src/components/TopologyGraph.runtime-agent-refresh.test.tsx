@@ -160,8 +160,8 @@ test("task snapshot 尚未带上 session 时，TopologyGraph 不会启用 attach
       {
         id: "漏洞挑战-2",
         taskId: TASK_ID,
-        opencodeSessionId: null,
-        opencodeAttachBaseUrl: null,
+        opencodeSessionId: "",
+        opencodeAttachBaseUrl: "",
         status: "running",
         runCount: 1,
       },

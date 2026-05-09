@@ -105,14 +105,14 @@ export function isSemanticallyOlderUiSnapshot(
       return true;
     }
 
-    const baselineSessionId = baselineAgent.opencodeSessionId ?? "";
-    const candidateSessionId = candidateAgent.opencodeSessionId ?? "";
+    const baselineSessionId = baselineAgent.opencodeSessionId;
+    const candidateSessionId = candidateAgent.opencodeSessionId;
     if (baselineSessionId.trim().length > 0 && candidateSessionId.trim().length === 0) {
       return true;
     }
 
-    const baselineAttachBaseUrl = baselineAgent.opencodeAttachBaseUrl ?? "";
-    const candidateAttachBaseUrl = candidateAgent.opencodeAttachBaseUrl ?? "";
+    const baselineAttachBaseUrl = baselineAgent.opencodeAttachBaseUrl;
+    const candidateAttachBaseUrl = candidateAgent.opencodeAttachBaseUrl;
     if (baselineAttachBaseUrl.trim().length > 0 && candidateAttachBaseUrl.trim().length === 0) {
       return true;
     }
@@ -150,14 +150,14 @@ export function isSemanticallyNewerUiSnapshot(
       return true;
     }
 
-    const baselineSessionId = baselineAgent.opencodeSessionId ?? "";
-    const candidateSessionId = candidateAgent.opencodeSessionId ?? "";
+    const baselineSessionId = baselineAgent.opencodeSessionId;
+    const candidateSessionId = candidateAgent.opencodeSessionId;
     if (baselineSessionId.trim().length === 0 && candidateSessionId.trim().length > 0) {
       return true;
     }
 
-    const baselineAttachBaseUrl = baselineAgent.opencodeAttachBaseUrl ?? "";
-    const candidateAttachBaseUrl = candidateAgent.opencodeAttachBaseUrl ?? "";
+    const baselineAttachBaseUrl = baselineAgent.opencodeAttachBaseUrl;
+    const candidateAttachBaseUrl = candidateAgent.opencodeAttachBaseUrl;
     if (baselineAttachBaseUrl.trim().length === 0 && candidateAttachBaseUrl.trim().length > 0) {
       return true;
     }

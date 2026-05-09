@@ -36,7 +36,11 @@ export function resolveChatMessageAttachButtonState(input: {
   const taskAgent = input.taskAgents.find((entry) => entry.id === input.sender);
   const attachState = resolveAgentAttachButtonState({
     agentId: input.sender,
-    sessionState: resolveSessionStateFromSessionIdText(taskAgent?.opencodeSessionId ?? ""),
+    sessionState: taskAgent
+      ? resolveSessionStateFromSessionIdText(taskAgent.opencodeSessionId)
+      : {
+          kind: "absent",
+        },
     openingState: input.openingAgentTerminalId === input.sender ? "opening" : "idle",
   });
 
