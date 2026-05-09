@@ -1,5 +1,4 @@
 import {
-  getSpawnRules,
   getTopologyNodeRecords,
   isActionRequiredTopologyTrigger,
   type RuntimeTopologyEdge,
@@ -43,7 +42,7 @@ export function instantiateSpawnBundle(input: {
   item: SpawnItemPayload;
   instanceIndex?: number;
 }): SpawnBundleInstantiation {
-  const rule = getSpawnRules(input.topology).find((candidate) => candidate.id === input.spawnRuleId);
+  const rule = input.topology.spawnRules?.find((candidate) => candidate.id === input.spawnRuleId);
   if (!rule) {
     throw new Error(`spawn rule 不存在：${input.spawnRuleId}`);
   }
@@ -130,13 +129,13 @@ export function instantiateSpawnBundle(input: {
     });
   }
 
-  const reportNode = rule.reportToTemplateName
+  const reportNode = rule.report !== false
     ? topologyNodes.find(
-        (node) => node.templateName === rule.reportToTemplateName || node.id === rule.reportToTemplateName,
+        (node) => node.templateName === rule.report.templateName || node.id === rule.report.templateName,
       )
     : null;
-  if (rule.reportToTemplateName && !reportNode) {
-    throw new Error(`spawn rule 缺少 report target template：${rule.reportToTemplateName}`);
+  if (rule.report !== false && !reportNode) {
+    throw new Error(`spawn rule 缺少 report target template：${rule.report.templateName}`);
   }
 
   const terminalRoles = resolveSpawnRuleTerminalRoles(rule);
@@ -148,17 +147,19 @@ export function instantiateSpawnBundle(input: {
       edge.source === spawnNode.id
       && edge.target === reportNode.id)
     : undefined;
-  if (reportSourceNode && reportNode) {
-    const reportTrigger = spawnToReportEdge?.trigger ?? rule.reportToTrigger;
-    if (!reportTrigger) {
-      throw new Error(`spawn rule ${rule.id} 缺少 reportToTrigger`);
-    }
-    const reportMaxTriggerRounds = spawnToReportEdge?.maxTriggerRounds ?? rule.reportToMaxTriggerRounds;
+  if (reportSourceNode && reportNode && rule.report !== false) {
+    const reportTrigger = spawnToReportEdge?.trigger ?? rule.report.trigger;
+    const reportMaxTriggerRounds = spawnToReportEdge?.maxTriggerRounds
+      ?? (rule.report.maxTriggerRounds === false
+        ? undefined
+        : rule.report.maxTriggerRounds);
     edges.push({
       source: reportSourceNode.id,
       target: reportNode.id,
       trigger: reportTrigger,
-      messageMode: spawnToReportEdge?.messageMode ?? rule.reportToMessageMode ?? "last",
+      messageMode:
+        spawnToReportEdge?.messageMode
+        ?? rule.report.messageMode,
       ...(isActionRequiredTopologyTrigger(reportTrigger, reportMaxTriggerRounds)
         && typeof reportMaxTriggerRounds === "number"
         ? { maxTriggerRounds: reportMaxTriggerRounds }
@@ -204,17 +205,18 @@ export function validateSpawnRule(topology: TopologyRecord, rule: SpawnRule): vo
   if (!knownNodeIds.has(effectiveSpawnNodeName) && !knownTemplateNames.has(effectiveSpawnNodeName)) {
     throw new Error(`spawn rule 对应的 spawn 节点不存在：${effectiveSpawnNodeName || rule.id}`);
   }
-  if (rule.reportToTemplateName && !knownTemplateNames.has(rule.reportToTemplateName) && !knownNodeIds.has(rule.reportToTemplateName)) {
-    throw new Error(`spawn rule report target 不存在：${rule.reportToTemplateName}`);
-  }
-  if (rule.reportToTemplateName && !rule.reportToTrigger) {
-    throw new Error(`spawn rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`);
+  if (
+    rule.report !== false
+    && !knownTemplateNames.has(rule.report.templateName)
+    && !knownNodeIds.has(rule.report.templateName)
+  ) {
+    throw new Error(`spawn rule report target 不存在：${rule.report.templateName}`);
   }
   const knownRoles = new Set(rule.spawnedAgents.map((agent) => agent.role));
   if (!knownRoles.has(rule.entryRole)) {
     throw new Error(`spawn rule entry role 不存在：${rule.entryRole}`);
   }
-  if (rule.reportToTemplateName && resolveSpawnRuleTerminalRoles(rule).length !== 1) {
+  if (rule.report !== false && resolveSpawnRuleTerminalRoles(rule).length !== 1) {
     throw new Error(`spawn rule ${rule.id} 存在 report target 时，子图必须有且仅有一个终局 role。`);
   }
   for (const edge of rule.edges) {

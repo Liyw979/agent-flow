@@ -24,6 +24,7 @@ import {
   createTopologyLangGraphRecord,
   getTopologyEdgeId,
   getTopologyNodeRecords,
+  normalizeSpawnRule,
   normalizeTopologyEdgeTrigger,
   resolveTriggerRoutingKindForSource,
   type DeleteTaskPayload,
@@ -34,6 +35,7 @@ import {
   type OpenAgentTerminalPayload,
   resolvePrimaryTopologyStartTarget,
   resolveTopologyAgentOrder,
+  type SpawnRule,
   type SubmitTaskPayload,
   type TaskAgentRecord,
   type TaskRecord,
@@ -107,6 +109,59 @@ import {
 import { launchTerminalCommand } from "./terminal-launcher";
 
 const RUNTIME_PROGRESS_SYNC_INTERVAL_MS = 200;
+
+type SpawnRuleInputBase = Omit<SpawnRule, "report">;
+
+type SpawnRuleInput =
+  | (SpawnRuleInputBase & {
+      report: SpawnRule["report"];
+    })
+  | (SpawnRuleInputBase & {
+      reportToTemplateName: string;
+    })
+  | (SpawnRuleInputBase & {
+      reportToTemplateName: string;
+      reportToTrigger: string;
+      reportToMessageMode: "none" | "last";
+      reportToMaxTriggerRounds: number | false;
+    })
+  | SpawnRuleInputBase;
+
+type TopologyInputRecord = Omit<TopologyRecord, "spawnRules"> & {
+  spawnRules?: SpawnRuleInput[];
+};
+
+type UpdateTopologyInputPayload = Omit<UpdateTopologyPayload, "topology"> & {
+  topology: TopologyInputRecord;
+};
+
+function coerceSpawnRuleInput(
+  rule: SpawnRuleInput,
+): SpawnRule {
+  if ("report" in rule) {
+    return rule;
+  }
+  if (!("reportToTemplateName" in rule)) {
+    return {
+      ...rule,
+      report: false,
+    };
+  }
+  if (!("reportToTrigger" in rule)) {
+    throw new Error(
+      `spawn rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`,
+    );
+  }
+  return {
+    ...rule,
+    report: {
+      templateName: rule.reportToTemplateName,
+      trigger: rule.reportToTrigger,
+      messageMode: rule.reportToMessageMode,
+      maxTriggerRounds: rule.reportToMaxTriggerRounds,
+    },
+  };
+}
 
 interface OrchestratorOptions {
   userDataPath: string;
@@ -316,7 +371,7 @@ export class Orchestrator {
   }
 
   async saveTopology(
-    payload: UpdateTopologyPayload,
+    payload: UpdateTopologyInputPayload,
   ): Promise<WorkspaceSnapshot> {
     const normalizedCwd = path.resolve(payload.cwd);
     const agents = this.listWorkspaceAgents(normalizedCwd);
@@ -1342,14 +1397,14 @@ export class Orchestrator {
 
   private normalizeTopology(
     agents: AgentRecord[],
-    topology: TopologyRecord,
+    topology: TopologyInputRecord,
   ): TopologyRecord {
     const validNames = new Set(agents.map((item) => item.id));
     const agentByName = new Map(agents.map((agent) => [agent.id, agent]));
     if (!topology.nodeRecords || topology.nodeRecords.length === 0) {
       throw new Error("拓扑缺少 nodeRecords，无法继续运行。");
     }
-    const rawNodeRecords: TopologyNodeRecord[] = getTopologyNodeRecords(topology);
+    const rawNodeRecords: TopologyNodeRecord[] = topology.nodeRecords;
     const spawnNodeIds = new Set(
       rawNodeRecords
         .filter((node) => node.kind === "spawn" && node.id)
@@ -1440,88 +1495,27 @@ export class Orchestrator {
           ...(writable ? { writable: true } : {}),
         };
       });
-    const spawnRules = topology.spawnRules
-      ?.filter((rule) => {
-        const spawnNodeName =
-          rule.spawnNodeName ||
-          normalizedNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id ||
-          "";
-        return (
-          rule.id &&
-          rule.id &&
-          spawnNodeName &&
-          rule.entryRole &&
-          validTopologyNames.has(spawnNodeName) &&
-          (!rule.sourceTemplateName ||
-            validNames.has(rule.sourceTemplateName)) &&
-          (!rule.reportToTemplateName ||
-            validNames.has(rule.reportToTemplateName)) &&
-          rule.spawnedAgents.every(
-            (agent) => agent.role && validNames.has(agent.templateName),
-          )
-        );
-      })
-      .map((rule) => {
-        if (rule.reportToTemplateName && !rule.reportToTrigger) {
-          throw new Error(
-            `spawn rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`,
-          );
-        }
-        const normalizedBase = {
-          id: rule.id,
-          spawnNodeName:
-            rule.spawnNodeName ||
-            normalizedNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id ||
-            rule.id,
-          ...(rule.sourceTemplateName
-            ? { sourceTemplateName: rule.sourceTemplateName }
-            : {}),
-          entryRole: rule.entryRole,
-          spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
-          edges: rule.edges.map((edge) => {
-            const trigger = normalizeTopologyEdgeTrigger(edge.trigger);
-            return {
-              ...edge,
-              trigger,
-              ...(isActionRequiredTopologyTrigger(
-                trigger,
-                edge.maxTriggerRounds,
-              ) && edge.maxTriggerRounds !== undefined
-                ? {
-                    maxTriggerRounds: normalizeActionRequiredMaxRounds(
-                      edge.maxTriggerRounds,
-                    ),
-                  }
-                : {}),
-            };
-          }),
-          exitWhen: rule.exitWhen,
-        };
-        if (!rule.reportToTemplateName || !rule.reportToTrigger) {
-          return normalizedBase;
-        }
-        const normalizedReportTrigger = normalizeTopologyEdgeTrigger(
-          rule.reportToTrigger,
-        );
-        return {
-          ...normalizedBase,
-          reportToTemplateName: rule.reportToTemplateName,
-          reportToTrigger: normalizedReportTrigger,
-          ...(rule.reportToMessageMode
-            ? { reportToMessageMode: rule.reportToMessageMode }
-            : {}),
-          ...(isActionRequiredTopologyTrigger(
-            normalizedReportTrigger,
-            rule.reportToMaxTriggerRounds,
-          ) && rule.reportToMaxTriggerRounds !== undefined
-            ? {
-                reportToMaxTriggerRounds: normalizeActionRequiredMaxRounds(
-                  rule.reportToMaxTriggerRounds,
-                ),
-              }
-            : {}),
-        };
-      });
+    const normalizedSpawnRules = topology.spawnRules?.map((rule) => {
+      const spawnNodeName =
+        rule.spawnNodeName ||
+        normalizedNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id ||
+        rule.id;
+      return normalizeSpawnRule(
+        coerceSpawnRuleInput(rule),
+        spawnNodeName,
+      );
+    });
+    const spawnRules: SpawnRule[] | undefined = normalizedSpawnRules?.filter((rule) =>
+      rule.id
+      && rule.spawnNodeName
+      && rule.entryRole
+      && validTopologyNames.has(rule.spawnNodeName)
+      && (!rule.sourceTemplateName || validNames.has(rule.sourceTemplateName))
+      && (rule.report === false || validNames.has(rule.report.templateName))
+      && rule.spawnedAgents.every(
+        (agent) => agent.role && validNames.has(agent.templateName),
+      ),
+    );
     const explicitEndIncoming = (
       topology.langgraph?.end?.incoming ?? []
     ).filter(
@@ -1583,7 +1577,7 @@ export class Orchestrator {
       langgraph,
       nodeRecords,
       ...(spawnRules ? { spawnRules } : {}),
-    };
+    } satisfies TopologyRecord;
   }
 
   private getLangGraphRuntime(cwd: string): LangGraphRuntime {

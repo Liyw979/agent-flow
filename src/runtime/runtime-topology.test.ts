@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { TopologyRecord } from "@shared/types";
+import { getSpawnRules, type SpawnRule, type SpawnRuleWithReport, type TopologyRecord } from "@shared/types";
 
 import { instantiateSpawnBundle, instantiateSpawnBundles, validateSpawnRule } from "./runtime-topology";
+
+function expectReportRule(rule: SpawnRule | undefined): SpawnRuleWithReport {
+  if (!rule || rule.report === false) {
+    throw new Error("缺少 spawn report 配置");
+  }
+  return rule;
+}
 
 function createVulnTopology(): TopologyRecord {
   return {
@@ -37,8 +44,12 @@ function createVulnTopology(): TopologyRecord {
           { sourceRole: "con", targetRole: "summary", trigger: "<complete>", messageMode: "last" },
         ],
         exitWhen: "one_side_agrees",
-        reportToTemplateName: "线索发现",
-        reportToTrigger: "<default>",
+        report: {
+          templateName: "线索发现",
+          trigger: "<default>",
+          messageMode: "last",
+          maxTriggerRounds: false,
+        },
       },
     ],
   };
@@ -46,7 +57,7 @@ function createVulnTopology(): TopologyRecord {
 
 test("validateSpawnRule 可以验证漏洞辩论规则引用的模板和角色都存在", () => {
   const topology = createVulnTopology();
-  const rule = topology.spawnRules?.[0];
+  const rule = getSpawnRules(topology)[0];
   assert.notEqual(rule, undefined);
   validateSpawnRule(topology, rule!);
 });
@@ -164,13 +175,14 @@ test("instantiateSpawnBundle 会继承 source -> spawn 的 messageMode 到 entry
 test("instantiateSpawnBundle 在未声明 spawn -> report 静态边时，会回退使用 spawnRule.reportToMessageMode", () => {
   const topology = createVulnTopology();
   topology.edges = topology.edges.filter((edge) => !(edge.source === "疑点辩论工厂" && edge.target === "线索发现"));
-  const firstRule = topology.spawnRules?.[0];
-  if (firstRule?.reportToTemplateName) {
-    topology.spawnRules![0] = {
-      ...firstRule,
-      reportToMessageMode: "none",
-    };
-  }
+  const firstRule = expectReportRule(topology.spawnRules?.[0]);
+  topology.spawnRules![0] = {
+    ...firstRule,
+    report: {
+      ...firstRule.report,
+      messageMode: "none",
+    },
+  };
 
   const bundle = instantiateSpawnBundle({
     topology,
@@ -193,15 +205,16 @@ test("instantiateSpawnBundle 在未声明 spawn -> report 静态边时，会回�
 test("instantiateSpawnBundle 在未声明 spawn -> report 静态边时，会回退使用 spawnRule.reportToMaxTriggerRounds", () => {
   const topology = createVulnTopology();
   topology.edges = topology.edges.filter((edge) => !(edge.source === "疑点辩论工厂" && edge.target === "线索发现"));
-  const firstRule = topology.spawnRules?.[0];
-  if (firstRule?.reportToTemplateName) {
-    topology.spawnRules![0] = {
-      ...firstRule,
-      reportToTrigger: "<continue>",
-      reportToMessageMode: "none",
-      reportToMaxTriggerRounds: 7,
-    };
-  }
+  const firstRule = expectReportRule(topology.spawnRules?.[0]);
+  topology.spawnRules![0] = {
+    ...firstRule,
+    report: {
+      ...firstRule.report,
+      trigger: "<continue>",
+      messageMode: "none",
+      maxTriggerRounds: 7,
+    },
+  };
 
   const bundle = instantiateSpawnBundle({
     topology,

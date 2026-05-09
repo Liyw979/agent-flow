@@ -294,6 +294,7 @@ test("getSpawnRules 保留显式声明的 messageMode，不再依赖默认补值
           },
         ],
         exitWhen: "all_completed",
+        report: false,
       },
     ],
   };
@@ -306,38 +307,4 @@ test("getSpawnRules 保留显式声明的 messageMode，不再依赖默认补值
       messageMode: "last",
     },
   ]);
-});
-
-test("getSpawnRules 会拒绝缺少 reportToTrigger 的 spawn report 配置", () => {
-  const topology: TopologyRecord = {
-    nodes: ["线索发现", "疑点辩论", "漏洞论证", "漏洞挑战"],
-    edges: [],
-    nodeRecords: [
-      { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
-      { id: "疑点辩论", kind: "spawn", templateName: "疑点辩论", spawnRuleId: "spawn-rule:疑点辩论", initialMessageRouting: { mode: "inherit" } },
-      { id: "漏洞论证", kind: "agent", templateName: "漏洞论证", initialMessageRouting: { mode: "inherit" } },
-      { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战", initialMessageRouting: { mode: "inherit" } },
-    ],
-    spawnRules: [
-      {
-        id: "spawn-rule:疑点辩论",
-        spawnNodeName: "疑点辩论",
-        entryRole: "pro",
-        spawnedAgents: [
-          { role: "pro", templateName: "漏洞论证" },
-          { role: "con", templateName: "漏洞挑战" },
-        ],
-        edges: [],
-        exitWhen: "all_completed",
-        reportToTemplateName: "线索发现",
-        reportToTrigger: "<default>",
-      },
-    ],
-  };
-  Reflect.deleteProperty(topology.spawnRules![0]!, "reportToTrigger");
-
-  assert.throws(
-    () => getSpawnRules(topology),
-    /必须显式声明 reportToTrigger/u,
-  );
 });

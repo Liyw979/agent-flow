@@ -264,8 +264,12 @@ function buildSpawnRules(input: CreateTopologyDslInput): SpawnRule[] {
       spawnedAgents: normalizeSpawnedAgents(target, config),
       edges: normalizeSpawnLinks(config),
       exitWhen: "one_side_agrees",
-      reportToTemplateName: config?.reportTo ?? sourceTemplateName,
-      reportToTrigger: DEFAULT_TOPOLOGY_TRIGGER,
+      report: {
+        templateName: config?.reportTo ?? sourceTemplateName,
+        trigger: DEFAULT_TOPOLOGY_TRIGGER,
+        messageMode: "last",
+        maxTriggerRounds: false,
+      },
     };
   });
 }

@@ -150,8 +150,12 @@ export function upsertDebateSpawnDraft(
       { sourceRole: "con", targetRole: "summary", trigger: DEBATE_SUMMARY_TRIGGER, messageMode: "last" },
     ],
     exitWhen: "one_side_agrees",
-    reportToTemplateName: input.reportToTemplateName,
-    reportToTrigger: DEFAULT_TOPOLOGY_TRIGGER,
+    report: {
+      templateName: input.reportToTemplateName,
+      trigger: DEFAULT_TOPOLOGY_TRIGGER,
+      messageMode: "last",
+      maxTriggerRounds: false,
+    },
   };
 
   const nextEdges = topology.edges.filter(

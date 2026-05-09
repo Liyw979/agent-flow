@@ -164,9 +164,12 @@ function createWorkspaceAndTask(): {
           },
         ],
         exitWhen: "all_completed",
-        reportToTemplateName: "线索发现",
-        reportToTrigger: "<default>" as const,
-        reportToMessageMode: "none" as const,
+        report: {
+          templateName: "线索发现",
+          trigger: "<default>" as const,
+          messageMode: "none" as const,
+          maxTriggerRounds: false,
+        },
       },
     ],
   };

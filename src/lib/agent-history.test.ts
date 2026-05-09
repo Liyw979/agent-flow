@@ -684,9 +684,12 @@ test("buildAgentHistoryItems 会按 runtime agent 对应模板的 trigger 集合
           },
         ],
         exitWhen: "all_completed",
-        reportToTemplateName: "线索发现",
-        reportToTrigger: "<default>",
-        reportToMessageMode: "none",
+        report: {
+          templateName: "线索发现",
+          trigger: "<default>",
+          messageMode: "none",
+          maxTriggerRounds: false,
+        },
       },
     ],
   };
@@ -826,9 +829,12 @@ test("buildAgentHistoryItems 遇到归属多个 spawn rule 的模板时不会猜
           },
         ],
         exitWhen: "all_completed",
-        reportToTemplateName: "入口甲",
-        reportToTrigger: "<default>",
-        reportToMessageMode: "none",
+        report: {
+          templateName: "入口甲",
+          trigger: "<default>",
+          messageMode: "none",
+          maxTriggerRounds: false,
+        },
       },
       {
         id: "spawn-rule:乙",
@@ -845,9 +851,12 @@ test("buildAgentHistoryItems 遇到归属多个 spawn rule 的模板时不会猜
           },
         ],
         exitWhen: "all_completed",
-        reportToTemplateName: "入口乙",
-        reportToTrigger: "<default>",
-        reportToMessageMode: "none",
+        report: {
+          templateName: "入口乙",
+          trigger: "<default>",
+          messageMode: "none",
+          maxTriggerRounds: false,
+        },
       },
     ],
   };
