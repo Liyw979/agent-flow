@@ -5,8 +5,7 @@ import { buildTopologyNodeRecords, type SpawnRule, type SpawnRuleWithReport } fr
 
 import {
   readBuiltinTopology,
-  readBuiltinVulnerabilityTopology,
-} from "./builtin-topology-test-helpers";
+} from "../../test-support/runtime/builtin-topology-test-helpers";
 import {
   compileTeamDsl,
   matchesAppliedTeamDsl,
@@ -446,7 +445,7 @@ test("compileTeamDsl 会把 graph.entry 编译进 LangGraph START，并保持 EN
 });
 
 test("compileTeamDsl 支持从内置漏洞拓扑编译出论证挑战多轮 spawn 辩论拓扑", () => {
-  const compiled = compileTeamDsl(readBuiltinVulnerabilityTopology());
+  const compiled = compileTeamDsl(readBuiltinTopology("vulnerability.json5"));
 
   assert.deepEqual(
     compiled.agents.map((agent) => agent.id),

@@ -73,7 +73,7 @@ function buildTopologyTrigger(name: string): TopologyTrigger {
 
 export const DEFAULT_TOPOLOGY_TRIGGER = buildTopologyTrigger("default");
 
-export interface SpawnedAgentTemplate {
+interface SpawnedAgentTemplate {
   role: SpawnedAgentRole;
   templateName: string;
 }

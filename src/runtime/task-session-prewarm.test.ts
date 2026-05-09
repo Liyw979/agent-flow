@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 
 import type { TaskAgentRecord, TopologyRecord } from "@shared/types";
 
-import { compileBuiltinVulnerabilityTopology } from "./builtin-topology-test-helpers";
+import { compileBuiltinTopology } from "../../test-support/runtime/builtin-topology-test-helpers";
 import { resolveTaskAgentIdsToPrewarm } from "./task-session-prewarm";
 
 test("resolveTaskAgentIdsToPrewarm 不会为仅作为 spawn 模板存在的静态 agent 预建 session", () => {
-  const topology: TopologyRecord = compileBuiltinVulnerabilityTopology().topology;
+  const topology: TopologyRecord = compileBuiltinTopology("vulnerability.json5").topology;
   const taskAgents: TaskAgentRecord[] = [
     {
       taskId: "task-1",

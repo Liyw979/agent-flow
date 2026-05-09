@@ -17,7 +17,7 @@ function measureCharacterWidth(char: string) {
   return /[^\u0000-\u00ff]/u.test(char) ? 2 : 1;
 }
 
-export function measureDisplayWidth(value: string) {
+function measureDisplayWidth(value: string) {
   let width = 0;
   for (const char of value) {
     width += measureCharacterWidth(char);

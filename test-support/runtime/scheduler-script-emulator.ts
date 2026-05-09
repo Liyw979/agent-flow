@@ -12,10 +12,10 @@ import {
   createUserDispatchDecision,
   type GraphAgentResult,
   type GraphRoutingDecision,
-} from "./gating-router";
-import { parseDecision, type AllowedDecisionTrigger } from "./decision-parser";
-import { buildEffectiveTopology } from "./runtime-topology-graph";
-import { isExecutionDecisionAgent } from "./decision-agent-context";
+} from "@/runtime/gating-router";
+import { parseDecision, type AllowedDecisionTrigger } from "@/runtime/decision-parser";
+import { buildEffectiveTopology } from "@/runtime/runtime-topology-graph";
+import { isExecutionDecisionAgent } from "@/runtime/decision-agent-context";
 import {
   extractLeadingMention,
   formatSchedulerScriptMessageLine,

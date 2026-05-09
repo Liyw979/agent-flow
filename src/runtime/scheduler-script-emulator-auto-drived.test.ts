@@ -1,11 +1,7 @@
 import test from "node:test";
 
-import { assertAutoDerivedNegativeScripts } from "./scheduler-script-emulator";
-import { createTopology as createTopologyCore } from "./topology-test-dsl";
-
-function createTopology(...args: Parameters<typeof createTopologyCore>): ReturnType<typeof createTopologyCore> {
-  return createTopologyCore(...args);
-}
+import { assertAutoDerivedNegativeScripts } from "../../test-support/runtime/scheduler-script-emulator";
+import { createTopology } from "../../test-support/runtime/topology-test-dsl";
 
 function renderTriggerBlock(trigger: string, content: string): string {
   return `${trigger}${content}</${trigger.slice(1, -1)}>`;

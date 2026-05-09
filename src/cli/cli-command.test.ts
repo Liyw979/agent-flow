@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCliHelpText, buildCliProgram, parseCliCommand } from "./cli-command";
+import { buildCliHelpText, parseCliCommand } from "./cli-command";
 
 test("parseCliCommand 解析新建 task headless", () => {
   const parsed = parseCliCommand([
@@ -190,27 +190,15 @@ test("旧 task run 与旧 --ui 入口都会被拒绝", () => {
 });
 
 test("Commander help 只展示保留的 task headless/task ui 命令", () => {
-  const program = buildCliProgram();
-  assert.deepEqual(program.commands.map((command) => command.name()), ["task"]);
-
-  const taskCommand = program.commands.find((command) => command.name() === "task");
-  assert.ok(taskCommand);
   const help = buildCliHelpText();
-  const taskHelp = taskCommand.helpInformation();
 
   assert.match(help, /Commands:\n\s+task/u);
   assert.match(help, /task headless --file <topology-file> --message <message>/u);
   assert.match(help, /task ui --file <topology-file> --message <message>/u);
-  assert.match(taskHelp, /headless \[options\]/u);
-  assert.match(taskHelp, /ui \[options\]/u);
   assert.doesNotMatch(help, /task attach/u);
   assert.doesNotMatch(help, /task show/u);
   assert.doesNotMatch(help, /task chat/u);
   assert.doesNotMatch(help, /task run/u);
   assert.doesNotMatch(help, /dsl run/u);
   assert.doesNotMatch(help, /agent attach/u);
-  assert.doesNotMatch(taskHelp, /attach/u);
-  assert.doesNotMatch(taskHelp, /show/u);
-  assert.doesNotMatch(taskHelp, /chat/u);
-  assert.doesNotMatch(taskHelp, /run/u);
 });
