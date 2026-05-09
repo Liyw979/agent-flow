@@ -322,13 +322,7 @@ export class Orchestrator {
     const agents = this.listWorkspaceAgents(normalizedCwd);
     const normalized = this.normalizeTopology(agents, payload.topology);
     this.store.upsertTopology(normalizedCwd, normalized);
-    const updated = this.hydrateWorkspace(normalizedCwd);
-    this.emit({
-      type: "workspace-updated",
-      cwd: normalizedCwd,
-      payload: updated,
-    });
-    return updated;
+    return this.hydrateWorkspace(normalizedCwd);
   }
 
   async applyTeamDsl(payload: {
@@ -353,13 +347,7 @@ export class Orchestrator {
         });
       }
     }
-    const updated = this.hydrateWorkspace(normalizedCwd);
-    this.emit({
-      type: "workspace-updated",
-      cwd: normalizedCwd,
-      payload: updated,
-    });
-    return updated;
+    return this.hydrateWorkspace(normalizedCwd);
   }
 
   async deleteTask(payload: DeleteTaskPayload): Promise<WorkspaceSnapshot> {
@@ -379,13 +367,7 @@ export class Orchestrator {
       this.pendingEventReconnects.delete(task.id);
     }
     this.store.deleteTask(normalizedCwd, task.id);
-    const updated = this.hydrateWorkspace(normalizedCwd);
-    this.emit({
-      type: "workspace-updated",
-      cwd: normalizedCwd,
-      payload: updated,
-    });
-    return updated;
+    return this.hydrateWorkspace(normalizedCwd);
   }
 
   async submitTask(payload: SubmitTaskPayload): Promise<TaskSnapshot> {

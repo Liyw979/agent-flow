@@ -625,7 +625,6 @@ export interface DeleteTaskPayload {
 
 export interface AgentTeamEvent {
   type:
-    | "workspace-updated"
     | "task-created"
     | "task-updated"
     | "message-created"
