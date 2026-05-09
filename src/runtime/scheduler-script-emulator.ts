@@ -15,7 +15,7 @@ import {
 } from "./gating-router";
 import { parseDecision, type AllowedDecisionTrigger } from "./decision-parser";
 import { buildEffectiveTopology } from "./runtime-topology-graph";
-import { resolveExecutionDecisionAgent } from "./decision-agent-context";
+import { isExecutionDecisionAgent } from "./decision-agent-context";
 import {
   extractLeadingMention,
   formatSchedulerScriptMessageLine,
@@ -913,7 +913,7 @@ function applyMessageLineAndMatchDecision(input: {
   decision: GraphRoutingDecision;
 } & ScriptRoutingMeta {
   const executableAgentId = input.senderId;
-  const decisionAgent = resolveExecutionDecisionAgent({
+  const decisionAgent = isExecutionDecisionAgent({
     state: input.state,
     topology: input.topology,
     runtimeAgentId: input.senderId,

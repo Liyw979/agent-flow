@@ -96,7 +96,7 @@ import {
 } from "./runtime-topology-graph";
 import type { CompiledTeamDsl } from "./team-dsl";
 import { shouldScheduleEventStreamReconnect } from "./event-stream-lifecycle";
-import { resolveExecutionDecisionAgent } from "./decision-agent-context";
+import { isExecutionDecisionAgent } from "./decision-agent-context";
 import { resolveTaskAgentIdsToPrewarm } from "./task-session-prewarm";
 import {
   buildInjectedConfigFromAgents,
@@ -2054,7 +2054,7 @@ export class Orchestrator {
 
       const topology = this.store.getTopology(cwd);
       const dispatchedContent = this.buildAgentExecutionPrompt(prompt);
-      const decisionAgent = resolveExecutionDecisionAgent({
+      const decisionAgent = isExecutionDecisionAgent({
         state,
         topology,
         runtimeAgentId,
@@ -2242,7 +2242,7 @@ export class Orchestrator {
       return invalidResult;
     } catch (error) {
       const topology = this.store.getTopology(cwd);
-      const decisionAgent = resolveExecutionDecisionAgent({
+      const decisionAgent = isExecutionDecisionAgent({
         state,
         topology,
         runtimeAgentId,
