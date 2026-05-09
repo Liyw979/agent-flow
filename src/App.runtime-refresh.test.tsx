@@ -17,7 +17,7 @@ import {
 import {
   buildTopologyNodeRecords,
   type TaskSnapshot,
-  type UiSnapshotPayload,
+  type UiSnapshotPayload, toUtcIsoTimestamp,
 } from "@shared/types";
 
 import App from "./App";
@@ -135,7 +135,7 @@ function createAgentFinalMessage() {
       taskId: TASK_ID,
       sender: "漏洞挑战-1",
       content: "挑战结论：这里的消息应当在轮询拿到全量 snapshot 后立即出现。",
-      timestamp: "2026-04-29T10:00:02.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-29T10:00:02.000Z"),
       kind: "agent-final" as const,
       runCount: 1,
       status: "completed" as const,

@@ -7,6 +7,7 @@ import {
   getTopologyNodeHeaderActionOrder,
 } from "./topology-graph-helpers";
 import type { MessageRecord } from "@shared/types";
+import { toUtcIsoTimestamp } from "@shared/types";
 
 function createTaskCompletedMessage(input: {
   id: string;
@@ -17,7 +18,7 @@ function createTaskCompletedMessage(input: {
     id: input.id,
     taskId: "task-1",
     sender: "system",
-    timestamp: "2026-04-23T10:00:00.000Z",
+    timestamp: toUtcIsoTimestamp("2026-04-23T10:00:00.000Z"),
     content: input.content,
     kind: "task-completed",
     status: input.status,
@@ -32,7 +33,7 @@ function createTaskRoundFinishedMessage(input: {
     id: input.id,
     taskId: "task-1",
     sender: "system",
-    timestamp: "2026-04-23T10:00:00.000Z",
+    timestamp: toUtcIsoTimestamp("2026-04-23T10:00:00.000Z"),
     content: input.content,
     kind: "task-round-finished",
     finishReason: "round_finished",

@@ -9,6 +9,7 @@ import { appendAppLog } from "./app-log";
 import { extractOpenCodeServeBaseUrl } from "./opencode-serve-launch";
 import { resolveOpenCodeRequestTimeoutMs } from "./opencode-request-timeout";
 import { resolveWindowsCmdPath } from "./windows-shell";
+import { toUtcIsoTimestamp, type UtcIsoTimestamp } from "@shared/types";
 
 interface ServeHandle {
   process: ChildProcessWithoutNullStreams | null;
@@ -30,8 +31,7 @@ export interface OpenCodeNormalizedMessage {
   id: string;
   content: string;
   sender: string;
-  timestamp: string;
-  completedAt: string | null;
+  timestamp: UtcIsoTimestamp;
   error: string | null;
   raw: unknown;
 }
@@ -40,7 +40,7 @@ export interface OpenCodeExecutionResult {
   status: "completed" | "error";
   finalMessage: string;
   messageId: string;
-  timestamp: string;
+  timestamp: UtcIsoTimestamp;
   rawMessage: OpenCodeNormalizedMessage;
 }
 
@@ -53,7 +53,7 @@ export interface OpenCodeRuntimeActivity {
   detailPayloadKeyCount: number;
   detailHasPlaceholderValue: boolean;
   detailParseMode: "structured" | "plain_text" | "missing" | "not_applicable";
-  timestamp: string;
+  timestamp: UtcIsoTimestamp;
 }
 
 export interface OpenCodeSessionRuntime {
@@ -85,7 +85,7 @@ interface ProjectServerState {
 
 interface RelatedTransportReplySnapshot {
   messageId: string;
-  timestamp: string;
+  timestamp: UtcIsoTimestamp;
   finish: string;
   parentMessageId: string;
 }
@@ -317,7 +317,7 @@ export class OpenCodeClient {
       this.waitForSessionSettled(sessionId, submittedAt, 8000)
         .then(async () => {
           const current = await this.getSessionMessage(normalized, sessionId, submitted.id);
-          return current && (current.completedAt || current.error) ? current : null;
+          return current && this.isTerminalMessage(current) ? current : null;
         })
         .catch(() => null),
     ]);
@@ -341,7 +341,7 @@ export class OpenCodeClient {
       status: latest.error ? "error" : "completed",
       finalMessage,
       messageId: latest.id,
-      timestamp: latest.completedAt ?? latest.timestamp,
+      timestamp: latest.timestamp,
       rawMessage: latest,
     };
   }
@@ -1034,7 +1034,7 @@ export class OpenCodeClient {
       if (message?.content.trim()) {
         latestNonEmptyMessage = message;
       }
-      if (message && (message.completedAt || message.error)) {
+      if (message && this.isTerminalMessage(message)) {
         return message;
       }
       await new Promise((resolve) => setTimeout(resolve, 400));
@@ -1047,8 +1047,7 @@ export class OpenCodeClient {
           id: messageId,
           content: "",
           sender: "assistant",
-          timestamp: fallbackTimestamp,
-          completedAt: null,
+          timestamp: toUtcIsoTimestamp(fallbackTimestamp),
           error: null,
           raw: null,
         },
@@ -1109,9 +1108,9 @@ export class OpenCodeClient {
 
     const relatedReplies = this.collectRelatedTransportReplies(normalizedRecords, submittedMessage.normalized.id)
       .sort((left, right) => {
-        const leftCompleted = Date.parse(left.normalized.completedAt ?? left.normalized.timestamp) || 0;
-        const rightCompleted = Date.parse(right.normalized.completedAt ?? right.normalized.timestamp) || 0;
-        return rightCompleted - leftCompleted;
+        const leftTimestamp = Date.parse(left.normalized.timestamp) || 0;
+        const rightTimestamp = Date.parse(right.normalized.timestamp) || 0;
+        return rightTimestamp - leftTimestamp;
       });
 
     const latestRelatedReply = relatedReplies[0];
@@ -1141,7 +1140,7 @@ export class OpenCodeClient {
         status: message.error ? "error" : "completed",
         finalMessage: message.content || message.error || "",
         messageId: message.id,
-        timestamp: message.completedAt ?? message.timestamp,
+        timestamp: message.timestamp,
         rawMessage: message,
       },
       messageCount: messages.length,
@@ -1178,7 +1177,7 @@ export class OpenCodeClient {
 
     return {
       messageId: record.normalized.id,
-      timestamp: record.normalized.completedAt ?? record.normalized.timestamp,
+      timestamp: record.normalized.timestamp,
       finish: this.resolveTransportReplyFinish(record.info),
       parentMessageId,
     };
@@ -1332,11 +1331,24 @@ export class OpenCodeClient {
         randomUUID(),
       content,
       sender,
-      timestamp: created,
-      completedAt: completed,
+      timestamp: toUtcIsoTimestamp(completed ?? created),
       error: this.extractEventError(info["error"] ?? envelope["error"]),
       raw,
     };
+  }
+
+  private isTerminalMessage(message: OpenCodeNormalizedMessage): boolean {
+    return this.hasCompletedTimestamp(message.raw) || message.error !== null;
+  }
+
+  private hasCompletedTimestamp(raw: unknown): boolean {
+    const envelope = this.asRecord(raw);
+    const info = this.asRecord(envelope["info"] ?? raw);
+    const time = this.asRecord(info["time"]);
+    return (
+      this.toIsoString(time["completed"]) !== null ||
+      this.toIsoString(info["completedAt"]) !== null
+    );
   }
 
   private buildEmptyAssistantResultError(
@@ -1412,7 +1424,7 @@ export class OpenCodeClient {
           detailPayloadKeyCount: 0,
           detailHasPlaceholderValue: false,
           detailParseMode: "not_applicable",
-          timestamp: normalized.completedAt ?? normalized.timestamp,
+          timestamp: normalized.timestamp,
         });
       }
 
@@ -1478,7 +1490,7 @@ export class OpenCodeClient {
     partIndex: number,
   ): OpenCodeRuntimeActivity | null {
     const type = typeof part["type"] === "string" ? part["type"] : "";
-    const timestamp = message.completedAt ?? message.timestamp;
+    const timestamp = message.timestamp;
     const toolName = this.extractToolName(part);
 
     if (toolName) {

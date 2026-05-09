@@ -6,6 +6,7 @@ import type {
   AgentDispatchMessageRecord,
   AgentFinalMessageRecord,
 } from "@shared/types";
+import { toUtcIsoTimestamp } from "@shared/types";
 
 import { mergeTaskChatMessages } from "../lib/chat-messages";
 import { formatActionRequiredRequestContent } from "../shared/chat-message-format";
@@ -28,7 +29,7 @@ function createDefaultAgentFinalMessage(
     taskId: DEFAULT_TASK_ID,
     content,
     sender,
-    timestamp,
+    timestamp: toUtcIsoTimestamp(timestamp),
     kind: "agent-final",
     runCount: 1,
     status: "completed",
@@ -65,7 +66,7 @@ function createLabeledAgentFinalMessage(
     taskId: DEFAULT_TASK_ID,
     content,
     sender,
-    timestamp,
+    timestamp: toUtcIsoTimestamp(timestamp),
     kind: "agent-final",
     runCount: 1,
     status: "completed",
@@ -89,7 +90,7 @@ function createAgentDispatchMessage(
     taskId: DEFAULT_TASK_ID,
     content,
     sender,
-    timestamp,
+    timestamp: toUtcIsoTimestamp(timestamp),
     kind: "agent-dispatch",
     targetAgentIds,
     targetRunCounts: targetAgentIds.map(() => 1),
@@ -110,7 +111,7 @@ function createActionRequiredRequestMessage(
     taskId: DEFAULT_TASK_ID,
     content,
     sender,
-    timestamp,
+    timestamp: toUtcIsoTimestamp(timestamp),
     kind: "action-required-request",
     followUpMessageId,
     targetAgentIds,

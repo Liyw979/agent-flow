@@ -2,6 +2,7 @@ import type {
   AgentFinalMessageRecord,
   MessageRecord,
   TopologyRecord,
+  UtcIsoTimestamp,
 } from "@shared/types";
 import { parseTargetAgentIds } from "@shared/chat-message-format";
 import {
@@ -16,7 +17,7 @@ interface ChatExecutionWindowBase {
   runCount: number;
   anchorMessageId: string;
   triggerMessageId: string;
-  startedAt: string;
+  startedAt: UtcIsoTimestamp;
 }
 
 type RunningChatExecutionWindow = ChatExecutionWindowBase & {
@@ -27,7 +28,7 @@ type SettledChatExecutionWindow = ChatExecutionWindowBase & {
   status: "settled";
   finalMessageId: string;
   finalRawMessageId: string;
-  completedAt: string;
+  completedAt: UtcIsoTimestamp;
 };
 
 type ChatExecutionWindow =
@@ -47,7 +48,7 @@ export type ChatFeedExecutionItem =
       status: "running";
       agentId: string;
       anchorMessageId: string;
-      startedAt: string;
+      startedAt: UtcIsoTimestamp;
       historyItems: AgentHistoryItem[];
     }
   | {
@@ -56,8 +57,8 @@ export type ChatFeedExecutionItem =
       status: "settled";
       agentId: string;
       anchorMessageId: string;
-      startedAt: string;
-      completedAt: string;
+      startedAt: UtcIsoTimestamp;
+      completedAt: UtcIsoTimestamp;
       message: ChatMessageItem;
     };
 

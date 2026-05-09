@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { toUtcIsoTimestamp } from "@shared/types";
 
 const INVALID_LOG_FILE_SEGMENT_PATTERN = /[\\/:*?"<>|]/;
 
@@ -55,7 +56,7 @@ export function appendAppLog(
   const appLogFilePath = buildTaskLogFilePath(appLogRootPath, taskId);
 
   const record = {
-    timestamp: new Date().toISOString(),
+    timestamp: toUtcIsoTimestamp(new Date().toISOString()),
     level,
     event,
     taskId,

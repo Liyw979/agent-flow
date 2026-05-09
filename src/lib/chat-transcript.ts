@@ -1,3 +1,4 @@
+import type { UtcIsoTimestamp } from "@shared/types";
 import type { ChatMessageItem } from "./chat-messages";
 
 const SYSTEM_SENDER_LABEL = "Orchestrator";
@@ -17,7 +18,7 @@ export function getChatSenderLabel(sender: string) {
 }
 
 function formatChatTranscriptTimestamp(
-  timestamp: string,
+  timestamp: UtcIsoTimestamp,
   options: FormatChatTranscriptOptions = {},
 ) {
   return new Intl.DateTimeFormat(options.locale ?? "zh-CN", {

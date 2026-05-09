@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildTopologyNodeRecords,
   type MessageRecord,
-  type TopologyRecord,
+  type TopologyRecord, toUtcIsoTimestamp,
 } from "@shared/types";
 import { formatActionRequiredRequestContent } from "@shared/chat-message-format";
 import {
@@ -23,7 +23,9 @@ function createMessage(
   const taskId = overrides.taskId ?? "task-id";
   const content = overrides.content ?? "";
   const sender = overrides.sender ?? "Build";
-  const timestamp = overrides.timestamp ?? "2026-04-25T08:00:00.000Z";
+  const timestamp = toUtcIsoTimestamp(
+    overrides.timestamp ?? "2026-04-25T08:00:00.000Z",
+  );
 
   switch (overrides.kind) {
     case "agent-progress":
@@ -227,7 +229,7 @@ test("buildChatExecutionWindows 会把用户 @ 的目标变成执行窗口", () 
       kind: "user",
       content: "@Build 请实现加法",
       targetAgentIds: ["Build"],
-      timestamp: "2026-04-25T08:00:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-25T08:00:00.000Z"),
     }),
   ];
 
@@ -249,7 +251,7 @@ test("buildChatExecutionWindows 会把 action-required-request 指向的目标�
       content: "请补充测试说明。",
       routingKind: "labeled",
       trigger: "<continue>",
-      timestamp: "2026-04-25T08:00:10.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-25T08:00:10.000Z"),
     }),
     createMessage({
       id: "review-request",
@@ -260,7 +262,7 @@ test("buildChatExecutionWindows 会把 action-required-request 指向的目标�
       ]),
       followUpMessageId: "review-final",
       targetAgentIds: ["Build"],
-      timestamp: "2026-04-25T08:00:11.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-25T08:00:11.000Z"),
     }),
   ];
 
@@ -280,7 +282,7 @@ test("buildChatFeedItems 会为单条多目标派发生成多条执行气泡", (
       kind: "agent-dispatch",
       content: "@UnitTest @TaskReview",
       targetAgentIds: ["UnitTest", "TaskReview"],
-      timestamp: "2026-04-25T08:01:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-25T08:01:00.000Z"),
     }),
   ];
 
@@ -311,7 +313,7 @@ test("buildChatFeedItems 会把 agent-progress 填进运行中执行气泡", () 
       kind: "agent-dispatch",
       content: "@漏洞挑战-1",
       targetAgentIds: ["漏洞挑战-1"],
-      timestamp: "2026-04-30T10:00:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:00.000Z"),
     }),
     createMessage({
       id: "challenge-progress",
@@ -323,7 +325,7 @@ test("buildChatFeedItems 会把 agent-progress 填进运行中执行气泡", () 
       detail: "正在审查当前 finding 的防护条件",
       sessionId: "session-challenge-1",
       runCount: 1,
-      timestamp: "2026-04-30T10:00:01.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:01.000Z"),
     }),
   ];
 
@@ -355,7 +357,7 @@ test("buildChatFeedItems 会在 final 出现后立即用普通消息替换动态
       kind: "agent-dispatch",
       content: "@漏洞挑战-1",
       targetAgentIds: ["漏洞挑战-1"],
-      timestamp: "2026-04-30T10:00:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:00.000Z"),
     }),
     createMessage({
       id: "challenge-progress",
@@ -367,7 +369,7 @@ test("buildChatFeedItems 会在 final 出现后立即用普通消息替换动态
       detail: "正在检查证据链",
       sessionId: "session-challenge-1",
       runCount: 1,
-      timestamp: "2026-04-30T10:00:01.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:01.000Z"),
     }),
     createMessage({
       id: "challenge-final",
@@ -378,7 +380,7 @@ test("buildChatFeedItems 会在 final 出现后立即用普通消息替换动态
       trigger: "<continue>",
       responseNote: "当前证据不足以证明这里一定能越界写入。",
       rawResponse: "<continue> 当前证据不足以证明这里一定能越界写入。",
-      timestamp: "2026-04-30T10:00:02.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:02.000Z"),
     }),
     createMessage({
       id: "challenge-request",
@@ -390,7 +392,7 @@ test("buildChatFeedItems 会在 final 出现后立即用普通消息替换动态
       ),
       followUpMessageId: "challenge-final",
       targetAgentIds: ["漏洞论证-1"],
-      timestamp: "2026-04-30T10:00:03.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:03.000Z"),
     }),
     createMessage({
       id: "argument-progress",
@@ -402,7 +404,7 @@ test("buildChatFeedItems 会在 final 出现后立即用普通消息替换动态
       detail: "正在补充漏洞成立所需的代码证据",
       sessionId: "session-argument-1",
       runCount: 1,
-      timestamp: "2026-04-30T10:00:04.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:04.000Z"),
     }),
   ];
 
@@ -462,7 +464,7 @@ test("buildChatFeedItems 会剥离重复 trigger，但保留 final 正文与回�
       kind: "agent-dispatch",
       content: "@漏洞挑战-1",
       targetAgentIds: ["漏洞挑战-1"],
-      timestamp: "2026-04-30T10:00:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:00.000Z"),
     }),
     createMessage({
       id: "challenge-final-repeated-trigger",
@@ -473,7 +475,7 @@ test("buildChatFeedItems 会剥离重复 trigger，但保留 final 正文与回�
       trigger: "<continue>",
       responseNote: "当前证据不足以证明这里一定能越界写入。",
       rawResponse: "<continue>\n当前证据不足以证明这里一定能越界写入。\n\n<continue>",
-      timestamp: "2026-04-30T10:00:02.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:02.000Z"),
     }),
     createMessage({
       id: "challenge-request-repeated-trigger",
@@ -485,7 +487,7 @@ test("buildChatFeedItems 会剥离重复 trigger，但保留 final 正文与回�
       ),
       followUpMessageId: "challenge-final-repeated-trigger",
       targetAgentIds: ["漏洞论证-1"],
-      timestamp: "2026-04-30T10:00:03.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:03.000Z"),
     }),
   ];
 
@@ -522,7 +524,7 @@ test("buildChatFeedItems 会保证 漏洞挑战 final 先于 漏洞论证 progre
       kind: "agent-dispatch",
       content: "@漏洞挑战-1",
       targetAgentIds: ["漏洞挑战-1"],
-      timestamp: "2026-04-30T10:00:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:00.000Z"),
     }),
     createMessage({
       id: "challenge-final",
@@ -533,7 +535,7 @@ test("buildChatFeedItems 会保证 漏洞挑战 final 先于 漏洞论证 progre
       trigger: "<continue>",
       responseNote: "漏洞挑战最终结论",
       rawResponse: "<continue> 漏洞挑战最终结论",
-      timestamp: "2026-04-30T10:00:02.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:02.000Z"),
     }),
     createMessage({
       id: "challenge-request",
@@ -544,7 +546,7 @@ test("buildChatFeedItems 会保证 漏洞挑战 final 先于 漏洞论证 progre
       ]),
       followUpMessageId: "challenge-final",
       targetAgentIds: ["漏洞论证-1"],
-      timestamp: "2026-04-30T10:00:03.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:03.000Z"),
     }),
     createMessage({
       id: "argument-progress",
@@ -556,7 +558,7 @@ test("buildChatFeedItems 会保证 漏洞挑战 final 先于 漏洞论证 progre
       detail: "漏洞论证过程消息",
       sessionId: "session-argument-1",
       runCount: 1,
-      timestamp: "2026-04-30T10:00:04.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:04.000Z"),
     }),
   ];
 
@@ -590,7 +592,7 @@ test("buildChatFeedItems 会在 challenge final 后让后继 argument 进入唯�
       kind: "agent-dispatch",
       content: "@漏洞挑战-1",
       targetAgentIds: ["漏洞挑战-1"],
-      timestamp: "2026-04-30T10:00:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:00.000Z"),
     }),
     createMessage({
       id: "challenge-progress",
@@ -602,7 +604,7 @@ test("buildChatFeedItems 会在 challenge final 后让后继 argument 进入唯�
       detail: "漏洞挑战过程消息",
       sessionId: "session-challenge-1",
       runCount: 1,
-      timestamp: "2026-04-30T10:00:01.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:01.000Z"),
     }),
     createMessage({
       id: "challenge-final",
@@ -613,7 +615,7 @@ test("buildChatFeedItems 会在 challenge final 后让后继 argument 进入唯�
       trigger: "<continue>",
       responseNote: "漏洞挑战最终结论",
       rawResponse: "<continue> 漏洞挑战最终结论",
-      timestamp: "2026-04-30T10:00:02.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:02.000Z"),
     }),
     createMessage({
       id: "challenge-request",
@@ -624,7 +626,7 @@ test("buildChatFeedItems 会在 challenge final 后让后继 argument 进入唯�
       ]),
       followUpMessageId: "challenge-final",
       targetAgentIds: ["漏洞论证-1"],
-      timestamp: "2026-04-30T10:00:03.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:03.000Z"),
     }),
     createMessage({
       id: "argument-progress",
@@ -636,7 +638,7 @@ test("buildChatFeedItems 会在 challenge final 后让后继 argument 进入唯�
       detail: "漏洞论证过程消息",
       sessionId: "session-argument-1",
       runCount: 1,
-      timestamp: "2026-04-30T10:00:04.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:04.000Z"),
     }),
   ];
 
@@ -677,7 +679,7 @@ test("buildChatFeedItems 不会误删同一 anchor 下不同目标的并行动�
       kind: "agent-dispatch",
       content: "@UnitTest @TaskReview",
       targetAgentIds: ["UnitTest", "TaskReview"],
-      timestamp: "2026-04-25T08:01:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-25T08:01:00.000Z"),
     }),
     createMessage({
       id: "unit-progress",
@@ -689,7 +691,7 @@ test("buildChatFeedItems 不会误删同一 anchor 下不同目标的并行动�
       detail: "UnitTest 正在执行",
       sessionId: "session-unit",
       runCount: 1,
-      timestamp: "2026-04-25T08:01:01.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-25T08:01:01.000Z"),
     }),
     createMessage({
       id: "review-progress",
@@ -701,7 +703,7 @@ test("buildChatFeedItems 不会误删同一 anchor 下不同目标的并行动�
       detail: "TaskReview 正在执行",
       sessionId: "session-review",
       runCount: 1,
-      timestamp: "2026-04-25T08:01:02.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-25T08:01:02.000Z"),
     }),
   ];
 
@@ -730,7 +732,7 @@ test("buildChatExecutionWindows 会用 runCount 精确把 final 绑定到同一 
       followUpMessageId: "review-final-1",
       targetAgentIds: ["Build"],
       targetRunCounts: [1],
-      timestamp: "2026-04-30T10:00:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:00.000Z"),
     }),
     createMessage({
       id: "dispatch-build-2",
@@ -740,7 +742,7 @@ test("buildChatExecutionWindows 会用 runCount 精确把 final 绑定到同一 
       followUpMessageId: "qa-final-1",
       targetAgentIds: ["Build"],
       targetRunCounts: [2],
-      timestamp: "2026-04-30T10:00:01.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:01.000Z"),
     }),
     createMessage({
       id: "build-progress-2",
@@ -752,7 +754,7 @@ test("buildChatExecutionWindows 会用 runCount 精确把 final 绑定到同一 
       detail: "Build 第二次执行中",
       sessionId: "session-build-2",
       runCount: 2,
-      timestamp: "2026-04-30T10:00:02.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:02.000Z"),
     }),
     createMessage({
       id: "build-final-2",
@@ -761,7 +763,7 @@ test("buildChatExecutionWindows 会用 runCount 精确把 final 绑定到同一 
       content: "Build 第二次执行完成",
       routingKind: "default",
       runCount: 2,
-      timestamp: "2026-04-30T10:00:03.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-30T10:00:03.000Z"),
     }),
   ];
 

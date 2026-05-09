@@ -8,6 +8,7 @@ import { JSDOM } from "jsdom";
 import type { TaskSnapshot, WorkspaceSnapshot } from "@shared/types";
 
 import { ChatWindow } from "./ChatWindow";
+import { toUtcIsoTimestamp } from "@shared/types";
 
 type GlobalPatchKey =
   | "window"
@@ -245,7 +246,7 @@ function createWorkspaceAndTask(): {
         taskId: "task-chat-window-runtime-badges",
         sender: "user",
         content: "@Build @QA 请处理本轮问题",
-        timestamp: "2026-04-29T10:00:00.000Z",
+        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:00.000Z"),
         kind: "user",
         scope: "task",
         taskTitle: "runtime badges",
@@ -257,7 +258,7 @@ function createWorkspaceAndTask(): {
         taskId: "task-chat-window-runtime-badges",
         sender: "线索发现",
         content: "发现第 1 个可疑点：这里需要进入对抗讨论。",
-        timestamp: "2026-04-29T10:00:10.000Z",
+        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:10.000Z"),
         kind: "agent-final",
         runCount: 1,
         status: "completed",
@@ -287,7 +288,7 @@ test("ChatWindow 只根据消息流展示运行中面板与最终消息", async 
         taskId: task.task.id,
         sender: "Build",
         content: "Build 正在继续处理",
-        timestamp: "2026-04-29T10:00:01.000Z",
+        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:01.000Z"),
         kind: "agent-progress",
         activityKind: "thinking",
         label: "思考",
@@ -301,7 +302,7 @@ test("ChatWindow 只根据消息流展示运行中面板与最终消息", async 
         taskId: task.task.id,
         sender: "QA",
         content: "QA 校验失败",
-        timestamp: "2026-04-29T10:00:02.000Z",
+        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:02.000Z"),
         kind: "agent-final",
         runCount: 1,
         status: "error",

@@ -8,6 +8,7 @@ import { parseJson5 } from "@shared/json5";
 import { buildTaskLogFilePath, initAppFileLogger } from "./app-log";
 import type { OpenCodeNormalizedMessage, OpenCodeSessionRuntime } from "./opencode-client";
 import { OpenCodeClient } from "./opencode-client";
+import { toUtcIsoTimestamp } from "@shared/types";
 
 class TestOpenCodeClient extends OpenCodeClient {
   declare request: OpenCodeClient["request"];
@@ -293,10 +294,9 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
     id: "msg-1",
     content: "已完成",
     sender: "assistant",
-    timestamp: completedAt,
-    completedAt,
+    timestamp: toUtcIsoTimestamp(completedAt),
     error: null,
-    raw: null,
+    raw: { completedAt },
   });
   typed.getLatestAssistantMessage = async () => null;
   typed.getSessionRuntime = async () => ({
@@ -313,8 +313,7 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
     id: "msg-1",
     content: "",
     sender: "assistant",
-    timestamp: completedAt,
-    completedAt: null,
+    timestamp: toUtcIsoTimestamp(completedAt),
     error: null,
     raw: null,
   });
@@ -356,8 +355,7 @@ test("resolveExecutionResult 在没有任何 assistant 消息时必须报错，�
       id: "msg-user",
       content: "请整理需求",
       sender: "user",
-      timestamp: "2026-04-25T00:00:00.000Z",
-      completedAt: null,
+      timestamp: toUtcIsoTimestamp("2026-04-25T00:00:00.000Z"),
       error: null,
       raw: null,
     }),

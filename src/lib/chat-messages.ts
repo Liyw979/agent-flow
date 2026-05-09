@@ -1,4 +1,4 @@
-import type { MessageRecord } from "@shared/types";
+import type { MessageRecord, UtcIsoTimestamp } from "@shared/types";
 import { withOptionalString } from "@shared/object-utils";
 import {
   getMessageSenderDisplayName,
@@ -19,7 +19,7 @@ export interface ChatMessageItem {
   id: string;
   sender: string;
   senderDisplayName?: string;
-  timestamp: string;
+  timestamp: UtcIsoTimestamp;
   content: string;
   kinds: string[];
   messageChain: MessageRecord[];

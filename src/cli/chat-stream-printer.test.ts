@@ -7,6 +7,7 @@ import {
   renderChatStreamEntries,
   measureDisplayWidth,
 } from "./chat-stream-printer";
+import { toUtcIsoTimestamp } from "@shared/types";
 
 function createMessage(input: {
   id: string;
@@ -22,7 +23,7 @@ function createMessage(input: {
       id: input.id,
       taskId: "task-1",
       sender: "user",
-      timestamp: input.timestamp,
+      timestamp: toUtcIsoTimestamp(input.timestamp),
       content: input.content,
       kind: "user",
       scope: "task",
@@ -36,7 +37,7 @@ function createMessage(input: {
       id: input.id,
       taskId: "task-1",
       sender: input.sender,
-      timestamp: input.timestamp,
+      timestamp: toUtcIsoTimestamp(input.timestamp),
       content: input.content,
       kind: "agent-final",
       runCount: 1,
@@ -51,7 +52,7 @@ function createMessage(input: {
       id: input.id,
       taskId: "task-1",
       sender: input.sender,
-      timestamp: input.timestamp,
+      timestamp: toUtcIsoTimestamp(input.timestamp),
       content: input.content,
       kind: "agent-dispatch",
       targetAgentIds: input.targetAgentIds ?? [],
@@ -64,7 +65,7 @@ function createMessage(input: {
       id: input.id,
       taskId: "task-1",
       sender: input.sender,
-      timestamp: input.timestamp,
+      timestamp: toUtcIsoTimestamp(input.timestamp),
       content: input.content,
       kind: "action-required-request",
       followUpMessageId: input.id,
@@ -77,7 +78,7 @@ function createMessage(input: {
       id: input.id,
       taskId: "task-1",
       sender: "system",
-      timestamp: input.timestamp,
+      timestamp: toUtcIsoTimestamp(input.timestamp),
       content: input.content,
       kind: "task-completed",
       status: "failed",
@@ -88,7 +89,7 @@ function createMessage(input: {
       id: input.id,
       taskId: "task-1",
       sender: "system",
-      timestamp: input.timestamp,
+      timestamp: toUtcIsoTimestamp(input.timestamp),
       content: input.content,
       kind: "task-round-finished",
       finishReason: input.finishReason ?? "round_finished",
@@ -99,7 +100,7 @@ function createMessage(input: {
       id: input.id,
       taskId: "task-1",
       sender: "system",
-      timestamp: input.timestamp,
+      timestamp: toUtcIsoTimestamp(input.timestamp),
       content: input.content,
       kind: "task-created",
     };
@@ -108,7 +109,7 @@ function createMessage(input: {
     id: input.id,
     taskId: "task-1",
     sender: "system",
-    timestamp: input.timestamp,
+    timestamp: toUtcIsoTimestamp(input.timestamp),
     content: input.content,
     kind: "system-message",
   };
@@ -119,7 +120,7 @@ test("collectIncrementalChatTranscript 只返回新增的群聊合并消息", ()
     createMessage({
       id: "m1",
       sender: "user",
-      timestamp: "2026-04-19T10:00:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-19T10:00:00.000Z"),
       content: "@Build 请实现 DSL",
       kind: "user",
       targetAgentIds: ["Build"],
@@ -130,14 +131,14 @@ test("collectIncrementalChatTranscript 只返回新增的群聊合并消息", ()
     createMessage({
       id: "m2",
       sender: "Build",
-      timestamp: "2026-04-19T10:00:01.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-19T10:00:01.000Z"),
       content: "已完成首轮实现。",
       kind: "agent-final",
     }),
     createMessage({
       id: "m3",
       sender: "Build",
-      timestamp: "2026-04-19T10:00:02.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-19T10:00:02.000Z"),
       content: "",
       kind: "agent-dispatch",
       targetAgentIds: ["CodeReview"],
@@ -155,7 +156,7 @@ test("collectIncrementalChatTranscript 在没有新增群聊消息时返回空�
     createMessage({
       id: "m1",
       sender: "system",
-      timestamp: "2026-04-19T10:00:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-19T10:00:00.000Z"),
       content: "Task 已创建并完成初始化",
       kind: "system-message",
     }),
@@ -169,7 +170,7 @@ test("renderChatStreamEntries 输出的是群聊文本，不包含 agent runtime
     {
       id: "m1",
       sender: "Build",
-      timestamp: "2026-04-19T10:00:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-19T10:00:00.000Z"),
       content: "Build 已完成。\n\n@CodeReview",
       kinds: ["agent-final", "agent-dispatch"],
       messageChain: [
@@ -177,7 +178,7 @@ test("renderChatStreamEntries 输出的是群聊文本，不包含 agent runtime
           id: "m1-final",
           taskId: "task-1",
           sender: "Build",
-          timestamp: "2026-04-19T10:00:00.000Z",
+          timestamp: toUtcIsoTimestamp("2026-04-19T10:00:00.000Z"),
           content: "Build 已完成。",
           kind: "agent-final",
           runCount: 1,
@@ -190,7 +191,7 @@ test("renderChatStreamEntries 输出的是群聊文本，不包含 agent runtime
           id: "m1-dispatch",
           taskId: "task-1",
           sender: "Build",
-          timestamp: "2026-04-19T10:00:00.000Z",
+          timestamp: toUtcIsoTimestamp("2026-04-19T10:00:00.000Z"),
           content: "@CodeReview",
           kind: "agent-dispatch",
           targetAgentIds: ["CodeReview"],
@@ -217,7 +218,7 @@ test("renderChatStreamEntries 的标题左对齐，正文上下不保留空白 p
     {
       id: "m3",
       sender: "user",
-      timestamp: "2026-04-20T01:47:01.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-20T01:47:01.000Z"),
       content: "入口应该是ba啊",
       kinds: ["user"],
       messageChain: [],
@@ -235,7 +236,7 @@ test("renderChatStreamEntries 不再输出状态行样式文本", () => {
     {
       id: "m2",
       sender: "system",
-      timestamp: "2026-04-19T10:00:03.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-19T10:00:03.000Z"),
       content: "本轮已完成，可继续 @Agent 发起下一轮。",
       kinds: ["system-message"],
       messageChain: [],
