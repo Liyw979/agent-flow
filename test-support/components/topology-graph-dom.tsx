@@ -7,7 +7,7 @@ import type {
   WorkspaceSnapshot,
 } from "@shared/types";
 
-import { TopologyGraph } from "./TopologyGraph";
+import { TopologyGraph } from "@/components/TopologyGraph";
 
 type GlobalDomPatchKey =
   | "window"

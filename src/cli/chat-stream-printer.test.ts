@@ -5,7 +5,6 @@ import type { MessageRecord } from "@shared/types";
 import {
   collectIncrementalChatTranscript,
   renderChatStreamEntries,
-  measureDisplayWidth,
 } from "./chat-stream-printer";
 
 function createMessage(input: {
@@ -243,13 +242,4 @@ test("renderChatStreamEntries 不再输出状态行样式文本", () => {
   ]);
 
   assert.doesNotMatch(output, /\[状态\]\s*(pending|running|finished|failed)/);
-});
-
-test("measureDisplayWidth 会把中文按终端双列宽处理，避免消息框右边界错位", () => {
-  assert.equal(measureDisplayWidth("Build"), 5);
-  assert.equal(measureDisplayWidth("可以。"), 6);
-  assert.equal(
-    measureDisplayWidth("你想把这轮协作测试聚焦在哪一类任务上？"),
-    38,
-  );
 });

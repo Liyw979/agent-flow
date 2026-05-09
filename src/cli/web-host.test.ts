@@ -9,9 +9,10 @@ import {
 } from "./loopback-bindings";
 import { startWebHost } from "./web-host";
 import {
-  UI_LOOPBACK_IPV4_HOST,
   UI_LOOPBACK_IPV6_HOST,
 } from "./ui-host-launch";
+
+const UI_LOOPBACK_IPV4_HOST = "127.0.0.1";
 
 async function reservePort() {
   return await new Promise<number>((resolve, reject) => {

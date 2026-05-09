@@ -99,7 +99,7 @@ function getContentType(filePath: string): string {
   }
 }
 
-export function buildStaticFileHeaders(filePath: string): Record<string, string> {
+function buildStaticFileHeaders(filePath: string): Record<string, string> {
   return {
     "content-type": getContentType(filePath),
     "cache-control": "no-store",

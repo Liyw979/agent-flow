@@ -8,7 +8,7 @@ interface ResolveValidatedWorkspaceCwdInput {
   isDirectory: boolean;
 }
 
-export function resolveValidatedWorkspaceCwd(input: ResolveValidatedWorkspaceCwdInput): string {
+function resolveValidatedWorkspaceCwd(input: ResolveValidatedWorkspaceCwdInput): string {
   const resolvedCwd = path.resolve(input.currentCwd, input.requestedCwd ?? ".");
   if (!input.exists) {
     throw new Error(`工作目录不存在：${resolvedCwd}`);
@@ -20,7 +20,7 @@ export function resolveValidatedWorkspaceCwd(input: ResolveValidatedWorkspaceCwd
 }
 
 export function resolveWorkspaceCwdFromFilesystem(requestedCwd: string | undefined, currentCwd: string): string {
-  const resolvedCwd = path.resolve(requestedCwd ?? currentCwd);
+  const resolvedCwd = path.resolve(currentCwd, requestedCwd ?? ".");
   let stats: fs.Stats | null = null;
 
   try {

@@ -1,5 +1,5 @@
 export const UI_LOOPBACK_HOST = "localhost";
-export const UI_LOOPBACK_IPV4_HOST = "127.0.0.1";
+const UI_LOOPBACK_IPV4_HOST = "127.0.0.1";
 export const UI_LOOPBACK_IPV6_HOST = "::1";
 export const UI_LOOPBACK_BIND_HOSTS = [
   UI_LOOPBACK_IPV6_HOST,

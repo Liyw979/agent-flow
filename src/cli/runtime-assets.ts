@@ -33,7 +33,7 @@ interface ResolveCompiledEmbeddedWebRootInput {
   embeddedAssetRelativePaths: string[];
 }
 
-export function resolveSourceAssetFallback(input: {
+function resolveSourceAssetFallback(input: {
   repoWebRootExists: boolean;
   distBuiltAtMs: number | null;
   latestSourceUpdatedAtMs: number | null;
@@ -56,14 +56,14 @@ export function isCompiledRuntime(): boolean {
   return isCompiledRuntimeDir(runtimeDir) || isCompiledRuntimeExecutable(process.execPath);
 }
 
-export function isCompiledRuntimeDir(runtimeDir: string): boolean {
+function isCompiledRuntimeDir(runtimeDir: string): boolean {
   const normalized = runtimeDir.replace(/\\/g, "/");
   return normalized.startsWith("/$bunfs")
     || normalized.startsWith("file:///$bunfs/")
     || normalized === "file:///$bunfs";
 }
 
-export function isCompiledRuntimeExecutable(execPath: string): boolean {
+function isCompiledRuntimeExecutable(execPath: string): boolean {
   const normalizedExecPath = (execPath || "").replace(/\\/g, "/");
   const executableName = path.posix.basename(normalizedExecPath).toLowerCase();
   if (!executableName) {
@@ -80,7 +80,7 @@ function getRepoWebDistRoot(): string {
   return path.join(REPO_ROOT, "dist", "web");
 }
 
-export function shouldReuseRepoWebDist(input: {
+function shouldReuseRepoWebDist(input: {
   repoWebRootExists: boolean;
   distBuiltAtMs: number | null;
   latestSourceUpdatedAtMs: number | null;
@@ -88,13 +88,13 @@ export function shouldReuseRepoWebDist(input: {
   return resolveSourceAssetFallback(input) === "webRoot";
 }
 
-export function resolveCompiledEmbeddedWebRoot(input: ResolveCompiledEmbeddedWebRootInput): string | null {
+function resolveCompiledEmbeddedWebRoot(input: ResolveCompiledEmbeddedWebRootInput): string | null {
   return input.embeddedAssetRelativePaths.includes("index.html")
     ? path.join(input.runtimeRoot, "web")
     : null;
 }
 
-export function resolveRuntimeWebRoot(input: ResolveRuntimeWebRootInput): string | null {
+function resolveRuntimeWebRoot(input: ResolveRuntimeWebRootInput): string | null {
   if (!input.fallbackWebRoot) {
     return null;
   }
@@ -111,7 +111,7 @@ function hasIndexHtmlFile(webRoot: string | null): boolean {
   return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
 }
 
-export function isRuntimeWebSourcePath(relativePath: string): boolean {
+function isRuntimeWebSourcePath(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, "/");
   return !EXCLUDED_RUNTIME_WEB_SOURCE_PATHS.has(normalized);
 }

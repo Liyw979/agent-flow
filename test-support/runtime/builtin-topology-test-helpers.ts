@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { parseJson5 } from "@shared/json5";
 
-import { compileTeamDsl, type TeamDslDefinition } from "./team-dsl";
+import { compileTeamDsl, type TeamDslDefinition } from "@/runtime/team-dsl";
 
 const BUILTIN_TOPOLOGY_DIR = new URL("../../config/team-topologies/", import.meta.url);
 
@@ -11,14 +11,6 @@ export function readBuiltinTopology(fileName: string): TeamDslDefinition {
   );
 }
 
-export function readBuiltinVulnerabilityTopology(): TeamDslDefinition {
-  return readBuiltinTopology("vulnerability.json5");
-}
-
 export function compileBuiltinTopology(fileName: string) {
   return compileTeamDsl(readBuiltinTopology(fileName));
-}
-
-export function compileBuiltinVulnerabilityTopology() {
-  return compileBuiltinTopology("vulnerability.json5");
 }

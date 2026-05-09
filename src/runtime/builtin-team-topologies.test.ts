@@ -6,7 +6,7 @@ import test from "node:test";
 import {
   compileBuiltinTopology,
   readBuiltinTopology,
-} from "./builtin-topology-test-helpers";
+} from "../../test-support/runtime/builtin-topology-test-helpers";
 import { instantiateSpawnBundle } from "./runtime-topology";
 
 const BUILTIN_TOPOLOGY_DIR = path.resolve("config/team-topologies");

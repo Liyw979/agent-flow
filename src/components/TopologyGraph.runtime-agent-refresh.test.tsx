@@ -5,7 +5,7 @@ import { act } from "react";
 
 import type { TaskSnapshot, TopologyRecord, WorkspaceSnapshot } from "@shared/types";
 
-import { renderTopologyGraphInDom } from "./topology-graph.test-helpers";
+import { renderTopologyGraphInDom } from "../../test-support/components/topology-graph-dom";
 
 const TASK_ID = "task-runtime-refresh";
 const WORKSPACE_CWD = "/tmp/agent-team-topology-runtime-refresh";

@@ -23,14 +23,14 @@ import {
   preferWaitingDecisionCandidatesForPendingNextSender as preferPendingDecisionCandidatesForNextSender,
   runSchedulerScriptDrived,
   shouldRequireSourceDispatchAssertion,
-} from "./scheduler-script-emulator";
-import { parseSchedulerScriptLine } from "./scheduler-script-dsl";
+} from "../../test-support/runtime/scheduler-script-emulator";
+import { parseSchedulerScriptLine } from "../../test-support/runtime/scheduler-script-dsl";
 import {
   createGraphTaskState,
   type GraphRoutingDecision,
 } from "./gating-router";
-import { compileBuiltinVulnerabilityTopology } from "./builtin-topology-test-helpers";
-import { createTopology as createTopologyCore } from "./topology-test-dsl";
+import { compileBuiltinTopology } from "../../test-support/runtime/builtin-topology-test-helpers";
+import { createTopology } from "../../test-support/runtime/topology-test-dsl";
 
 function parseMessageLine(line: string) {
   const parsed = parseSchedulerScriptLine(line);
@@ -65,33 +65,6 @@ function matchesExpectedTransition(
 
 function renderTriggerBlock(trigger: string, content: string): string {
   return `${trigger}${content}</${trigger.slice(1, -1)}>`;
-}
-
-type TestTopologyInput =
-  | Parameters<typeof createTopologyCore>[0]
-  | {
-      nodes: string[];
-      edges: TopologyRecord["edges"];
-    };
-
-function createTopology(input: TestTopologyInput): ReturnType<typeof createTopologyCore> {
-  if (!("edges" in input)) {
-    return createTopologyCore(input);
-  }
-
-  const downstream: Record<string, Record<string, string | { trigger: string; maxTriggerRounds?: number }>> = {};
-  for (const edge of input.edges) {
-    const sourceTargets = downstream[edge.source] ?? {};
-    sourceTargets[edge.target] = typeof edge.maxTriggerRounds === "number"
-      ? { trigger: edge.trigger, maxTriggerRounds: edge.maxTriggerRounds }
-      : edge.trigger;
-    downstream[edge.source] = sourceTargets;
-  }
-
-  return createTopologyCore({
-    nodes: input.nodes.filter((node) => node !== "__end__"),
-    downstream,
-  });
 }
 
 function withAgentNodeRecords(topology: Omit<TopologyRecord, "nodeRecords">): TopologyRecord {
@@ -205,20 +178,8 @@ function createRepresentativeTopology(): TopologyRecord {
   });
 }
 
-test("scheduler script emulator 模块不再单独导出 runSchedulerScriptTrace", async () => {
-  const moduleExports = await import("./scheduler-script-emulator");
-
-  assert.equal("runSchedulerScriptTrace" in moduleExports, false);
-});
-
-test("scheduler script emulator 模块不再单独导出 parseSchedulerScriptLine", async () => {
-  const moduleExports = await import("./scheduler-script-emulator");
-
-  assert.equal("parseSchedulerScriptLine" in moduleExports, false);
-});
-
 test("scheduler script drived 支持漏洞团队 2 个 finding 且每个 finding 各有两轮正反讨论后结束", async () => {
-  const topology = compileBuiltinVulnerabilityTopology().topology;
+  const topology = compileBuiltinTopology("vulnerability.json5").topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
@@ -242,7 +203,7 @@ test("scheduler script drived 支持漏洞团队 2 个 finding 且每个 finding
 });
 
 test("scheduler script drived 不接受内置漏洞团队拓扑里单边未回应完就直接进入讨论总结", async () => {
-  const topology = compileBuiltinVulnerabilityTopology().topology;
+  const topology = compileBuiltinTopology("vulnerability.json5").topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
@@ -405,12 +366,18 @@ test("scheduler script emulator 纯函数会基于真实核心轨迹自动派生
 
 test("scheduler script emulator 自动派生的 missing_consumer_line 会抓住 source 抢跑下一轮", async () => {
   const topology = createTopology({
-    nodes: ["A", "B", "Archive"],
-    edges: [
-      { source: "A", target: "B", trigger: "<default>", messageMode: "last" },
-      { source: "B", target: "A", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
-      { source: "B", target: "Archive", trigger: "<done>", messageMode: "last" },
-    ],
+    downstream: {
+      A: {
+        B: "<default>",
+      },
+      B: {
+        A: {
+          trigger: "<continue>",
+          maxTriggerRounds: 4,
+        },
+        Archive: "<done>",
+      },
+    },
   });
   const script = [
     "user: @A start",
@@ -1124,7 +1091,7 @@ test("scheduler script emulator 不会根据正文关键词替拓扑上的 decis
 });
 
 test("scheduler script emulator 在漏洞团队里把第二个 finding 错写成上一轮实例时直接失败", async () => {
-  const topology = compileBuiltinVulnerabilityTopology().topology;
+  const topology = compileBuiltinTopology("vulnerability.json5").topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
@@ -1193,7 +1160,7 @@ test("scheduler script emulator 不允许 dispatch source 在 batch 未被消费
 });
 
 test("scheduler script emulator 不再支持非法短别名", async () => {
-  const topology = compileBuiltinVulnerabilityTopology().topology;
+  const topology = compileBuiltinTopology("vulnerability.json5").topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点。",

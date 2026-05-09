@@ -30,7 +30,7 @@ function configureProgram(program: Command) {
     });
 }
 
-export function buildCliProgram(onCommand?: (command: ParsedCliCommand) => void) {
+function buildCliProgram(onCommand?: (command: ParsedCliCommand) => void) {
   const emit = onCommand ?? (() => undefined);
   const program = configureProgram(new Command());
 
