@@ -477,9 +477,11 @@ export function TopologyGraph({
     });
     const attachState = resolveAgentAttachButtonState({
       agentId,
-      sessionState: resolveSessionStateFromSessionIdText(
-        taskAgent?.opencodeSessionId ?? "",
-      ),
+      sessionState: taskAgent
+        ? resolveSessionStateFromSessionIdText(taskAgent.opencodeSessionId)
+        : {
+            kind: "absent",
+          },
       openingState: openingAgentTerminalId === agentId ? "opening" : "idle",
     });
     const isAttachOpening = attachState.label === "打开中";

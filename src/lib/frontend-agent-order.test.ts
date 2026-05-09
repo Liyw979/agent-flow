@@ -42,9 +42,9 @@ test("resolveDefaultSelectedAgentIdForFrontend 会回到 JSON 中的第一个 ag
       { id: "BA", prompt: "", isWritable: false },
     ],
     taskAgents: [
-      { taskId: "task-1", id: "Build", opencodeSessionId: null, opencodeAttachBaseUrl: null, status: "running", runCount: 1 },
-      { taskId: "task-1", id: "TaskReview", opencodeSessionId: null, opencodeAttachBaseUrl: null, status: "idle", runCount: 0 },
-      { taskId: "task-1", id: "BA", opencodeSessionId: null, opencodeAttachBaseUrl: null, status: "completed", runCount: 1 },
+      { taskId: "task-1", id: "Build", opencodeSessionId: "", opencodeAttachBaseUrl: "", status: "running", runCount: 1 },
+      { taskId: "task-1", id: "TaskReview", opencodeSessionId: "", opencodeAttachBaseUrl: "", status: "idle", runCount: 0 },
+      { taskId: "task-1", id: "BA", opencodeSessionId: "", opencodeAttachBaseUrl: "", status: "completed", runCount: 1 },
     ],
     orderedAgentIds: ["BA", "Build", "TaskReview"],
   });

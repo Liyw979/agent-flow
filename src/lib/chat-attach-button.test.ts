@@ -30,7 +30,7 @@ test("resolveChatMessageAttachButtonState 会在 session 缺失时保留禁用�
     taskAgents: [
       {
         id: "漏洞挑战-3",
-        opencodeSessionId: null,
+        opencodeSessionId: "",
       },
     ],
   });
