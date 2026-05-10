@@ -3,6 +3,7 @@ import type {
   AgentProgressMessageRecord,
   MessageRecord,
   TopologyRecord,
+  UtcIsoTimestamp,
 } from "@shared/types";
 import { withOptionalValue } from "@shared/object-utils";
 import {
@@ -20,7 +21,7 @@ export interface AgentHistoryItem {
   label: string;
   detailSnippet: string;
   detail: string;
-  timestamp: string;
+  timestamp: UtcIsoTimestamp;
   sortTimestamp: string;
   tone:
     | "success"
@@ -34,8 +35,8 @@ export interface AgentHistoryItem {
 export const EMPTY_AGENT_HISTORY_DETAIL = "暂无详细记录";
 
 interface AgentHistoryRange {
-  startedAt?: string;
-  endedAt?: string;
+  startedAt?: UtcIsoTimestamp;
+  endedAt?: UtcIsoTimestamp;
 }
 
 function hasActionRequiredFollowUp(messages: MessageRecord[], finalMessageId: string): boolean {
@@ -230,7 +231,7 @@ function getFinalItemPresentation(input: {
 }
 
 function isTimestampWithinAgentHistoryRange(
-  timestamp: string,
+  timestamp: UtcIsoTimestamp,
   range: AgentHistoryRange,
 ) {
   if (range.startedAt && timestamp.localeCompare(range.startedAt) < 0) {
@@ -369,9 +370,9 @@ export function buildAgentExecutionHistoryItems(input: {
   agentId: string;
   messages: MessageRecord[];
   topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "spawnRules">;
-  startedAt: string;
+  startedAt: UtcIsoTimestamp;
   finalMessageId?: string;
-  completedAt?: string;
+  completedAt?: UtcIsoTimestamp;
 }) {
   const allowedTriggers = isHistoryDecisionAgent(input.topology, input.agentId)
     ? getAgentAllowedTriggers(input.topology, input.agentId)

@@ -43,7 +43,7 @@ import {
   type TopologyNodeRecord,
   type TopologyRecord,
   type UpdateTopologyPayload,
-  type WorkspaceSnapshot,
+  type WorkspaceSnapshot, toUtcIsoTimestamp,
 } from "@shared/types";
 import {
   formatAgentDispatchContent,
@@ -620,7 +620,7 @@ export class Orchestrator {
           ? "Task 已初始化"
           : "Task 已创建并完成初始化",
       sender: "system",
-      timestamp: new Date().toISOString(),
+      timestamp: toUtcIsoTimestamp(new Date().toISOString()),
       kind: "task-created",
     };
     this.store.insertMessage(normalizedCwd, taskCreatedMessage);
@@ -738,7 +738,7 @@ export class Orchestrator {
       taskId,
       content: normalizedContent,
       sender: "user",
-      timestamp: new Date().toISOString(),
+      timestamp: toUtcIsoTimestamp(new Date().toISOString()),
       kind: "user",
       scope: "task",
       taskTitle,
@@ -1736,7 +1736,7 @@ export class Orchestrator {
           id: randomUUID(),
           taskId,
           sender: sourceAgentId,
-          timestamp: new Date().toISOString(),
+          timestamp: toUtcIsoTimestamp(new Date().toISOString()),
           content: this.buildDispatchMessageContent(
             batch.triggerTargets,
             batch.displayContent,
@@ -1846,7 +1846,7 @@ export class Orchestrator {
           id: randomUUID(),
           taskId,
           sender: job.sourceAgentId,
-          timestamp: new Date().toISOString(),
+          timestamp: toUtcIsoTimestamp(new Date().toISOString()),
           content: formatActionRequiredRequestContent(
             remediationDisplayContent,
             [job.agentId],
@@ -1990,7 +1990,7 @@ export class Orchestrator {
         taskId: task.id,
         content: `[${runtimeAgentId}] 执行失败：Task ${task.id} 缺少 Agent ${runtimeAgentId}`,
         sender: "system",
-        timestamp: new Date().toISOString(),
+        timestamp: toUtcIsoTimestamp(new Date().toISOString()),
         kind: "system-message",
       };
       this.store.insertMessage(cwd, missingAgentMessage);
@@ -2109,7 +2109,7 @@ export class Orchestrator {
         taskId: task.id,
         content: displayContent,
         sender: runtimeAgentId,
-        timestamp: response.timestamp,
+        timestamp: toUtcIsoTimestamp(response.timestamp),
         kind: "agent-final" as const,
         runCount: currentAgent.runCount,
         status: response.status,
@@ -2253,7 +2253,7 @@ export class Orchestrator {
         taskId: task.id,
         content: `[${runtimeAgentId}] 执行失败：${error instanceof Error ? error.message : "未知错误"}`,
         sender: "system",
-        timestamp: new Date().toISOString(),
+        timestamp: toUtcIsoTimestamp(new Date().toISOString()),
         kind: "system-message",
       };
       this.store.insertMessage(cwd, failedMessage);
@@ -2323,7 +2323,7 @@ export class Orchestrator {
             id: randomUUID(),
             taskId,
             sender: "system",
-            timestamp: completionTimestamp,
+            timestamp: toUtcIsoTimestamp(completionTimestamp),
             content: buildTaskRoundFinishedMessageContent(),
             kind: "task-round-finished",
             finishReason: finishReason ?? "round_finished",
@@ -2332,7 +2332,7 @@ export class Orchestrator {
             id: randomUUID(),
             taskId,
             sender: "system",
-            timestamp: completionTimestamp,
+            timestamp: toUtcIsoTimestamp(completionTimestamp),
             content: buildTaskCompletionMessageContent(
               withOptionalValue(
                 {
@@ -2577,7 +2577,7 @@ export class Orchestrator {
       taskId: input.taskId,
       content: detail,
       sender: input.agentId,
-      timestamp: input.activity.timestamp,
+      timestamp: toUtcIsoTimestamp(input.activity.timestamp),
       kind: "agent-progress" as const,
       activityKind: input.activity.kind satisfies AgentProgressActivityKind,
       label: input.activity.label,

@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { act } from "react";
 
 import type { TaskSnapshot, TopologyRecord, WorkspaceSnapshot } from "@shared/types";
-
 import { renderTopologyGraphInDom } from "../../test-support/components/topology-graph-dom";
+import { toUtcIsoTimestamp } from "@shared/types";
 
 const TASK_ID = "task-runtime-refresh";
 const WORKSPACE_CWD = "/tmp/agent-team-topology-runtime-refresh";
@@ -218,7 +218,7 @@ test("TopologyGraph 会继续展示刚完成的运行实例", async () => {
         taskId: TASK_ID,
         sender: "漏洞挑战-1",
         content: "漏洞挑战-1 已经完成本轮回应。",
-        timestamp: "2026-04-29T10:00:02.000Z",
+        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:02.000Z"),
         kind: "agent-final",
         runCount: 1,
         status: "completed",
@@ -248,5 +248,142 @@ test("TopologyGraph 会继续展示刚完成的运行实例", async () => {
     assert.equal(rendered.window.document.body.textContent?.includes("漏洞挑战-1 已经完成本轮回应。"), true);
   } finally {
     await rendered.cleanup();
+  }
+});
+
+test("TopologyGraph 会在过程消息超过 1 分钟后自动从拓扑列表移除，并保留最终结果消息", async () => {
+  const originalDateNow = Date.now;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const scheduledTimeouts = new Map<
+    number,
+    {
+      runAtMs: number;
+      callback: () => void;
+    }
+  >();
+  let nowMs = Date.parse("2026-04-29T10:01:29.000Z");
+  let nextTimeoutId = 1;
+
+  Date.now = () => nowMs;
+  globalThis.setTimeout = ((handler: TimerHandler, timeout?: number) => {
+    if (typeof handler !== "function") {
+      throw new Error("测试只接受函数型定时器");
+    }
+    const timeoutId = nextTimeoutId;
+    nextTimeoutId += 1;
+    scheduledTimeouts.set(timeoutId, {
+      runAtMs: nowMs + (timeout ?? 0),
+      callback: handler as () => void,
+    });
+    return timeoutId as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((timeoutId: ReturnType<typeof setTimeout>) => {
+    scheduledTimeouts.delete(Number(timeoutId));
+  }) as typeof clearTimeout;
+
+  const task = createTask({
+    agents: [
+      {
+        id: "线索发现",
+        taskId: TASK_ID,
+        opencodeSessionId: "session-clue",
+        opencodeAttachBaseUrl: "http://localhost:4310",
+        status: "running",
+        runCount: 1,
+      },
+    ],
+    messages: [
+      {
+        id: "runtime-tool-expired",
+        taskId: TASK_ID,
+        sender: "线索发现",
+        content: "读取过期工具文件",
+        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:28.000Z"),
+        kind: "agent-progress",
+        activityKind: "tool",
+        label: "read_file",
+        detail: "参数: expired.ts",
+        detailState: "complete",
+        sessionId: "session-clue",
+        runCount: 1,
+      },
+      {
+        id: "runtime-tool-fresh",
+        taskId: TASK_ID,
+        sender: "线索发现",
+        content: "读取未过期工具文件",
+        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:30.000Z"),
+        kind: "agent-progress",
+        activityKind: "tool",
+        label: "read_file",
+        detail: "参数: fresh.ts",
+        detailState: "complete",
+        sessionId: "session-clue",
+        runCount: 1,
+      },
+      {
+        id: "runtime-final-kept",
+        taskId: TASK_ID,
+        sender: "线索发现",
+        content: "最终结果消息仍然展示",
+        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:10.000Z"),
+        kind: "agent-final",
+        runCount: 1,
+        status: "completed",
+        routingKind: "default",
+        responseNote: "",
+        rawResponse: "最终结果消息仍然展示",
+      },
+    ],
+  });
+
+  const rendered = await renderTopologyGraphInDom({
+    workspace,
+    task,
+    openingAgentTerminalId: "",
+    onToggleMaximize: () => {},
+    onOpenAgentTerminal: () => {},
+  });
+
+  function runDueTimeouts(targetMs: number) {
+    nowMs = targetMs;
+    for (;;) {
+      const dueTimeout = [...scheduledTimeouts.entries()]
+        .filter(([, timeout]) => timeout.runAtMs <= nowMs)
+        .sort((left, right) => left[1].runAtMs - right[1].runAtMs)[0];
+      if (!dueTimeout) {
+        break;
+      }
+      scheduledTimeouts.delete(dueTimeout[0]);
+      dueTimeout[1].callback();
+    }
+  }
+
+  try {
+    await act(async () => {
+      await rendered.flushAnimationFrames();
+    });
+
+    let pageText = rendered.window.document.body.textContent ?? "";
+    assert.equal(pageText.includes("参数: expired.ts"), false);
+    assert.equal(pageText.includes("参数: fresh.ts"), true);
+    assert.equal(pageText.includes("最终结果消息仍然展示"), true);
+
+    await act(async () => {
+      runDueTimeouts(Date.parse("2026-04-29T10:01:31.000Z"));
+    });
+    await act(async () => {
+      await rendered.flushAnimationFrames();
+    });
+
+    pageText = rendered.window.document.body.textContent ?? "";
+    assert.equal(pageText.includes("参数: fresh.ts"), false);
+    assert.equal(pageText.includes("最终结果消息仍然展示"), true);
+  } finally {
+    await rendered.cleanup();
+    Date.now = originalDateNow;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
   }
 });

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import type { MessageRecord, TaskAgentRecord, TaskRecord } from "@shared/types";
 import { reconcileTaskSnapshotFromMessages } from "./task-lifecycle-rules";
+import { toUtcIsoTimestamp } from "@shared/types";
 
 function createAgentFinalMessage(
   input: {
@@ -27,7 +28,7 @@ function createAgentFinalMessage(
     id: input.id,
     taskId: "task-1",
     sender: input.sender,
-    timestamp: input.timestamp,
+    timestamp: toUtcIsoTimestamp(input.timestamp),
     content: input.content,
     kind: "agent-final" as const,
     runCount: input.runCount ?? 1,
@@ -56,7 +57,7 @@ function createTaskRoundFinishedMessage(input: {
     id: input.id,
     taskId: "task-1",
     sender: "system",
-    timestamp: input.timestamp,
+    timestamp: toUtcIsoTimestamp(input.timestamp),
     content: input.content,
     kind: "task-round-finished",
     finishReason: "round_finished",
@@ -104,14 +105,14 @@ test("task-round-finished 与更晚的 agent-final 必须纠正滞后的 task/ag
     createAgentFinalMessage({
       id: "message-1",
       sender: "CodeReview",
-      timestamp: "2026-04-21T03:48:00.819Z",
+      timestamp: toUtcIsoTimestamp("2026-04-21T03:48:00.819Z"),
       content: "<complete>通过</complete>",
       routingKind: "labeled",
       trigger: "<complete>",
     }),
     createTaskRoundFinishedMessage({
       id: "message-2",
-      timestamp: "2026-04-21T03:48:00.910Z",
+      timestamp: toUtcIsoTimestamp("2026-04-21T03:48:00.910Z"),
       content: "本轮已完成，可继续 @Agent 发起下一轮。",
     }),
   ];
@@ -154,14 +155,14 @@ test("旧的 task-round-finished 后面出现新的用户消息时，补偿逻�
   const messages: MessageRecord[] = [
     createTaskRoundFinishedMessage({
       id: "message-1",
-      timestamp: "2026-04-21T03:48:00.910Z",
+      timestamp: toUtcIsoTimestamp("2026-04-21T03:48:00.910Z"),
       content: "本轮已完成，可继续 @Agent 发起下一轮。",
     }),
     {
       id: "message-2",
       taskId: "task-1",
       sender: "user",
-      timestamp: "2026-04-21T03:49:00.000Z",
+      timestamp: toUtcIsoTimestamp("2026-04-21T03:49:00.000Z"),
       content: "@BA 请继续第二轮",
       kind: "user",
       scope: "task",

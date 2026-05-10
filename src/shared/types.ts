@@ -17,6 +17,23 @@ export type AgentRoutingKind = "default" | "labeled" | "invalid";
 export type PermissionMode = "allow" | "ask" | "deny";
 
 const BUILD_AGENT_ID = "Build";
+declare const UTC_ISO_TIMESTAMP_BRAND: unique symbol;
+const UTC_ISO_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+
+export type UtcIsoTimestamp = string & {
+  readonly [UTC_ISO_TIMESTAMP_BRAND]: "UtcIsoTimestamp";
+};
+
+export function toUtcIsoTimestamp(value: string): UtcIsoTimestamp {
+  if (!UTC_ISO_TIMESTAMP_PATTERN.test(value)) {
+    throw new Error(`非法 UTC ISO 时间戳：${value}`);
+  }
+  if (new Date(value).toISOString() !== value) {
+    throw new Error(`非法 UTC ISO 时间戳：${value}`);
+  }
+  return value as UtcIsoTimestamp;
+}
 
 export function usesOpenCodeBuiltinPrompt(agentId: string): boolean {
   return agentId.trim().toLowerCase() === BUILD_AGENT_ID.toLowerCase();
@@ -381,7 +398,7 @@ interface BaseMessageRecord {
   taskId: string;
   content: string;
   sender: string;
-  timestamp: string;
+  timestamp: UtcIsoTimestamp;
 }
 
 export interface UserMessageRecord extends BaseMessageRecord {
@@ -548,7 +565,7 @@ export interface AgentRuntimeActivity {
   kind: "tool" | "message" | "thinking" | "step";
   label: string;
   detail: string;
-  timestamp: string;
+  timestamp: UtcIsoTimestamp;
 }
 
 export interface AgentRuntimeSnapshot {

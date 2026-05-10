@@ -13,6 +13,7 @@ import {
   buildTopologyNodeRecords,
   type MessageRecord,
   type TaskAgentRecord,
+  toUtcIsoTimestamp,
   type UiSnapshotPayload,
 } from "@shared/types";
 
@@ -23,7 +24,7 @@ function createSystemMessage(id: string, sender: "system" | "BA", content: strin
       taskId: "task-1",
       sender: "system",
       content,
-      timestamp,
+      timestamp: toUtcIsoTimestamp(timestamp),
       kind: "system-message",
     };
   }
@@ -33,7 +34,7 @@ function createSystemMessage(id: string, sender: "system" | "BA", content: strin
     taskId: "task-1",
     sender: "BA",
     content,
-    timestamp,
+    timestamp: toUtcIsoTimestamp(timestamp),
     kind: "agent-final",
     runCount: 1,
     status: "completed",

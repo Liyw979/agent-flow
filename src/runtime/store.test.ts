@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { buildTopologyNodeRecords } from "@shared/types";
+import { buildTopologyNodeRecords, toUtcIsoTimestamp } from "@shared/types";
 
 import { StoreService } from "./store";
 
@@ -72,7 +72,7 @@ test("StoreService 会在内存里保存 topology / tasks / taskAgents / message
     taskId: "task-1",
     sender: "system",
     content: "Task 已创建",
-    timestamp: "2026-04-21T00:00:01.000Z",
+    timestamp: toUtcIsoTimestamp("2026-04-21T00:00:01.000Z"),
     kind: "system-message",
   });
 

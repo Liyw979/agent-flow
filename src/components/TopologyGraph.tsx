@@ -33,7 +33,7 @@ import { getTopologyDisplayNodeIds } from "@/components/topology-spawn-drafts";
 import { buildTopologyCanvasLayout } from "@/lib/topology-canvas";
 import { getTopologyCanvasViewportMeasurementKey } from "@/lib/topology-canvas-viewport-measure";
 import { getTopologyPanelBodyClassName } from "@/lib/topology-panel-layout";
-import type { TaskSnapshot, WorkspaceSnapshot } from "@shared/types";
+import type { MessageRecord, TaskSnapshot, UtcIsoTimestamp, WorkspaceSnapshot } from "@shared/types";
 
 interface TopologyGraphProps {
   workspace: WorkspaceSnapshot;
@@ -67,6 +67,39 @@ interface TopologyNodePresentation {
 const TOPOLOGY_VIEWPORT_OVERLAY_STRATEGY = resolveFullscreenOverlayStrategy({
   ancestorCssEffects: ["backdrop-filter"],
 });
+const PROCESS_HISTORY_VISIBILITY_WINDOW_MS = 60_000;
+
+function parseMessageTimestampMs(message: MessageRecord) {
+  const timestampMs = Date.parse(message.timestamp);
+  if (Number.isNaN(timestampMs)) {
+    throw new Error(`拓扑过程消息时间戳非法：${message.id}`);
+  }
+  return timestampMs;
+}
+
+function isVisibleTopologyHistoryMessage(message: MessageRecord, nowMs: number) {
+  if (message.kind !== "agent-progress") {
+    return true;
+  }
+  return nowMs - parseMessageTimestampMs(message) < PROCESS_HISTORY_VISIBILITY_WINDOW_MS;
+}
+
+function getNextTopologyHistoryRefreshDelayMs(
+  messages: MessageRecord[],
+  nowMs: number,
+) {
+  let nextExpiryMs = Number.POSITIVE_INFINITY;
+  for (const message of messages) {
+    if (message.kind !== "agent-progress") {
+      continue;
+    }
+    const expiryMs = parseMessageTimestampMs(message) + PROCESS_HISTORY_VISIBILITY_WINDOW_MS;
+    if (expiryMs > nowMs && expiryMs < nextExpiryMs) {
+      nextExpiryMs = expiryMs;
+    }
+  }
+  return Number.isFinite(nextExpiryMs) ? nextExpiryMs - nowMs + 1 : Number.POSITIVE_INFINITY;
+}
 
 function getHistoryItemClassName(item: AgentHistoryItem) {
   switch (item.tone) {
@@ -85,7 +118,7 @@ function getHistoryItemClassName(item: AgentHistoryItem) {
   }
 }
 
-function formatHistoryTimestamp(timestamp: string) {
+function formatHistoryTimestamp(timestamp: UtcIsoTimestamp) {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) {
     return timestamp;
@@ -237,6 +270,7 @@ export function TopologyGraph({
   const [maximizedAgentId, setMaximizedAgentId] = useState<string | null>(null);
   const [selectedHistoryItem, setSelectedHistoryItem] =
     useState<SelectedHistoryItemState | null>(null);
+  const [, refreshHistory] = useState(0);
 
   function renderViewportOverlay(content: ReactNode) {
     if (
@@ -274,6 +308,38 @@ export function TopologyGraph({
         : [],
     [topology, visibleTopologyCandidateNodeIds],
   );
+  const historyNowMs = Date.now();
+  const historyVisibleMessages = useMemo(
+    () =>
+      task?.messages.filter((message) =>
+        isVisibleTopologyHistoryMessage(message, historyNowMs),
+      ) ?? [],
+    [historyNowMs, task?.messages],
+  );
+  const nextHistoryRefreshDelayMs = useMemo(
+    () =>
+      task
+        ? getNextTopologyHistoryRefreshDelayMs(
+            task.messages,
+            historyNowMs,
+          )
+        : Number.POSITIVE_INFINITY,
+    [historyNowMs, task?.messages],
+  );
+
+  useEffect(() => {
+    if (!Number.isFinite(nextHistoryRefreshDelayMs)) {
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      refreshHistory((current) => current + 1);
+    }, nextHistoryRefreshDelayMs);
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [nextHistoryRefreshDelayMs]);
+
   const rawHistoryByAgent = useMemo(() => {
     if (!topology) {
       return new Map<string, AgentHistoryItem[]>();
@@ -288,12 +354,12 @@ export function TopologyGraph({
         agentId,
         buildAgentHistoryItems({
           agentId: agentId,
-          messages: task.messages,
+          messages: historyVisibleMessages,
           topology,
         }).filter((item) => item.detail !== EMPTY_AGENT_HISTORY_DETAIL),
       ]),
     );
-  }, [orderedNodeIds, task, topology]);
+  }, [historyVisibleMessages, orderedNodeIds, task, topology]);
   const visibleNodeIds = orderedNodeIds;
   const canvasViewportMeasurementKey = useMemo(
     () =>
