@@ -29,7 +29,7 @@ interface TeamDslAgentRecord {
 interface GraphDslAgentNode {
   type: "agent";
   id: string;
-  prompt: string;
+  system_prompt: string;
   writable: boolean;
   initialMessage?: string | string[];
 }
@@ -140,7 +140,7 @@ const GraphDslLinkSchema = z.object({
 const GraphDslAgentNodeSchema = z.object({
   type: z.literal("agent"),
   id: z.string(),
-  prompt: z.string(),
+  system_prompt: z.string(),
   writable: z.boolean(),
   initialMessage: z.union([z.string(), z.array(z.string())]).optional(),
 }).strict().superRefine((value, ctx) => {
@@ -289,11 +289,11 @@ function compileAgentDefinition(agent: TeamDslAgentRecord): CompiledTeamDslAgent
   const templateName = isBuiltinTemplateName(name) ? name : null;
   const prompt = agent.prompt.trim();
   if (!templateName && !prompt) {
-    throw new Error(`DSL Agent ${name} 不是内置模板，必须提供 prompt。`);
+    throw new Error(`DSL Agent ${name} 不是内置模板，必须提供 system_prompt。`);
   }
 
   if (usesOpenCodeBuiltinPrompt(name) && prompt) {
-    throw new Error(`${name} 使用 OpenCode 内置 prompt，DSL 中不允许覆盖 prompt。`);
+    throw new Error(`${name} 使用 OpenCode 内置 prompt，DSL 中不允许覆盖 system_prompt。`);
   }
 
   return {
@@ -557,7 +557,7 @@ function collectGraphDslNodeDefinitions(
         ? {
             type: "agent" as const,
             id: node.id,
-            prompt: node.prompt,
+            prompt: node.system_prompt,
             writable: node.writable,
             initialMessageRouting: parseInitialMessageRoutingFromDslInput(node.initialMessage),
           }
@@ -669,7 +669,7 @@ function assertGraphAgentPromptsDeclareOutgoingTriggers(graph: GraphDslGraph): v
   const agentPrompts = new Map(
     graph.nodes
       .filter((node): node is GraphDslAgentNode => node.type === "agent")
-      .map((node) => [node.id, node.prompt]),
+      .map((node) => [node.id, node.system_prompt]),
   );
   const triggersBySource = new Map<string, Set<string>>();
 
@@ -693,7 +693,7 @@ function assertGraphAgentPromptsDeclareOutgoingTriggers(graph: GraphDslGraph): v
     }
     const missingTriggers = [...triggers].filter((trigger) => !prompt.includes(trigger));
     if (missingTriggers.length > 0) {
-      throw new Error(`DSL Agent ${agentId} 的 prompt 必须显式包含以下 trigger：${missingTriggers.join("、")}`);
+      throw new Error(`DSL Agent ${agentId} 的 system_prompt 必须显式包含以下 trigger：${missingTriggers.join("、")}`);
     }
   }
 

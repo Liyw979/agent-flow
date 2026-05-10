@@ -20,7 +20,7 @@ test("loadTeamDslDefinitionFile 读取 .json5 文件时支持 JSON5 语法", () 
       {
         type: "agent",
         id: "BA",
-        prompt: "你是 BA。",
+        system_prompt: "你是 BA。",
         writable: false,
       },
     ],
