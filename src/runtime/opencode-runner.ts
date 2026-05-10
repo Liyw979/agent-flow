@@ -90,7 +90,12 @@ export class OpenCodeRunner {
   ): Promise<OpenCodeExecutionResult | AttemptFailure> {
     try {
       const submitted = await this.client.submitMessage(runtimeTarget, payload.sessionId, payload);
-      const result = await this.client.resolveExecutionResult(runtimeTarget, payload.sessionId, submitted);
+      const result = await this.client.resolveExecutionResult(
+        runtimeTarget,
+        payload.sessionId,
+        submitted,
+        payload.agent,
+      );
       if (result.status === "completed") {
         return result;
       }

@@ -113,17 +113,72 @@ test("request 会跟随当前 serverHandle 的实际端口", async () => {
   assert.equal(requestedUrl, "http://127.0.0.1:43127/session");
 });
 
-test("submitMessage 在空响应体时必须报错，不能伪造 pending message", async () => {
+test("submitMessage 在空响应体或空对象响应时会在原地重试直到拿到有效消息实体", async () => {
   const { client, projectPath } = createClient();
-  client.request = async () => new Response("", { status: 200 });
+  let requestCount = 0;
+  client.request = async () => {
+    requestCount += 1;
+    return requestCount === 1
+      ? new Response("", { status: 200 })
+      : requestCount === 2
+        ? new Response("{}", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+      : new Response(JSON.stringify({
+          id: "msg-1",
+          role: "assistant",
+          parts: [{ type: "text", text: "已发送" }],
+          createdAt: "2026-05-07T00:00:00.000Z",
+          sessionID: "session-1",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+  };
 
-  await assert.rejects(
-    client.submitMessage(projectPath, "session-1", {
+  const message = await withFastForwardedTimeouts(() => client.submitMessage(projectPath, "session-1", {
       agent: "BA",
       content: "请整理需求",
-    }),
-    /响应缺少有效的消息实体/,
-  );
+    }));
+  assert.equal(message.id, "msg-1");
+  assert.equal(requestCount, 3);
+});
+
+test("submitMessage 在 POST 失败时会在原地重试直到提交成功", async () => {
+  const { client, projectPath } = createClient();
+  let requestCount = 0;
+  const requestAt: number[] = [];
+  client.request = async () => {
+    requestCount += 1;
+    requestAt.push(Date.now());
+    if (requestCount === 1) {
+      return new Response("server error", { status: 500 });
+    }
+    if (requestCount === 2) {
+      throw new Error("fetch failed");
+    }
+    return new Response(JSON.stringify({
+      id: "msg-2",
+      role: "assistant",
+      parts: [{ type: "text", text: "已恢复提交" }],
+      createdAt: "2026-05-07T00:00:00.000Z",
+      sessionID: "session-1",
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const message = await withFastForwardedTimeouts(() => client.submitMessage(projectPath, "session-1", {
+    agent: "BA",
+    content: "请整理需求",
+  }), 60_000);
+
+  assert.equal(message.id, "msg-2");
+  assert.equal(requestCount, 3);
+  const requestRetryAt = requestAt as [number, number, number];
+  assert.deepEqual([requestRetryAt[1] - requestRetryAt[0], requestRetryAt[2] - requestRetryAt[1]], [60_000, 60_000]);
 });
 
 test("submitMessage 最终请求体不注入 system 字段", async () => {
@@ -154,6 +209,100 @@ test("submitMessage 最终请求体不注入 system 字段", async () => {
     agent: "TaskReview",
     parts: [{ type: "text", text: "请继续判定" }],
   });
+});
+
+test("resolveExecutionResult 在 completed 响应未返回合法 trigger 时会按 60 秒间隔重试直到拿到合法 trigger", async () => {
+  const { client, projectPath } = createClient();
+  client.setInjectedConfigContent(projectPath, JSON.stringify({
+    agent: {
+      TaskReview: {
+        mode: "primary",
+        prompt: "Only return <continue-v2> or <complete_done> and never <example>.",
+      },
+    },
+  }));
+  const typed = client as OpenCodeClient & {
+    waitForMessageCompletion: (
+      target: string,
+      sessionId: string,
+      messageId: string,
+      after: string,
+      timeoutMs: number,
+    ) => Promise<OpenCodeNormalizedMessage | null>;
+    waitForSessionSettled: (sessionId: string, after: number, timeoutMs: number) => Promise<void>;
+    getSessionMessage: (target: string, sessionId: string, messageId: string) => Promise<OpenCodeNormalizedMessage | null>;
+    getLatestAssistantMessage: (target: string, sessionId: string) => Promise<OpenCodeNormalizedMessage | null>;
+    submitMessage: (
+      target: string,
+      sessionId: string,
+      payload: {
+        agent: string;
+        content: string;
+      },
+    ) => Promise<OpenCodeNormalizedMessage>;
+  };
+  const submittedContents = ["初始请求"];
+  const submittedAt: number[] = [];
+  let submitCount = 1;
+  let replyCount = 0;
+
+  typed.waitForSessionSettled = async () => new Promise<void>(() => undefined);
+  typed.getSessionMessage = async () => null;
+  typed.getLatestAssistantMessage = async () => null;
+  typed.submitMessage = async (_target, _sessionId, payload) => {
+    submitCount += 1;
+    submittedContents.push(payload.content);
+    submittedAt.push(Date.now());
+    return {
+      id: `submitted-${submitCount}`,
+      content: payload.content,
+      sender: "assistant",
+      timestamp: toUtcIsoTimestamp(`2026-05-11T00:01:0${submitCount}.000Z`),
+      error: null,
+      raw: null,
+    };
+  };
+  typed.waitForMessageCompletion = async (_target, _sessionId, messageId) => {
+    replyCount += 1;
+    return {
+      id: `reply-${messageId}`,
+      content: replyCount === 1
+        ? "<example> 假合法标签 </example>"
+        : replyCount === 2
+          ? "<456> 非法判定"
+        : "<complete_done>第三次恢复</complete_done>",
+      sender: "assistant",
+      timestamp: toUtcIsoTimestamp("2026-05-11T00:01:10.000Z"),
+      error: null,
+      raw: null,
+    };
+  };
+
+  const result = await withFastForwardedTimeouts(() => {
+    submittedAt.push(Date.now());
+    return client.resolveExecutionResult(
+      projectPath,
+      "session-1",
+      {
+        id: "submitted-1",
+        content: "初始请求",
+        sender: "assistant",
+        timestamp: toUtcIsoTimestamp("2026-05-11T00:01:00.000Z"),
+        error: null,
+        raw: null,
+      },
+      "TaskReview",
+    );
+  }, 60_000);
+
+  assert.equal(result.finalMessage, "<complete_done>第三次恢复</complete_done>");
+  assert.deepEqual(submittedContents, [
+    "初始请求",
+    "需要返回：<continue-v2> / <complete_done>",
+    "需要返回：<continue-v2> / <complete_done>",
+  ]);
+  const submittedRetryAt = submittedAt as [number, number, number];
+  assert.deepEqual([submittedRetryAt[1] - submittedRetryAt[0], submittedRetryAt[2] - submittedRetryAt[1]], [60_000, 60_000]);
 });
 
 test("createSession throws when the response is missing a session id", async () => {
@@ -316,14 +465,14 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
     timestamp: toUtcIsoTimestamp(completedAt),
     error: null,
     raw: null,
-  });
+  }, "TaskReview");
   const elapsed = Date.now() - startedAt;
 
   assert.equal(result.finalMessage, "已完成");
   assert.ok(elapsed < 120, `resolveExecutionResult 耗时 ${elapsed}ms，说明仍然被 session idle 等待拖住了`);
 });
 
-test("resolveExecutionResult 在没有任何 assistant 消息时必须报错，不能拿提交态或空消息兜底", async () => {
+test("resolveExecutionResult 在没有任何 assistant 消息时会在原地重试直到拿到正式回复", async () => {
   const { client, projectPath } = createClient();
   const typed = client as unknown as OpenCodeClient & {
     waitForSessionSettled: (sessionId: string, after: number, timeoutMs: number) => Promise<void>;
@@ -339,8 +488,21 @@ test("resolveExecutionResult 在没有任何 assistant 消息时必须报错，�
   };
 
   typed.waitForSessionSettled = async () => undefined;
+  let resolveCount = 0;
   typed.waitForMessageCompletion = async () => null;
-  typed.getLatestAssistantMessage = async () => null;
+  typed.getLatestAssistantMessage = async () => {
+    resolveCount += 1;
+    return resolveCount === 1
+      ? null
+      : {
+          id: "msg-final",
+          content: "已恢复正式回复",
+          sender: "assistant",
+          timestamp: toUtcIsoTimestamp("2026-04-25T00:01:00.000Z"),
+          error: null,
+          raw: null,
+        };
+  };
   typed.getSessionRuntime = async () => ({
     sessionId: "session-1",
     messageCount: 0,
@@ -350,17 +512,16 @@ test("resolveExecutionResult 在没有任何 assistant 消息时必须报错，�
     activities: [],
   });
 
-  await assert.rejects(
-    typed.resolveExecutionResult(projectPath, "session-1", {
+  const result = await withFastForwardedTimeouts(() => typed.resolveExecutionResult(projectPath, "session-1", {
       id: "msg-user",
       content: "请整理需求",
       sender: "user",
       timestamp: toUtcIsoTimestamp("2026-04-25T00:00:00.000Z"),
       error: null,
       raw: null,
-    }),
-    /未返回任何有效的 assistant 消息/,
-  );
+    }, "BA"));
+  assert.equal(result.finalMessage, "已恢复正式回复");
+  assert.equal(resolveCount, 2);
 });
 
 test("recoverExecutionResultAfterTransportError 在 fetch failed 后会从 session 历史恢复正式回复", async () => {
