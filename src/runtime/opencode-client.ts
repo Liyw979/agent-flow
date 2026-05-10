@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseJson5 } from "@shared/json5";
 import { withOptionalValue } from "@shared/object-utils";
+import { normalizeTopologyEdgeTrigger } from "@shared/types";
+import { parseDecision } from "./decision-parser";
 import { buildSubmitMessageBody } from "./opencode-request-body";
 import { toOpenCodeAgentId } from "./opencode-agent-id";
 import { appendAppLog } from "./app-log";
@@ -68,6 +70,7 @@ export interface OpenCodeSessionRuntime {
 const MAX_RUNTIME_MESSAGES = 100;
 const SERVE_BASE_URL_TIMEOUT_MS = 10_000;
 const TRANSPORT_ERROR_RECOVERY_TIMEOUT_MS = 180_000;
+const RETRYABLE_CLIENT_INTERVAL_MS = 60_000;
 interface SessionWaiter {
   sessionId: string;
   after: number;
@@ -114,6 +117,19 @@ type TransportRecoveryInspection =
     messageCount: number;
     result: OpenCodeExecutionResult;
   };
+
+type ConfiguredDecisionMode =
+  | {
+    kind: "plain";
+  }
+  | {
+    kind: "decision";
+    triggers: string[];
+  };
+
+class RetryableSubmitMessageError extends Error {}
+
+class RetryableExecutionResultError extends Error {}
 
 export interface OpenCodeRuntimeTarget {
   runtimeKey: string;
@@ -265,85 +281,141 @@ export class OpenCodeClient {
   ): Promise<OpenCodeNormalizedMessage> {
     const normalized = this.normalizeTarget(target);
     const opencodeAgent = toOpenCodeAgentId(payload.agent);
+    while (true) {
+      try {
+        const body = buildSubmitMessageBody({
+          agent: opencodeAgent,
+          content: payload.content,
+        });
 
-    const body = buildSubmitMessageBody({
-      agent: opencodeAgent,
-      content: payload.content,
-    });
-    // Do not send deprecated `tools` here. OpenCode copies that field into session-level
-    // permissions, which can accidentally reopen write/edit/bash access for restricted agents.
+        const response = await this.request(`/session/${sessionId}/message`, {
+          method: "POST",
+          target: normalized,
+          body: JSON.stringify(body),
+        }).catch((error) => {
+          throw new RetryableSubmitMessageError(String(error));
+        });
 
-    const response = await this.request(`/session/${sessionId}/message`, {
-      method: "POST",
-      target: normalized,
-      body: JSON.stringify(body),
-    });
+        if (!response.ok) {
+          throw new RetryableSubmitMessageError(`OpenCode 请求失败: ${response.status}`);
+        }
 
-    if (!response.ok) {
-      throw new Error(`OpenCode 请求失败: ${response.status}`);
+        const raw = await this.readJsonResponse(response);
+        if (!raw || typeof raw !== "object") {
+          appendAppLog("error", "opencode.submit_message_invalid_response", {
+            projectPath: normalized.projectPath,
+            sessionId,
+            agent: opencodeAgent,
+            status: response.status,
+          }, {
+            runtimeKey: normalized.runtimeKey,
+          });
+          throw new RetryableSubmitMessageError("OpenCode 提交消息响应缺少有效的消息实体");
+        }
+        const envelope = this.asRecord(raw);
+        const info = this.asRecord(envelope["info"] ?? raw);
+        if (typeof info["id"] !== "string" && typeof envelope["id"] !== "string") {
+          appendAppLog("error", "opencode.submit_message_invalid_response", {
+            projectPath: normalized.projectPath,
+            sessionId,
+            agent: opencodeAgent,
+            status: response.status,
+          }, {
+            runtimeKey: normalized.runtimeKey,
+          });
+          throw new RetryableSubmitMessageError("OpenCode 提交消息响应缺少有效的消息实体");
+        }
+        return this.normalizeMessageEnvelope(raw as Record<string, unknown>, opencodeAgent);
+      } catch (error) {
+        if (!(error instanceof RetryableSubmitMessageError)) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
+      }
     }
-
-    const raw = await this.readJsonResponse(response);
-    if (!raw || typeof raw !== "object") {
-      appendAppLog("error", "opencode.submit_message_invalid_response", {
-        projectPath: normalized.projectPath,
-        sessionId,
-        agent: opencodeAgent,
-        status: response.status,
-      }, {
-        runtimeKey: normalized.runtimeKey,
-      });
-      throw new Error("OpenCode 提交消息响应缺少有效的消息实体");
-    }
-    return this.normalizeMessageEnvelope(raw as Record<string, unknown>, opencodeAgent);
   }
 
   async resolveExecutionResult(
     target: OpenCodeRuntimeTargetInput,
     sessionId: string,
     submitted: OpenCodeNormalizedMessage,
+    agentId: string,
   ): Promise<OpenCodeExecutionResult> {
     const normalized = this.normalizeTarget(target);
-    const submittedAt = Date.parse(submitted.timestamp) || Date.now();
-    const messageCompletionPromise = this.waitForMessageCompletion(
-      normalized,
-      sessionId,
-      submitted.id,
-      submitted.timestamp,
-      8000,
-    );
-    let latest = await Promise.race([
-      messageCompletionPromise,
-      this.waitForSessionSettled(sessionId, submittedAt, 8000)
-        .then(async () => {
-          const current = await this.getSessionMessage(normalized, sessionId, submitted.id);
-          return current && this.isTerminalMessage(current) ? current : null;
-        })
-        .catch(() => null),
-    ]);
+    const decisionMode = this.resolveConfiguredDecisionMode(normalized, agentId);
+    let currentSubmitted = submitted;
+    while (true) {
+      try {
+        const submittedAt = Date.parse(currentSubmitted.timestamp) || Date.now();
+        const messageCompletionPromise = this.waitForMessageCompletion(
+          normalized,
+          sessionId,
+          currentSubmitted.id,
+          currentSubmitted.timestamp,
+          8000,
+        );
+        let latest = await Promise.race([
+          messageCompletionPromise,
+          this.waitForSessionSettled(sessionId, submittedAt, 8000)
+            .then(async () => {
+              const current = await this.getSessionMessage(normalized, sessionId, currentSubmitted.id);
+              return current && this.isTerminalMessage(current) ? current : null;
+            })
+            .catch(() => null),
+        ]);
 
-    if (!latest) {
-      latest =
-        (await messageCompletionPromise) ??
-        (await this.getLatestAssistantMessage(normalized, sessionId));
+        if (!latest) {
+          latest =
+            (await messageCompletionPromise) ??
+            (await this.getLatestAssistantMessage(normalized, sessionId));
+        }
+
+        if (!latest) {
+          throw new RetryableExecutionResultError(`OpenCode session ${sessionId} 未返回任何有效的 assistant 消息`);
+        }
+
+        const finalMessage = latest.content || latest.error || "";
+        if (!finalMessage.trim()) {
+          throw new RetryableExecutionResultError(this.buildEmptyAssistantResultError(sessionId, latest));
+        }
+
+        const result: OpenCodeExecutionResult = {
+          status: latest.error ? "error" : "completed",
+          finalMessage,
+          messageId: latest.id,
+          timestamp: latest.timestamp,
+          rawMessage: latest,
+        };
+        if (result.status === "error" || decisionMode.kind === "plain") {
+          return result;
+        }
+
+        if (
+          parseDecision(
+            result.finalMessage,
+            true,
+            decisionMode.triggers.map((trigger) => ({ trigger })),
+          ).kind === "valid"
+        ) {
+          return result;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
+        currentSubmitted = await this.submitMessage(
+          normalized,
+          sessionId,
+          {
+            agent: agentId,
+            content: `需要返回：${decisionMode.triggers.join(" / ")}`,
+          },
+        );
+      } catch (error) {
+        if (!(error instanceof RetryableExecutionResultError)) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
+      }
     }
-
-    if (!latest) {
-      throw new Error(`OpenCode session ${sessionId} 未返回任何有效的 assistant 消息`);
-    }
-
-    const finalMessage = latest.content || latest.error || "";
-    if (!finalMessage.trim()) {
-      throw new Error(this.buildEmptyAssistantResultError(sessionId, latest));
-    }
-
-    return {
-      status: latest.error ? "error" : "completed",
-      finalMessage,
-      messageId: latest.id,
-      timestamp: latest.timestamp,
-      rawMessage: latest,
-    };
   }
 
   async recoverExecutionResultAfterTransportError(
@@ -472,6 +544,89 @@ export class OpenCodeClient {
     this.sessionErrors.clear();
     this.sessionWaiters.clear();
     return this.mergeShutdownReports(reports);
+  }
+
+  private resolveConfiguredDecisionMode(
+    target: OpenCodeRuntimeTargetInput,
+    agentId: string,
+  ): ConfiguredDecisionMode {
+    const configured = this.getProjectServerState(target).injectedConfigContent;
+    if (!configured) {
+      return {
+        kind: "plain",
+      };
+    }
+
+    const parsed = parseJson5<Record<string, unknown>>(configured);
+    const agentSection = parsed["agent"];
+    if (!agentSection || typeof agentSection !== "object" || Array.isArray(agentSection)) {
+      throw new Error("OpenCode injected config 缺少 agent 配置");
+    }
+
+    const rawAgent = (agentSection as Record<string, unknown>)[toOpenCodeAgentId(agentId)];
+    if (!rawAgent || typeof rawAgent !== "object" || Array.isArray(rawAgent)) {
+      return {
+        kind: "plain",
+      };
+    }
+
+    const prompt = (rawAgent as Record<string, unknown>)["prompt"];
+    if (typeof prompt !== "string" || !prompt.trim()) {
+      return {
+        kind: "plain",
+      };
+    }
+
+    const matches = prompt
+      .split(/[。\.；;\n]/u)
+      .map((section) => section.trim())
+      .filter((section) => section.length > 0)
+      .flatMap((section) => {
+        const directiveStart = section.search(/输出|返回|output|return/iu);
+        const source = directiveStart >= 0
+          ? section.slice(directiveStart)
+          : /^\d+\./u.test(section)
+            ? section
+            : "";
+        if (!source) {
+          return [];
+        }
+
+        const firstTrigger = source.match(/<([^\s<>/]+)>/u);
+        if (!firstTrigger || typeof firstTrigger.index !== "number") {
+          return [];
+        }
+
+        const collected: string[] = [];
+        let cursor = firstTrigger.index;
+        while (cursor < source.length) {
+          const trigger = source.slice(cursor).match(/^<([^\s<>/]+)>/u);
+          if (!trigger) {
+            break;
+          }
+          collected.push(trigger[0]);
+          cursor += trigger[0].length;
+
+          const connector = source
+            .slice(cursor)
+            .match(/^\s*(?:\/|、|,|，|or\b|and\b|或)\s*/iu);
+          if (!connector) {
+            break;
+          }
+          cursor += connector[0].length;
+        }
+        return collected;
+      });
+    if (matches.length === 0) {
+      return {
+        kind: "plain",
+      };
+    }
+
+    return {
+      kind: "decision",
+      triggers: [...new Set(matches.map((value) => normalizeTopologyEdgeTrigger(value)))],
+    };
   }
 
   async deleteProject(projectPath: string): Promise<void> {
