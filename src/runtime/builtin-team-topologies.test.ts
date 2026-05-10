@@ -32,6 +32,10 @@ test("内置团队拓扑 JSON 节点使用 id 字段而不是 name 字段", () =
       assert.ok(node);
       assert.equal(typeof node.id, "string", `${fileName} 节点必须使用 id 字段`);
       assert.equal(Object.prototype.hasOwnProperty.call(node, "name"), false, `${fileName} 节点不能使用 name 字段`);
+      if (node.type === "agent") {
+        assert.equal(Object.prototype.hasOwnProperty.call(node, "prompt"), false, `${fileName} agent 节点不能使用 prompt 字段`);
+        assert.equal(typeof node.system_prompt, "string", `${fileName} agent 节点必须使用 system_prompt 字段`);
+      }
       if (node.type === "spawn") {
         stack.push(...node.graph.nodes);
       }

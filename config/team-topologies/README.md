@@ -19,7 +19,7 @@
     {
       "type": "agent",
       "id": "BA",
-      "prompt": "你是 BA。负责把需求整理清楚。",
+      "system_prompt": "你是 BA。负责把需求整理清楚。",
       "writable": false
     }
   ],
@@ -51,7 +51,7 @@
 {
   "type": "agent",
   "id": "Build",
-  "prompt": "",
+  "system_prompt": "",
   "writable": true
 }
 ```
@@ -62,16 +62,16 @@
   节点判别字段。`agent` 表示这是一个执行型 Agent 节点，会被编译成可运行的 Agent。
 - `id`
   Agent ID，也是拓扑里的节点 ID；必须全局唯一，父图和子图里也不能重复。
-- `prompt`
+- `system_prompt`
   Agent 的职责说明。必须显式提供；普通自定义 Agent 不能为空；`Build` 使用 OpenCode 内置 prompt，因此这里必须写空字符串 `""`，不能覆盖。
 - `writable`
   是否允许该 Agent 使用写入类能力。必须显式提供，`true` 表示可写，`false` 表示只读；不存在默认可写 Agent，`Build` 也必须显式写。
 
 约束：
 
-- `Build` 继续使用 OpenCode 内置 prompt，不允许在 JSON 里覆盖 `prompt`
-- 非内置模板节点如果不提供 `prompt` 或 `prompt` 为空，编译会失败
-- 如果该 Agent 存在非 `<default>` 的 outgoing trigger，这些 trigger 字面值必须显式出现在它自己的 `prompt` 里，否则编译会失败
+- `Build` 继续使用 OpenCode 内置 prompt，不允许在 JSON 里覆盖 `system_prompt`
+- 非内置模板节点如果不提供 `system_prompt` 或 `system_prompt` 为空，编译会失败
+- 如果该 Agent 存在非 `<default>` 的 outgoing trigger，这些 trigger 字面值必须显式出现在它自己的 `system_prompt` 里，否则编译会失败
 - 任何 Agent 如果不提供 `writable`，编译会失败
 
 ### 2.2 `spawn` 节点
@@ -88,13 +88,13 @@
       {
         "type": "agent",
         "id": "漏洞论证",
-        "prompt": "你负责漏洞论证。",
+        "system_prompt": "你负责漏洞论证。",
         "writable": false
       },
       {
         "type": "agent",
         "id": "漏洞挑战",
-        "prompt": "你负责漏洞挑战。",
+        "system_prompt": "你负责漏洞挑战。",
         "writable": false
       }
     ],
@@ -130,7 +130,7 @@
 
 语义：
 
-- `spawn` 不是 agent，所以没有 `prompt`
+- `spawn` 不是 agent，所以没有 `system_prompt`
 - `spawn` 会把上游正文的第一条非空行作为本轮展开项标题
 - 每个输入项都会实例化一份 `graph`
 - 子图全部完成后，`spawn` 节点自身视为完成
@@ -192,13 +192,13 @@
 `trigger` 标签协议：
 
 - Agent 需要命中条件边时，回复开头必须先输出对应标签，再输出正文。
-- 某个 Agent 只要存在非 `<default>` 的 outgoing trigger，这些 trigger 字面值就必须提前写进该 Agent 自己的 `prompt`，否则模型没有可依赖的输出协议，编译阶段会直接拒绝该拓扑。
+- 某个 Agent 只要存在非 `<default>` 的 outgoing trigger，这些 trigger 字面值就必须提前写进该 Agent 自己的 `system_prompt`，否则模型没有可依赖的输出协议，编译阶段会直接拒绝该拓扑。
 - `<default>` 表示普通协作流转。当前节点执行完成后，会沿这条边把结果继续派发给下游节点。
 - `<continue>`、`<complete>` 只是普通示例 label，本身没有任何内置语义。
 - 是否回流、是否进入其他下游、是否结束，只由当前 source 上命中的 `trigger` 与对应边配置决定。
 - 其他任意尖括号标签都会按字面值精确路由，例如 `{ "from": "漏洞论证", "to": "漏洞挑战", "trigger": "<abcd>", "message_type": "last" }` 只有在 Agent 返回 `<abcd>` 时才会命中。
 - 根图可以直接把任意 `trigger` 连到 `__end__`；例如 `{ "from": "漏洞论证", "to": "__end__", "trigger": "<done>", "message_type": "none" }` 表示只有返回 `<done>` 时才结束流程。
-- 拓扑 JSON 的 prompt 只提示开头标签写法。
+- 拓扑 JSON 的 `system_prompt` 只提示开头标签写法。
 
 示例：
 
@@ -229,7 +229,7 @@
 {
   "type": "agent",
   "id": "线索完备性评估",
-  "prompt": "...",
+  "system_prompt": "...",
   "writable": false,
   "initialMessage": ["线索发现", "漏洞讨论"]
 }
@@ -254,11 +254,11 @@
 {
   "entry": "任务分析",
   "nodes": [
-    { "type": "agent", "id": "任务分析", "prompt": "...", "writable": false },
-    { "type": "agent", "id": "Build", "prompt": "", "writable": true },
-    { "type": "agent", "id": "CodeReview", "prompt": "...", "writable": false },
-    { "type": "agent", "id": "UnitTest", "prompt": "...", "writable": false },
-    { "type": "agent", "id": "SecurityReview", "prompt": "...", "writable": false }
+    { "type": "agent", "id": "任务分析", "system_prompt": "...", "writable": false },
+    { "type": "agent", "id": "Build", "system_prompt": "", "writable": true },
+    { "type": "agent", "id": "CodeReview", "system_prompt": "...", "writable": false },
+    { "type": "agent", "id": "UnitTest", "system_prompt": "...", "writable": false },
+    { "type": "agent", "id": "SecurityReview", "system_prompt": "...", "writable": false }
   ],
   "links": [
     { "from": "任务分析", "to": "Build", "trigger": "<default>", "message_type": "last" },
@@ -294,13 +294,13 @@
 
 - 团队拓扑 JSON5 只支持递归式 `entry + nodes + links`
 - 节点 `type` 是判别字段，只允许 `agent` 或 `spawn`
-- 当 `type = "agent"` 时，节点按执行型结构解析：使用 `prompt` / `writable`，不使用 `graph`
-- 当 `type = "spawn"` 时，节点按展开型结构解析：使用 `graph`，不使用 `prompt`
+- 当 `type = "agent"` 时，节点按执行型结构解析：使用 `system_prompt` / `writable`，不使用 `graph`
+- 当 `type = "spawn"` 时，节点按展开型结构解析：使用 `graph`，不使用 `system_prompt`
 - 节点 ID 必须全局唯一，不能在父子图里重复
 - `graph.entry` 必须指向本层真实存在的节点
 - `links` 必须使用对象格式，并显式写出 `from` / `to` / `trigger` / `message_type`
 - `links` 里的 `from` / `to` 必须都能在当前层 `nodes` 中找到
-- `spawn` 节点没有 `prompt`
+- `spawn` 节点没有 `system_prompt`
 - `spawn` 会按上游正文第一条非空行展开单个子图项
-- agent 必须显式提供 `prompt` 与 `writable`
-- `Build` 不允许覆盖 `prompt`
+- agent 必须显式提供 `system_prompt` 与 `writable`
+- `Build` 不允许覆盖 `system_prompt`
