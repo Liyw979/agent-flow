@@ -2230,7 +2230,7 @@ test("saveTopology 会拒绝非尖括号 trigger", async () => {
   );
 });
 
-test("只有第一次 Agent 间传递会携带 [Initial Task]", async () => {
+test("Agent 间传递不再携带 [Initial Task]，只保留来源 Agent 段落", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
@@ -2306,10 +2306,10 @@ test("只有第一次 Agent 间传递会携带 [Initial Task]", async () => {
   if (buildPrompts === undefined || qaPrompts === undefined) {
     assert.fail("缺少 Build 或 QA 的转发记录");
   }
-  assert.match(buildPrompts[0] ?? "", /\[Initial Task\]/u);
   assert.match(buildPrompts[0] ?? "", /\[From BA Agent\]/u);
   assert.doesNotMatch(buildPrompts[0] ?? "", /\[Project Git Diff Summary\]/u);
   assert.match(qaPrompts[0] ?? "", /\[From Build Agent\]/u);
+  assert.doesNotMatch(buildPrompts[0] ?? "", /\[Initial Task\]/u);
   assert.doesNotMatch(qaPrompts[0] ?? "", /\[Initial Task\]/u);
   assert.doesNotMatch(qaPrompts[0] ?? "", /\[Project Git Diff Summary\]/u);
 });
@@ -3429,7 +3429,8 @@ test("单 decisionAgent 判定失败后会把 action_required 回流给 Build", 
   if (buildPromptHistory === undefined || codeReviewPromptHistory === undefined) {
     assert.fail("缺少 Build 或 CodeReview 的转发记录");
   }
-  assert.match(buildPromptHistory[0] ?? "", /\[Initial Task\]/u);
+  assert.match(buildPromptHistory[0] ?? "", /\[From BA Agent\]/u);
+  assert.doesNotMatch(buildPromptHistory[0] ?? "", /\[Initial Task\]/u);
   assert.match(buildPromptHistory[1] ?? "", /\[From CodeReview Agent\]/u);
   assert.match(buildPromptHistory[1] ?? "", /请修复构建结果/u);
   assert.doesNotMatch(codeReviewPromptHistory[0] ?? "", /\[Initial Task\]/u);

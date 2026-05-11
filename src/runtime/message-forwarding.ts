@@ -7,7 +7,6 @@ import {
   getMessageSenderDisplayName,
   isAgentFinalMessageRecord,
   isActionRequiredRequestMessageRecord,
-  isUserMessageRecord,
   type InitialMessageRouting,
   type MessageRecord,
   type TopologyEdgeMessageMode,
@@ -22,7 +21,6 @@ type DownstreamForwardedContext =
     }
   | {
       kind: "forwarded";
-      userMessage: string;
       agentMessage: string;
     };
 
@@ -63,36 +61,10 @@ function normalizeContentForDedup(value: string): string {
   return value.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-function contentContainsNormalized(content: string, candidate: string): boolean {
-  const normalizedContent = normalizeContentForDedup(content);
-  const normalizedCandidate = normalizeContentForDedup(candidate);
-  if (!normalizedContent || !normalizedCandidate) {
-    return false;
-  }
-  return normalizedContent.includes(normalizedCandidate);
-}
-
-export function getInitialUserMessageContent(messages: MinimalMessage[]): string {
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (!message || !isUserMessageRecord(message)) {
-      continue;
-    }
-    const rawContent = message.content.trim();
-    const targetAgentId = getMessageTargetAgentIds(message)[0]?.trim();
-    if (!targetAgentId) {
-      return rawContent;
-    }
-    return stripTargetMention(rawContent, targetAgentId);
-  }
-  return "";
-}
-
 export function buildDownstreamForwardedContextFromMessages(
   messages: MinimalMessage[],
   sourceContent: string,
   options: {
-    includeInitialTask?: boolean;
     messageMode: TopologyEdgeMessageMode;
     initialMessageRouting: InitialMessageRouting;
     sourceAgentId: string;
@@ -101,9 +73,7 @@ export function buildDownstreamForwardedContextFromMessages(
     globalSourceOrder: string[];
   },
 ): DownstreamForwardedContext {
-  const includeInitialTask = options.includeInitialTask ?? true;
   const messageMode = options.messageMode;
-  const initialUserContent = getInitialUserMessageContent(messages);
   const latestSourceContent = sourceContent.trim();
   const agentMessage = resolveForwardedAgentMessage(
     messages,
@@ -121,12 +91,6 @@ export function buildDownstreamForwardedContextFromMessages(
   return {
     kind: "forwarded",
     agentMessage,
-    userMessage:
-      includeInitialTask
-      && initialUserContent
-      && !contentContainsNormalized(agentMessage, initialUserContent)
-        ? initialUserContent
-        : "",
   };
 }
 

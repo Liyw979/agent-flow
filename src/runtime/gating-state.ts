@@ -82,7 +82,6 @@ export interface GraphTaskState {
   pendingHandoffRepairTargetsBySource: Record<string, string[]>;
   actionRequiredLoopCountByEdge: Record<string, number>;
   spawnSequenceByRule: Record<string, number>;
-  hasForwardedInitialTask: boolean;
 }
 
 export function createEmptyGraphTaskState(input: {
@@ -113,7 +112,6 @@ export function createEmptyGraphTaskState(input: {
     pendingHandoffRepairTargetsBySource: {},
     actionRequiredLoopCountByEdge: {},
     spawnSequenceByRule: {},
-    hasForwardedInitialTask: false,
   };
 }
 

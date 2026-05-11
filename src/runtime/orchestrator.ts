@@ -221,8 +221,7 @@ type AgentExecutionPrompt =
   | {
       mode: "structured";
       from: string;
-      userMessage?: string;
-      agentMessage?: string;
+      agentMessage: string;
       omitSourceAgentSectionLabel: boolean;
     };
 
@@ -953,21 +952,13 @@ export class Orchestrator {
       return prompt.content.trim() || "（无）";
     }
 
-    const sections: string[] = [];
-    if (prompt.userMessage?.trim()) {
-      sections.push(`[Initial Task]\n${prompt.userMessage.trim()}`);
+    const content = prompt.agentMessage.trim();
+    if (!content) {
+      throw new Error(`${prompt.from} 的 structured prompt 缺少正文`);
     }
-    if (prompt.agentMessage?.trim()) {
-      sections.push(
-        prompt.omitSourceAgentSectionLabel
-          ? prompt.agentMessage.trim()
-          : `${buildSourceAgentMessageSectionLabel(prompt.from)}\n${prompt.agentMessage.trim()}`,
-      );
-    }
-    if (sections.length === 0) {
-      sections.push("[Initial Task]\n（无）");
-    }
-    return sections.join("\n\n").trim();
+    return prompt.omitSourceAgentSectionLabel
+      ? content
+      : `${buildSourceAgentMessageSectionLabel(prompt.from)}\n${content}`;
   }
 
   private resolveAgentContextContent(
@@ -1614,16 +1605,6 @@ export class Orchestrator {
     await this.getLangGraphRuntime(task.cwd).deleteTask(task.id);
   }
 
-  private consumeInitialTaskForwardingAllowanceFromGraphState(
-    state: GraphTaskState,
-  ): boolean {
-    if (state.hasForwardedInitialTask) {
-      return false;
-    }
-    state.hasForwardedInitialTask = true;
-    return true;
-  }
-
   private resolveDispatchInitialMessageRouting(
     targetAgentRunCount: number,
     routing: InitialMessageRouting,
@@ -1769,12 +1750,6 @@ export class Orchestrator {
       }
     }
 
-    const shouldForwardInitialTask = batch.jobs.some(
-      (job) => job.kind !== "raw",
-    );
-    const includeInitialTask = shouldForwardInitialTask
-      ? this.consumeInitialTaskForwardingAllowanceFromGraphState(state)
-      : false;
     return batch.jobs.map((job, index) => {
       this.ensureRuntimeTaskAgent(task, job.agentId);
       const executableAgentId = this.resolveExecutableAgentId(
@@ -1821,7 +1796,6 @@ export class Orchestrator {
           taskMessages,
           followUpContent,
           {
-            includeInitialTask,
             messageMode: edgeForwardingConfig.messageMode,
             initialMessageRouting: dispatchInitialMessageRouting,
             sourceAgentId: job.sourceAgentId,
@@ -1840,16 +1814,12 @@ export class Orchestrator {
             `${job.sourceAgentId} 的 action_required 派发缺少可转发上下文`,
           );
         }
-        prompt = withOptionalString(
-          {
-            mode: "structured",
-            from: job.sourceAgentId,
-            agentMessage: forwardedContext.agentMessage,
-            omitSourceAgentSectionLabel: true,
-          },
-          "userMessage",
-          forwardedContext.userMessage,
-        );
+        prompt = {
+          mode: "structured",
+          from: job.sourceAgentId,
+          agentMessage: forwardedContext.agentMessage,
+          omitSourceAgentSectionLabel: true,
+        };
         forwardedAgentMessage = forwardedContext.agentMessage;
         const remediationMessage: MessageRecord = {
           id: randomUUID(),
@@ -1908,7 +1878,6 @@ export class Orchestrator {
           taskMessages,
           batch.sourceContent,
           {
-            includeInitialTask,
             messageMode: edgeForwardingConfig.messageMode,
             initialMessageRouting: dispatchInitialMessageRouting,
             sourceAgentId: batch.sourceAgentId,
@@ -1928,19 +1897,12 @@ export class Orchestrator {
                 mode: "control",
                 content: NONE_MODE_PLACEHOLDER_MESSAGE,
               }
-            : withOptionalString(
-                withOptionalString(
-                  {
-                    mode: "structured",
-                    from: batch.sourceAgentId ?? "System",
-                    omitSourceAgentSectionLabel: true,
-                  },
-                  "userMessage",
-                  forwardedContext.userMessage,
-                ),
-                "agentMessage",
-                forwardedContext.agentMessage,
-              );
+            : {
+                mode: "structured",
+                from: batch.sourceAgentId ?? "System",
+                agentMessage: forwardedContext.agentMessage,
+                omitSourceAgentSectionLabel: true,
+              };
         forwardedAgentMessage =
           forwardedContext.kind === "empty" ? "" : forwardedContext.agentMessage;
       }
