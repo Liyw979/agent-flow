@@ -577,55 +577,17 @@ export class OpenCodeClient {
       };
     }
 
-    const matches = prompt
-      .split(/[。\.；;\n]/u)
-      .map((section) => section.trim())
-      .filter((section) => section.length > 0)
-      .flatMap((section) => {
-        const directiveStart = section.search(/输出|返回|output|return/iu);
-        const source = directiveStart >= 0
-          ? section.slice(directiveStart)
-          : /^\d+\./u.test(section)
-            ? section
-            : "";
-        if (!source) {
-          return [];
-        }
-
-        const firstTrigger = source.match(/<([^\s<>/]+)>/u);
-        if (!firstTrigger || typeof firstTrigger.index !== "number") {
-          return [];
-        }
-
-        const collected: string[] = [];
-        let cursor = firstTrigger.index;
-        while (cursor < source.length) {
-          const trigger = source.slice(cursor).match(/^<([^\s<>/]+)>/u);
-          if (!trigger) {
-            break;
-          }
-          collected.push(trigger[0]);
-          cursor += trigger[0].length;
-
-          const connector = source
-            .slice(cursor)
-            .match(/^\s*(?:\/|、|,|，|or\b|and\b|或)\s*/iu);
-          if (!connector) {
-            break;
-          }
-          cursor += connector[0].length;
-        }
-        return collected;
-      });
-    if (matches.length === 0) {
+    const contiguousMatches = [
+      ...prompt.matchAll(/(?:<([^\s<>/]+)>)(?:\s*(?:\/|、|,|，|or\b|and\b|或)?\s*<([^\s<>/]+)>)+/giu),
+    ].flatMap((match) => match[0].match(/<([^\s<>/]+)>/gu) ?? []);
+    if (contiguousMatches.length > 0) {
       return {
-        kind: "plain",
+        kind: "decision",
+        triggers: [...new Set(contiguousMatches.map((value) => normalizeTopologyEdgeTrigger(value)))],
       };
     }
-
     return {
-      kind: "decision",
-      triggers: [...new Set(matches.map((value) => normalizeTopologyEdgeTrigger(value)))],
+      kind: "plain",
     };
   }
 
