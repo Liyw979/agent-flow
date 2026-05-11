@@ -24,24 +24,36 @@ function createTempDir() {
 
 function createClient(cwd = createTempDir()) {
   const client = new OpenCodeClient() as OpenCodeClient & {
-    runningServeByCwd: Map<string, Promise<{ process: null; port: number }>>;
-    workspaceEvents: Map<string, {
-      eventPump: Promise<void> | null;
-      eventSubscribers: Set<(event: Record<string, unknown>) => void>;
-    }>;
+    runningServe: {
+      cwd: string;
+      handle: Promise<{ process: null; port: number }>;
+    };
+    workspaceEventState: {
+      cwd: string;
+      state: {
+        eventPump: Promise<void> | null;
+        eventSubscribers: Set<(event: Record<string, unknown>) => void>;
+      };
+    };
     request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
     getSessionMessage: (cwd: string, sessionId: string, messageId: string) => Promise<unknown>;
     listSessionMessages: (cwd: string, sessionId: string, limit?: number) => Promise<unknown[]>;
   };
   const normalizedCwd = path.resolve(cwd);
-  client.runningServeByCwd.set(normalizedCwd, Promise.resolve({
-    process: null,
-    port: 43127,
-  }));
-  client.workspaceEvents.set(normalizedCwd, {
-    eventPump: null,
-    eventSubscribers: new Set(),
-  });
+  client.runningServe = {
+    cwd: normalizedCwd,
+    handle: Promise.resolve({
+      process: null,
+      port: 43127,
+    }),
+  };
+  client.workspaceEventState = {
+    cwd: normalizedCwd,
+    state: {
+      eventPump: null,
+      eventSubscribers: new Set(),
+    },
+  };
   return {
     client,
     cwd: normalizedCwd,
@@ -74,15 +86,19 @@ async function withFastForwardedTimeouts<T>(
 test("request 会跟随当前 serverHandle 的实际端口", async () => {
   const { client, cwd } = createClient();
   const typed = client as OpenCodeClient & {
-    runningServeByCwd: Map<string, Promise<{ process: null; port: number }>>;
+    runningServe: {
+      cwd: string;
+      handle: Promise<{ process: null; port: number }>;
+    };
     request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
   };
-  const state = typed.runningServeByCwd.get(cwd);
-  assert.notEqual(state, undefined);
-  typed.runningServeByCwd.set(cwd, Promise.resolve({
-    process: null,
-    port: 43127,
-  }));
+  typed.runningServe = {
+    cwd,
+    handle: Promise.resolve({
+      process: null,
+      port: 43127,
+    }),
+  };
 
   const originalFetch = globalThis.fetch;
   let requestedUrl = "";
@@ -787,7 +803,10 @@ for (const scenario of [
 test("配置只会在 serve 启动前写入启动配置快照，不请求 OpenCode 接口", async () => {
   const { client, cwd } = createClient();
   const typed = client as OpenCodeClient & {
-    runningServeByCwd: Map<string, Promise<{ process: null; port: number }>>;
+    runningServe: {
+      cwd: string;
+      handle: Promise<{ process: null; port: number }>;
+    };
   };
 
   const originalFetch = globalThis.fetch;
@@ -806,7 +825,11 @@ test("配置只会在 serve 启动前写入启动配置快照，不请求 OpenCo
   });
 
   try {
-    typed.runningServeByCwd.delete(cwd);
+    typed.runningServe = {
+      cwd: "",
+      handle: Promise.reject(new Error("OpenCode serve 尚未启动。")),
+    };
+    typed.runningServe.handle.catch(() => undefined);
     await client.ensureServerStarted(cwd, {
       agent: {
         BA: {
@@ -951,7 +974,7 @@ test("同一 cwd 只会复用一个 serve 端口", async () => {
   assert.equal(startServerCount, 1);
 });
 
-test("不同 cwd 会各自启动独立的 serve 端口", async () => {
+test("第二个不同 cwd 的 serve 启动请求会被拒绝", async () => {
   const client = new TestOpenCodeClient() as TestOpenCodeClient & {
     startServer: (cwd: string, config: { agent: Record<string, unknown> }) => Promise<{ process: null; port: number }>;
   };
@@ -972,14 +995,15 @@ test("不同 cwd 会各自启动独立的 serve 端口", async () => {
 
   try {
     await client.ensureServerStarted(firstCwd, { agent: {} });
-    await client.ensureServerStarted(secondCwd, { agent: {} });
-    await client.request("/session", { method: "GET", cwd: firstCwd });
-    await client.request("/session", { method: "GET", cwd: secondCwd });
+    await assert.rejects(
+      client.ensureServerStarted(secondCwd, { agent: {} }),
+      /当前进程只允许一个 cwd/,
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
 
-  assert.equal(startServerCount, 2);
+  assert.equal(startServerCount, 1);
 });
 
 test("同一 cwd 下多个订阅者会共享一个 event pump 并同时收到事件", async () => {

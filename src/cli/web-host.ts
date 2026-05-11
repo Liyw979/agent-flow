@@ -21,7 +21,6 @@ import { buildUiUrl } from "./ui-host-launch";
 
 interface StartWebHostOptions {
   orchestrator: Orchestrator;
-  cwd: string;
   taskId: string;
   port: number;
   webRoot: string | null;
@@ -63,7 +62,7 @@ async function buildUiSnapshotPayload(
   options: Pick<StartWebHostOptions, "port" | "userDataPath">,
 ): Promise<UiSnapshotPayload> {
   const task = await orchestrator.getTaskSnapshot(taskId);
-  const workspace = await orchestrator.getWorkspaceSnapshot(task.task.cwd);
+  const workspace = await orchestrator.getWorkspaceSnapshot();
   return {
     workspace,
     task,
@@ -125,10 +124,6 @@ export async function startWebHost(
   let unsubscribed = false;
 
   const unsubscribe = options.orchestrator.subscribe((event: AgentTeamEvent) => {
-    if (event.cwd !== options.cwd) {
-      return;
-    }
-
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const response of subscriptions) {
       response.write(payload);
@@ -160,9 +155,8 @@ export async function startWebHost(
 
       if (request.method === "GET" && url.pathname === "/api/tasks/runtime") {
         const taskId = url.searchParams.get("taskId") ?? options.taskId;
-        const snapshot = await options.orchestrator.getTaskSnapshot(taskId, options.cwd);
+        const snapshot = await options.orchestrator.getTaskSnapshot(taskId);
         const payload: GetTaskRuntimePayload = {
-          cwd: snapshot.task.cwd,
           taskId: snapshot.task.id,
         };
         json(response, 200, await options.orchestrator.getTaskRuntime(payload));

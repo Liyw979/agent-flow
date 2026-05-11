@@ -607,7 +607,6 @@ export interface UiSnapshotPayload {
 }
 
 export interface SubmitTaskPayload {
-  cwd?: string;
   taskId?: string;
   newTaskId?: string;
   content: string;
@@ -615,29 +614,20 @@ export interface SubmitTaskPayload {
 }
 
 export interface InitializeTaskPayload {
-  cwd: string;
   title?: string;
   taskId?: string;
 }
 
-export interface UpdateTopologyPayload {
-  cwd: string;
-  topology: TopologyRecord;
-}
-
 export interface GetTaskRuntimePayload {
-  cwd: string;
   taskId: string;
 }
 
 export interface OpenAgentTerminalPayload {
-  cwd: string;
   taskId: string;
   agentId: string;
 }
 
 export interface DeleteTaskPayload {
-  cwd: string;
   taskId: string;
 }
 

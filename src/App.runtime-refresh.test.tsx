@@ -275,7 +275,6 @@ function SubmitTaskInvalidationProbe() {
 
   useEffect(() => {
     void submitTaskMutation.mutateAsync({
-      cwd: WORKSPACE_CWD,
       taskId: TASK_ID,
       content: "请继续推进当前任务",
     });

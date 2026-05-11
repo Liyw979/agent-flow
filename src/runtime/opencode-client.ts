@@ -83,6 +83,16 @@ interface WorkspaceEventState {
   eventSubscribers: Set<(event: OpenCodeEvent) => void>;
 }
 
+interface RunningServeState {
+  cwd: string;
+  handle: Promise<ServeHandle>;
+}
+
+interface WorkspaceEventEntry {
+  cwd: string;
+  state: WorkspaceEventState;
+}
+
 interface RelatedTransportReplySnapshot {
   messageId: string;
   timestamp: UtcIsoTimestamp;
@@ -122,43 +132,64 @@ export interface OpenCodeShutdownReport {
   killedPids: number[];
 }
 
+const idleRunningServeState: RunningServeState = {
+  cwd: "",
+  handle: Promise.reject(new Error("OpenCode serve 尚未启动。")),
+};
+idleRunningServeState.handle.catch(() => undefined);
+
+const idleWorkspaceEventState: WorkspaceEventEntry = {
+  cwd: "",
+  state: {
+    eventPump: null,
+    eventSubscribers: new Set(),
+  },
+};
+
 export class OpenCodeClient {
-  readonly runningServeByCwd = new Map<string, Promise<ServeHandle>>();
-  readonly workspaceEvents = new Map<string, WorkspaceEventState>();
+  runningServe: RunningServeState = idleRunningServeState;
+  workspaceEventState: WorkspaceEventEntry = idleWorkspaceEventState;
   readonly host = "127.0.0.1";
   readonly sessionIdleAt = new Map<string, number>();
   readonly sessionErrors = new Map<string, string>();
   readonly sessionWaiters = new Map<string, SessionWaiter[]>();
-  readonly sessionCwdBySessionId = new Map<string, string>();
 
   constructor() {}
 
   protected getWorkspaceEventState(cwd: string): WorkspaceEventState {
-    const key = path.resolve(cwd);
-    const existing = this.workspaceEvents.get(key);
-    if (existing) {
-      return existing;
+    const normalized = this.assertSingleWorkspaceCwd(cwd);
+    const existing = this.workspaceEventState;
+    if (existing.cwd === normalized) {
+      return existing.state;
     }
 
     const created: WorkspaceEventState = {
       eventPump: null,
       eventSubscribers: new Set(),
     };
-    this.workspaceEvents.set(key, created);
+    this.workspaceEventState = {
+      cwd: normalized,
+      state: created,
+    };
     return created;
   }
 
   async ensureServerStarted(cwd: string, config: OpenCodeInjectedConfig): Promise<ServeHandle> {
-    const normalized = path.resolve(cwd);
-    const runningServer = this.runningServeByCwd.get(normalized);
-    if (runningServer) {
-      return runningServer;
+    const normalized = this.assertSingleWorkspaceCwd(cwd);
+    const runningServer = this.runningServe;
+    if (runningServer.cwd === normalized) {
+      return runningServer.handle;
     }
     const startingServer = this.startServer(normalized, config).catch((error) => {
-      this.runningServeByCwd.delete(normalized);
+      if (this.runningServe.handle === startingServer) {
+        this.runningServe = idleRunningServeState;
+      }
       throw error;
     });
-    this.runningServeByCwd.set(normalized, startingServer);
+    this.runningServe = {
+      cwd: normalized,
+      handle: startingServer,
+    };
     return startingServer;
   }
 
@@ -166,7 +197,7 @@ export class OpenCodeClient {
     cwd: string,
     title: string,
   ): Promise<string> {
-    const normalized = path.resolve(cwd);
+    const normalized = this.assertSingleWorkspaceCwd(cwd);
     const response = await this.request("/session", {
       method: "POST",
       cwd: normalized,
@@ -185,7 +216,6 @@ export class OpenCodeClient {
 
     const data = (await this.readJsonResponse(response)) as { id?: string } | null;
     if (typeof data?.id === "string" && data.id.trim()) {
-      this.sessionCwdBySessionId.set(data.id, normalized);
       return data.id;
     }
 
@@ -198,7 +228,7 @@ export class OpenCodeClient {
   }
 
   async connectEvents(cwd: string, onEvent: (event: OpenCodeEvent) => void): Promise<void> {
-    const normalized = path.resolve(cwd);
+    const normalized = this.assertSingleWorkspaceCwd(cwd);
     const state = this.getWorkspaceEventState(normalized);
     state.eventSubscribers.add(onEvent);
     const server = await this.getExistingServer(normalized);
@@ -219,8 +249,11 @@ export class OpenCodeClient {
   }
 
   disconnectEvents(cwd: string, onEvent: (event: OpenCodeEvent) => void): void {
-    const state = this.workspaceEvents.get(path.resolve(cwd));
-    state?.eventSubscribers.delete(onEvent);
+    const normalized = this.assertSingleWorkspaceCwd(cwd);
+    if (this.workspaceEventState.cwd !== normalized) {
+      return;
+    }
+    this.workspaceEventState.state.eventSubscribers.delete(onEvent);
   }
 
   async submitMessage(
@@ -449,10 +482,18 @@ export class OpenCodeClient {
 
   async shutdown(cwd: string): Promise<OpenCodeShutdownReport> {
     const normalizedCwd = path.resolve(cwd);
-    const state = this.workspaceEvents.get(normalizedCwd);
-    const runningServer = this.runningServeByCwd.get(normalizedCwd);
+    const activeCwd = this.getActiveWorkspaceCwd();
+    if (activeCwd && activeCwd !== normalizedCwd) {
+      throw new Error(`当前进程只允许一个 cwd。已有 cwd: ${activeCwd}，拒绝访问: ${normalizedCwd}`);
+    }
+    const state = this.workspaceEventState.cwd === normalizedCwd
+      ? this.workspaceEventState.state
+      : null;
+    const runningServer = this.runningServe.cwd === normalizedCwd
+      ? this.runningServe.handle
+      : null;
     if (!runningServer) {
-      this.clearSessionStateForCwd(normalizedCwd);
+      this.clearSessionState();
       state?.eventSubscribers.clear();
       return {
         killedPids: [],
@@ -469,42 +510,42 @@ export class OpenCodeClient {
     } catch {
       // ignore shutdown errors
     } finally {
-      this.runningServeByCwd.delete(normalizedCwd);
+      this.runningServe = idleRunningServeState;
       if (state) {
         state.eventPump = null;
         state.eventSubscribers.clear();
       }
-      this.clearSessionStateForCwd(normalizedCwd);
+      this.workspaceEventState = idleWorkspaceEventState;
+      this.clearSessionState();
     }
     return report;
   }
 
   async shutdownAll(): Promise<OpenCodeShutdownReport> {
-    const reports = await Promise.all(
-      [...new Set([...this.runningServeByCwd.keys(), ...this.workspaceEvents.keys()])].map((cwd) => this.shutdown(cwd)),
-    );
-    return {
-      killedPids: [...new Set(reports.flatMap((report) => report.killedPids))],
-    };
+    const activeCwd = this.getActiveWorkspaceCwd();
+    if (!activeCwd) {
+      return {
+        killedPids: [],
+      };
+    }
+    return this.shutdown(activeCwd);
   }
 
   async deleteProject(cwd: string): Promise<void> {
     const key = path.resolve(cwd);
     await this.shutdown(key);
-    this.workspaceEvents.delete(key);
-    this.runningServeByCwd.delete(key);
+    if (this.workspaceEventState.cwd === key) {
+      this.workspaceEventState = idleWorkspaceEventState;
+    }
+    if (this.runningServe.cwd === key) {
+      this.runningServe = idleRunningServeState;
+    }
   }
 
-  private clearSessionStateForCwd(cwd: string) {
-    for (const [sessionId, sessionCwd] of this.sessionCwdBySessionId.entries()) {
-      if (sessionCwd !== cwd) {
-        continue;
-      }
-      this.sessionIdleAt.delete(sessionId);
-      this.sessionErrors.delete(sessionId);
-      this.sessionWaiters.delete(sessionId);
-      this.sessionCwdBySessionId.delete(sessionId);
-    }
+  private clearSessionState() {
+    this.sessionIdleAt.clear();
+    this.sessionErrors.clear();
+    this.sessionWaiters.clear();
   }
 
   private async terminateServeHandle(server: ServeHandle): Promise<OpenCodeShutdownReport> {
@@ -758,12 +799,12 @@ export class OpenCodeClient {
   }
 
   private async getExistingServer(cwd: string): Promise<ServeHandle> {
-    const normalized = path.resolve(cwd);
-    const server = this.runningServeByCwd.get(normalized);
-    if (!server) {
+    const normalized = this.assertSingleWorkspaceCwd(cwd);
+    const server = this.runningServe;
+    if (server.cwd !== normalized) {
       throw new Error(`cwd ${normalized} 对应的 OpenCode serve 尚未启动。`);
     }
-    return server;
+    return server.handle;
   }
 
   private findListeningPids(port: number): number[] {
@@ -889,11 +930,23 @@ export class OpenCodeClient {
         }
       }
     } finally {
-      const state = this.workspaceEvents.get(cwd);
-      if (state) {
-        state.eventPump = null;
+      if (this.workspaceEventState.cwd === cwd) {
+        this.workspaceEventState.state.eventPump = null;
       }
     }
+  }
+
+  private getActiveWorkspaceCwd(): string {
+    return this.runningServe.cwd || this.workspaceEventState.cwd;
+  }
+
+  private assertSingleWorkspaceCwd(cwd: string): string {
+    const normalized = path.resolve(cwd);
+    const activeCwd = this.getActiveWorkspaceCwd();
+    if (activeCwd && activeCwd !== normalized) {
+      throw new Error(`当前进程只允许一个 cwd。已有 cwd: ${activeCwd}，拒绝访问: ${normalized}`);
+    }
+    return normalized;
   }
 
   private handleEvent(event: OpenCodeEvent) {

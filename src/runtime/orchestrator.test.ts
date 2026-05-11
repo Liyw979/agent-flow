@@ -129,11 +129,13 @@ type ConfigureTestOrchestratorDependencies = (
   defaults: TestOrchestratorDependencies,
 ) => TestOrchestratorDependencies;
 
+type TestOrchestratorOptions = ConstructorParameters<typeof Orchestrator>[0];
+
 class TestOrchestrator extends Orchestrator {
   private readonly dependencies: TestOrchestratorDependencies;
 
   constructor(
-    options: ConstructorParameters<typeof Orchestrator>[0],
+    options: TestOrchestratorOptions,
     configureDependencies: ConfigureTestOrchestratorDependencies = (defaults) => defaults,
   ) {
     super(options);
@@ -200,6 +202,10 @@ class BatchRunnerTestOrchestrator extends StandaloneRunTestOrchestrator {
 }
 
 function stubOpenCodeSessions(orchestrator: Orchestrator) {
+  orchestrator.opencodeClient.ensureServerStarted = async () => ({
+    process: null,
+    port: 43127,
+  });
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   orchestrator.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
   orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => ({
@@ -213,6 +219,10 @@ function stubOpenCodeSessions(orchestrator: Orchestrator) {
 }
 
 function stubOpenCodeAttachBaseUrl(orchestrator: Orchestrator) {
+  orchestrator.opencodeClient.ensureServerStarted = async () => ({
+    process: null,
+    port: 43127,
+  });
   orchestrator.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
   orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => ({
     sessionId,
@@ -338,11 +348,12 @@ test("getWorkspaceSnapshot 在空工作区只读读取时不应物化旧工作�
   const userDataPath = createTempDir();
   const workspacePath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: workspacePath,
     userDataPath,
     enableEventStream: false,
   });
 
-  await orchestrator.getWorkspaceSnapshot(workspacePath);
+  await orchestrator.getWorkspaceSnapshot();
 
   assert.equal(fs.existsSync(path.join(workspacePath, ".agent-team", LEGACY_WORKSPACE_STATE_BASENAME)), false);
 });
@@ -411,30 +422,25 @@ function buildTeamDslFromWorkspaceSnapshot(input: {
 
 async function replaceWorkspaceAgents(
   orchestrator: Orchestrator,
-  cwd: string,
   entryAgentId: string,
   nextAgents: TestWorkspaceAgentInput[],
 ) {
-  const current = await orchestrator.getWorkspaceSnapshot(cwd);
+  const current = await orchestrator.getWorkspaceSnapshot();
   const compiled = compileTeamDsl(buildTeamDslFromWorkspaceSnapshot({
     workspace: current,
     entryAgentId,
     nextAgents,
   }));
-  return orchestrator.applyTeamDsl({
-    cwd,
-    compiled,
-  });
+  return orchestrator.applyTeamDsl({ compiled });
 }
 
 async function addBuiltinAgents(
   orchestrator: Orchestrator,
-  cwd: string,
   agentIds: string[],
   entryAgentId: string,
   writableAgentIds: string[],
 ) {
-  let latestWorkspace = await orchestrator.getWorkspaceSnapshot(cwd);
+  let latestWorkspace = await orchestrator.getWorkspaceSnapshot();
   const writableAgentIdSet = new Set(writableAgentIds);
   for (const agentId of agentIds) {
     const nextAgents = [...latestWorkspace.agents];
@@ -449,20 +455,19 @@ async function addBuiltinAgents(
     } else {
       nextAgents.push(nextAgent);
     }
-    latestWorkspace = await replaceWorkspaceAgents(orchestrator, cwd, entryAgentId, nextAgents);
+    latestWorkspace = await replaceWorkspaceAgents(orchestrator, entryAgentId, nextAgents);
   }
   return latestWorkspace;
 }
 
 async function addCustomAgent(
   orchestrator: Orchestrator,
-  cwd: string,
   agentId: string,
   prompt: string,
   entryAgentId: string,
   isWritable: boolean,
 ) {
-  const current = await orchestrator.getWorkspaceSnapshot(cwd);
+  const current = await orchestrator.getWorkspaceSnapshot();
   const nextAgents = [...current.agents];
   const existingIndex = nextAgents.findIndex((agent) => agent.id === agentId);
   const nextAgent: TestWorkspaceAgentInput = {
@@ -475,7 +480,7 @@ async function addCustomAgent(
   } else {
     nextAgents.push(nextAgent);
   }
-  return replaceWorkspaceAgents(orchestrator, cwd, entryAgentId, nextAgents);
+  return replaceWorkspaceAgents(orchestrator, entryAgentId, nextAgents);
 }
 
 async function waitForTaskSnapshot(
@@ -522,14 +527,15 @@ test("task init 会补齐 OpenCode 运行态", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", ["Build"]);
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["Build"], "Build", ["Build"]);
+  const task = await orchestrator.initializeTask({ title: "demo" });
 
   assert.equal(task.task.cwd, project.cwd);
   assert.equal(task.messages.some((message) => /session/i.test(message.content)), false);
@@ -542,6 +548,7 @@ test("漏洞团队任务初始化时不会为仅作为 spawn 模板存在的静�
   initAppFileLogger(userDataPath);
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
     terminalLauncher: async () => {},
@@ -550,11 +557,10 @@ test("漏洞团队任务初始化时不会为仅作为 spawn 模板存在的静�
 
   const compiled = compileBuiltinTopology("vulnerability.json5");
   await orchestrator.applyTeamDsl({
-    cwd: projectPath,
     compiled,
   });
 
-  const task = await orchestrator.initializeTask({ cwd: projectPath, title: "vuln-demo" });
+  const task = await orchestrator.initializeTask({ title: "vuln-demo" });
   const agentByName = new Map(task.agents.map((agent) => [agent.id, agent]));
   const clueFinder = agentByName.get("线索发现");
   const vulnerabilityArguer = agentByName.get("漏洞论证");
@@ -569,9 +575,7 @@ test("漏洞团队任务初始化时不会为仅作为 spawn 模板存在的静�
   assert.equal(vulnerabilityChallenger.opencodeSessionId, "");
   assert.equal(summaryAgent.opencodeSessionId, "");
 
-  await orchestrator.openAgentTerminal({
-    cwd: projectPath,
-    taskId: task.task.id,
+  await orchestrator.openAgentTerminal({ taskId: task.task.id,
     agentId: "线索发现",
   });
 
@@ -616,6 +620,7 @@ test("单节点任务进入 finished 时不会因为缺少 workspace cwd 而在�
   let backgroundRunTracked = false;
   const orchestrator = new TestOrchestrator(
     {
+      cwd: projectPath,
       userDataPath,
       enableEventStream: false,
     },
@@ -638,19 +643,15 @@ test("单节点任务进入 finished 时不会因为缺少 workspace cwd 而在�
       timestamp: toUtcIsoTimestamp("2026-04-22T00:00:00.000Z"),
     });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", false);
+  await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["BA"],
       edges: [],
     }),
   });
 
-  const task = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@BA 请分析当前问题",
+  const task = await orchestrator.submitTask({ content: "@BA 请分析当前问题",
     mentionAgentId: "BA",
   });
 
@@ -674,6 +675,7 @@ test("任务本轮 finished 后再次 @Agent 时会回到 running 并在同一 T
   const backgroundRuns: Promise<void>[] = [];
   const orchestrator = new TestOrchestrator(
     {
+      cwd: projectPath,
       userDataPath,
       enableEventStream: false,
     },
@@ -712,19 +714,15 @@ test("任务本轮 finished 后再次 @Agent 时会回到 running 并在同一 T
     });
   };
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", false);
+  await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["BA"],
       edges: [],
     }),
   });
 
-  const submitted = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@BA 请先完成第一轮",
+  const submitted = await orchestrator.submitTask({ content: "@BA 请先完成第一轮",
     mentionAgentId: "BA",
   });
 
@@ -741,9 +739,7 @@ test("任务本轮 finished 后再次 @Agent 时会回到 running 并在同一 T
     1,
   );
 
-  const reopened = await orchestrator.submitTask({
-    cwd: project.cwd,
-    taskId: submitted.task.id,
+  const reopened = await orchestrator.submitTask({ taskId: submitted.task.id,
     content: "@BA 请继续第二轮",
     mentionAgentId: "BA",
   });
@@ -781,6 +777,7 @@ test("漏洞团队里漏洞挑战先返回触发回流的 label、漏洞论证�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -895,13 +892,10 @@ test("漏洞团队里漏洞挑战先返回触发回流的 label、漏洞论证�
 
   const compiled = compileBuiltinTopology("vulnerability.json5");
   await orchestrator.applyTeamDsl({
-    cwd: projectPath,
     compiled,
   });
 
-  const task = await orchestrator.submitTask({
-    cwd: projectPath,
-    content: "@线索发现 请分析这个漏洞线索",
+  const task = await orchestrator.submitTask({ content: "@线索发现 请分析这个漏洞线索",
     mentionAgentId: "线索发现",
   });
 
@@ -942,6 +936,7 @@ test("漏洞团队里讨论总结以 transfer + none 回到线索发现时，会
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -1011,13 +1006,10 @@ test("漏洞团队里讨论总结以 transfer + none 回到线索发现时，会
 
   const compiled = compileBuiltinTopology("vulnerability.json5");
   await orchestrator.applyTeamDsl({
-    cwd: projectPath,
     compiled,
   });
 
-  const task = await orchestrator.submitTask({
-    cwd: projectPath,
-    content: "@线索发现 请持续挖掘当前代码中的可疑漏洞点。",
+  const task = await orchestrator.submitTask({ content: "@线索发现 请持续挖掘当前代码中的可疑漏洞点。",
     mentionAgentId: "线索发现",
   });
 
@@ -1041,6 +1033,7 @@ test("漏洞团队第二轮 finding 已经派发到 漏洞挑战-2 时，UI 仍�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -1129,13 +1122,10 @@ test("漏洞团队第二轮 finding 已经派发到 漏洞挑战-2 时，UI 仍�
 
   const compiled = compileBuiltinTopology("vulnerability.json5");
   await orchestrator.applyTeamDsl({
-    cwd: projectPath,
     compiled,
   });
 
-  const task = await orchestrator.submitTask({
-    cwd: projectPath,
-    content: "@线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
+  const task = await orchestrator.submitTask({ content: "@线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
     mentionAgentId: "线索发现",
   });
 
@@ -1171,6 +1161,7 @@ test("漏洞团队 spawn runtime agent 尚未落库时，getTaskSnapshot 不会�
 
   const orchestrator = new TestOrchestrator(
     {
+      cwd: projectPath,
       userDataPath,
       enableEventStream: false,
     },
@@ -1216,13 +1207,10 @@ test("漏洞团队 spawn runtime agent 尚未落库时，getTaskSnapshot 不会�
 
   const compiled = compileBuiltinTopology("vulnerability.json5");
   await orchestrator.applyTeamDsl({
-    cwd: projectPath,
     compiled,
   });
 
-  const task = await orchestrator.submitTask({
-    cwd: projectPath,
-    content: "@线索发现 请分析这个漏洞线索",
+  const task = await orchestrator.submitTask({ content: "@线索发现 请分析这个漏洞线索",
     mentionAgentId: "线索发现",
   });
 
@@ -1233,10 +1221,10 @@ test("漏洞团队 spawn runtime agent 尚未落库时，getTaskSnapshot 不会�
   );
 
   const taskAgentIdsDuringDispatchWindow = orchestrator.store
-    .listTaskAgents(projectPath, task.task.id)
+    .listTaskAgents(task.task.id)
     .map((agent) => agent.id);
 
-  const snapshotDuringDispatchWindow = await orchestrator.getTaskSnapshot(task.task.id, projectPath);
+  const snapshotDuringDispatchWindow = await orchestrator.getTaskSnapshot(task.task.id);
 
   assert.notEqual(snapshotDuringDispatchWindow.task.status, "finished");
   assert.equal(
@@ -1273,16 +1261,15 @@ test("initializeTask reuses a preallocated task id when provided", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", ["Build"]);
-  const task = await orchestrator.initializeTask({
-    cwd: project.cwd,
-    title: "demo",
+  await orchestrator.getWorkspaceSnapshot();
+  await addBuiltinAgents(orchestrator, ["Build"], "Build", ["Build"]);
+  const task = await orchestrator.initializeTask({ title: "demo",
     taskId: "task-preallocated",
   });
 
@@ -1294,20 +1281,18 @@ test("getTaskSnapshot 在新的 Orchestrator 进程里不会再按 taskId 恢复
   const workspacePath = createTempDir();
 
   const writer = new TestOrchestrator({
+    cwd: workspacePath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(writer);
 
-  let workspace = await writer.getWorkspaceSnapshot(workspacePath);
-  workspace = await replaceWorkspaceAgents(writer, workspace.cwd, "Build", [
+  await replaceWorkspaceAgents(writer, "Build", [
     { id: "Build", prompt: getTestAgentPrompt("Build"), isWritable: true },
     { id: "BA", prompt: getTestAgentPrompt("BA"), isWritable: false },
   ]);
 
-  const created = await writer.initializeTask({
-    cwd: workspace.cwd,
-    title: "跨工作区 show",
+  const created = await writer.initializeTask({ title: "跨工作区 show",
   });
   const taskId = created.task.id;
 
@@ -1315,13 +1300,14 @@ test("getTaskSnapshot 在新的 Orchestrator 进程里不会再按 taskId 恢复
   activeOrchestrators.delete(writer);
 
   const reader = new TestOrchestrator({
+    cwd: workspacePath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(reader);
 
   await assert.rejects(
-    () => reader.getTaskSnapshot(taskId, createTempDir()),
+    () => reader.getTaskSnapshot(taskId),
     /Task .* not found/,
   );
 });
@@ -1330,14 +1316,15 @@ test("task init 不会追加额外系统提醒", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", []);
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+  await orchestrator.getWorkspaceSnapshot();
+  await addBuiltinAgents(orchestrator, ["Build"], "Build", []);
+  const task = await orchestrator.initializeTask({ title: "demo" });
 
   assert.equal(task.messages.some((message) => message.kind === undefined), false);
 });
@@ -1346,6 +1333,7 @@ test("dispose 之后，迟到结束的 event stream 不会再排 reconnect 定�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: true,
   });
@@ -1356,7 +1344,7 @@ test("dispose 之后，迟到结束的 event stream 不会再排 reconnect 定�
       releaseConnectEvents = resolve;
     });
 
-  await orchestrator.getWorkspaceSnapshot(projectPath);
+  await orchestrator.getWorkspaceSnapshot();
   await orchestrator.dispose();
   releaseConnectEvents();
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1368,16 +1356,23 @@ test("dispose 在 CLI 快速退出模式下不会等待悬挂的后台 task prom
   const userDataPath = createTempDir();
   const cwd = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd,
     userDataPath,
     enableEventStream: false,
   });
 
   let shutdownCalled = false;
-  orchestrator.opencodeClient.runningServeByCwd.set(cwd, Promise.resolve({ process: null, port: 43127 }));
-  orchestrator.opencodeClient.workspaceEvents.set(cwd, {
-    eventPump: null,
-    eventSubscribers: new Set(),
-  });
+  orchestrator.opencodeClient.runningServe = {
+    cwd,
+    handle: Promise.resolve({ process: null, port: 43127 }),
+  };
+  orchestrator.opencodeClient.workspaceEventState = {
+    cwd,
+    state: {
+      eventPump: null,
+      eventSubscribers: new Set(),
+    },
+  };
   orchestrator.opencodeClient.shutdown = async (targetCwd) => {
     shutdownCalled = true;
     assert.equal(targetCwd, cwd);
@@ -1401,31 +1396,35 @@ test("dispose 在 CLI 快速退出模式下不会等待悬挂的后台 task prom
 
 test("dispose 会把 OpenCode 清理报告向上返回", async () => {
   const userDataPath = createTempDir();
-  const firstCwd = createTempDir();
-  const secondCwd = createTempDir();
+  const cwd = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd,
     userDataPath,
     enableEventStream: false,
   });
 
-  orchestrator.opencodeClient.runningServeByCwd.set(firstCwd, Promise.resolve({ process: null, port: 43127 }));
-  orchestrator.opencodeClient.workspaceEvents.set(firstCwd, {
-    eventPump: null,
-    eventSubscribers: new Set(),
-  });
-  orchestrator.opencodeClient.runningServeByCwd.set(secondCwd, Promise.resolve({ process: null, port: 5120 }));
-  orchestrator.opencodeClient.workspaceEvents.set(secondCwd, {
-    eventPump: null,
-    eventSubscribers: new Set(),
-  });
-  orchestrator.opencodeClient.shutdown = async (targetCwd) => ({
-    killedPids: targetCwd === firstCwd ? [43127] : [5120],
-  });
+  orchestrator.opencodeClient.runningServe = {
+    cwd,
+    handle: Promise.resolve({ process: null, port: 43127 }),
+  };
+  orchestrator.opencodeClient.workspaceEventState = {
+    cwd,
+    state: {
+      eventPump: null,
+      eventSubscribers: new Set(),
+    },
+  };
+  orchestrator.opencodeClient.shutdown = async (targetCwd) => {
+    assert.equal(targetCwd, cwd);
+    return {
+      killedPids: [43127],
+    };
+  };
 
   const report = await orchestrator.dispose();
 
   assert.deepEqual(report, {
-    killedPids: [43127, 5120],
+    killedPids: [43127],
   });
 });
 
@@ -1433,11 +1432,12 @@ test("未应用团队 DSL 时，Project 不再暴露可手工编辑的 agents �
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  const project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  const project = await orchestrator.getWorkspaceSnapshot();
 
   assert.deepEqual(project.agents, []);
 });
@@ -1446,14 +1446,15 @@ test("Build 只有在团队 DSL 中声明后才会出现在 agents", async () =>
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  const project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  const project = await orchestrator.getWorkspaceSnapshot();
   assert.equal(project.agents.some((agent) => agent.id === "Build"), false);
 
-  const withBuild = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", ["Build"]);
+  const withBuild = await addBuiltinAgents(orchestrator, ["Build"], "Build", ["Build"]);
   const buildAgent = withBuild.agents.find((agent) => agent.id === "Build");
   if (!buildAgent) {
     assert.fail("缺少 Build Agent");
@@ -1467,11 +1468,11 @@ test("applyTeamDsl 会一次性写入当前 Project 的 agents 与 topology", as
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  const project = await orchestrator.getWorkspaceSnapshot(projectPath);
   const compiled = compileTeamDsl({
     entry: "BA",
     nodes: [
@@ -1502,7 +1503,6 @@ test("applyTeamDsl 会一次性写入当前 Project 的 agents 与 topology", as
   });
 
   const updated = await orchestrator.applyTeamDsl({
-    cwd: project.cwd,
     compiled,
   });
 
@@ -1534,11 +1534,11 @@ test("applyTeamDsl 写入后会保留 agent 的 initialMessageAgentIds", async (
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  const project = await orchestrator.getWorkspaceSnapshot(projectPath);
   const compiled = compileTeamDsl({
     entry: "线索发现",
     nodes: [
@@ -1579,7 +1579,6 @@ test("applyTeamDsl 写入后会保留 agent 的 initialMessageAgentIds", async (
   });
 
   const updated = await orchestrator.applyTeamDsl({
-    cwd: project.cwd,
     compiled,
   });
 
@@ -1616,11 +1615,10 @@ test("applyTeamDsl 会直接以 DSL system_prompt 为唯一真源", async () => 
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
-
-  const project = await orchestrator.getWorkspaceSnapshot(projectPath);
 
   const compiled = compileTeamDsl({
     entry: "BA",
@@ -1644,7 +1642,6 @@ test("applyTeamDsl 会直接以 DSL system_prompt 为唯一真源", async () => 
   });
 
   const updated = await orchestrator.applyTeamDsl({
-    cwd: project.cwd,
     compiled,
   });
   const baAgent = updated.agents.find((agent) => agent.id === "BA");
@@ -1662,17 +1659,16 @@ test("保存拓扑后不会再生成旧工作区快照文件", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", ["Build"]);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "Build", false);
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["Build"], "Build", ["Build"]);
+  project = await addCustomAgent(orchestrator, "BA", "你是 BA。", "Build", false);
 
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["BA", "Build"],
       edges: [{ source: "BA", target: "Build", trigger: "<default>", messageMode: "last" }],
@@ -1686,16 +1682,15 @@ test("保存拓扑时不会再把 langgraph.end.sources 隐式恢复成无 trigg
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
 
-  const saved = await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  const saved = await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["漏洞论证"],
       edges: [],
       langgraph: {
@@ -1719,16 +1714,15 @@ test("保存拓扑时会把 target=__end__ 的 trigger 边提升到 langgraph.en
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
 
-  const saved = await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  const saved = await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["漏洞论证"],
       edges: [
         {
@@ -1758,20 +1752,19 @@ test("保存拓扑后会把动态 spawn 团队配置保留在当前运行时快�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", []);
-  project = await addCustomAgent(orchestrator, project.cwd, "线索发现", "你负责线索发现。", "Build", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞论证模板", "你负责漏洞论证。", "Build", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞挑战模板", "你负责漏洞挑战。", "Build", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "Summary模板", "你是总结。", "Build", false);
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["Build"], "Build", []);
+  project = await addCustomAgent(orchestrator, "线索发现", "你负责线索发现。", "Build", false);
+  project = await addCustomAgent(orchestrator, "漏洞论证模板", "你负责漏洞论证。", "Build", false);
+  project = await addCustomAgent(orchestrator, "漏洞挑战模板", "你负责漏洞挑战。", "Build", false);
+  project = await addCustomAgent(orchestrator, "Summary模板", "你是总结。", "Build", false);
 
-  const saved = await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  const saved = await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["Build", "线索发现", "漏洞论证模板", "漏洞挑战模板", "Summary模板"],
       edges: [{ source: "Build", target: "线索发现", trigger: "<default>", messageMode: "last" }],
@@ -1814,7 +1807,7 @@ test("保存拓扑后会把动态 spawn 团队配置保留在当前运行时快�
 
   assert.equal(saved.topology.spawnRules?.length, 1);
   assert.equal(saved.topology.nodeRecords.some((node) => node.kind === "spawn"), true);
-  const reloaded = await orchestrator.getWorkspaceSnapshot(project.cwd);
+  const reloaded = await orchestrator.getWorkspaceSnapshot();
   assert.equal(reloaded.topology.spawnRules?.[0]?.id, "finding-debate");
   assert.equal(
     reloaded.topology.nodeRecords.some((node) => node.id === "疑点辩论工厂" && node.kind === "spawn"),
@@ -1827,13 +1820,14 @@ test("保存拓扑时会拒绝缺少 reportToTrigger 的 spawn report 配置", a
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "线索发现", "你负责线索发现。", "线索发现", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞论证模板", "你负责漏洞论证。", "线索发现", false);
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addCustomAgent(orchestrator, "线索发现", "你负责线索发现。", "线索发现", false);
+  project = await addCustomAgent(orchestrator, "漏洞论证模板", "你负责漏洞论证。", "线索发现", false);
 
   await assert.rejects(
     () => {
@@ -1863,9 +1857,7 @@ test("保存拓扑时会拒绝缺少 reportToTrigger 的 spawn report 配置", a
           },
         ],
       };
-      return orchestrator.saveTopology({
-        cwd: project.cwd,
-        topology: legacyTopologyInput,
+      return orchestrator.saveTopology({ topology: legacyTopologyInput,
       });
     },
     /必须显式声明 reportToTrigger/u,
@@ -1876,18 +1868,17 @@ test("保存拓扑后会保留 spawnEnabled 标记，避免 GUI 点击后回读�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", []);
-  project = await addCustomAgent(orchestrator, project.cwd, "UnitTest", "你是 UnitTest。", "Build", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "Build", false);
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["Build"], "Build", []);
+  project = await addCustomAgent(orchestrator, "UnitTest", "你是 UnitTest。", "Build", false);
+  project = await addCustomAgent(orchestrator, "BA", "你是 BA。", "Build", false);
 
-  const saved = await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  const saved = await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["Build", "UnitTest", "BA"],
       edges: [{ source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" }],
@@ -1922,73 +1913,48 @@ test("保存拓扑后会保留 spawnEnabled 标记，避免 GUI 点击后回读�
     true,
   );
 
-  const rehydrated = await orchestrator.getWorkspaceSnapshot(project.cwd);
+  const rehydrated = await orchestrator.getWorkspaceSnapshot();
   assert.equal(
     rehydrated.topology.nodeRecords.find((node) => node.id === "UnitTest")?.spawnEnabled,
     true,
   );
 });
 
-test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", async () => {
-  type InjectedConfigContent = Parameters<
-    TestOrchestrator["opencodeClient"]["ensureServerStarted"]
-  >[1];
-
+test("第二个不同 cwd 的 Project 会在入口直接失败", async () => {
   const userDataPath = createTempDir();
   const projectAPath = createTempDir();
   const projectBPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectAPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  const injectedConfigs: InjectedConfigContent[] = [];
-  orchestrator.opencodeClient.ensureServerStarted = async (_cwd, config) => {
-    injectedConfigs.push(config);
-    return {
-      process: null,
-      port: 43127,
-    };
-  };
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  orchestrator.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
-
-  const projectA = await orchestrator.getWorkspaceSnapshot(projectAPath);
-  await addCustomAgent(orchestrator, projectA.cwd, "BA", "你是 BA。\n只做需求分析。", "BA", false);
-  let projectB = await orchestrator.getWorkspaceSnapshot(projectBPath);
-  projectB = await addBuiltinAgents(orchestrator, projectB.cwd, ["Build"], "Build", []);
-
-  await orchestrator.initializeTask({ cwd: projectB.cwd, title: "project-b" });
-  await orchestrator.initializeTask({ cwd: projectA.cwd, title: "project-a" });
-
-  assert.equal(injectedConfigs.length >= 2, true);
-  assert.equal(
-    injectedConfigs.some((content) => content !== undefined && Object.keys(content.agent).length === 0),
-    true,
-  );
-  const latestInjectedConfig = injectedConfigs.at(-1);
-  if (latestInjectedConfig === undefined) {
-    assert.fail("应当拿到 project-a 的注入配置");
-  }
-  assert.deepEqual(parseInjectedAgents(latestInjectedConfig)["BA"], {
-    mode: "primary",
-    prompt: "你是 BA。\n只做需求分析。",
-    permission: {
-      write: "deny",
-      edit: "deny",
-      bash: "deny",
-      task: "deny",
-      patch: "deny",
-      webfetch: "deny",
-      websearch: "deny",
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。\n只做需求分析。", "BA", false);
+  await assert.rejects(
+    async () => {
+      const another = new TestOrchestrator({
+        cwd: projectBPath,
+        userDataPath,
+        enableEventStream: false,
+      });
+      try {
+        await another.getWorkspaceSnapshot();
+      } finally {
+        activeOrchestrators.delete(another);
+        await another.dispose();
+      }
     },
-  });
+    /当前进程只允许一个 cwd/,
+  );
 });
 
 test("同一 cwd 下多个 task 只会启动一次 OpenCode serve", async () => {
   const userDataPath = createTempDir();
   const cwd = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd,
     userDataPath,
     enableEventStream: false,
   });
@@ -2003,11 +1969,11 @@ test("同一 cwd 下多个 task 只会启动一次 OpenCode serve", async () => 
   });
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
 
-  const workspace = await orchestrator.getWorkspaceSnapshot(cwd);
-  await addBuiltinAgents(orchestrator, workspace.cwd, ["Build"], "Build", []);
+  await orchestrator.getWorkspaceSnapshot();
+  await addBuiltinAgents(orchestrator, ["Build"], "Build", []);
 
-  await orchestrator.initializeTask({ cwd: workspace.cwd, title: "task-a" });
-  await orchestrator.initializeTask({ cwd: workspace.cwd, title: "task-b" });
+  await orchestrator.initializeTask({ title: "task-a" });
+  await orchestrator.initializeTask({ title: "task-b" });
 
   assert.equal(startServerCount, 1);
 });
@@ -2016,14 +1982,15 @@ test("新的 Orchestrator 进程里不会再从旧工作区快照恢复 task att
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const writer = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(writer);
 
-  let project = await writer.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(writer, project.cwd, ["Build"], "Build", []);
-  const created = await writer.initializeTask({ cwd: project.cwd, title: "demo" });
+  await writer.getWorkspaceSnapshot();
+  await addBuiltinAgents(writer, ["Build"], "Build", []);
+  const created = await writer.initializeTask({ title: "demo" });
   const buildTaskAgent = created.agents[0];
   if (!buildTaskAgent) {
     assert.fail("缺少 Build 运行态 Agent");
@@ -2032,11 +1999,12 @@ test("新的 Orchestrator 进程里不会再从旧工作区快照恢复 task att
   assert.equal(buildTaskAgent.opencodeSessionId, "session:demo:Build");
 
   const reloaded = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   await assert.rejects(
-    () => reloaded.getTaskSnapshot(created.task.id, project.cwd),
+    () => reloaded.getTaskSnapshot(created.task.id),
     /Task .* not found/,
   );
 });
@@ -2045,14 +2013,15 @@ test("未写入 Build 时当前 Project 可以没有可写 Agent", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  const project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", false);
 
-  const injected = buildInjectedConfigFromAgents((await orchestrator.getWorkspaceSnapshot(project.cwd)).agents);
+  const injected = buildInjectedConfigFromAgents((await orchestrator.getWorkspaceSnapshot()).agents);
   assert.deepEqual(parseInjectedAgents(injected)["BA"], {
     mode: "primary",
     prompt: "你是 BA。",
@@ -2072,13 +2041,14 @@ test("Build 与其他显式可写 Agent 可以同时保持可写", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", ["Build"]);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "Build", true);
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["Build"], "Build", ["Build"]);
+  project = await addCustomAgent(orchestrator, "BA", "你是 BA。", "Build", true);
 
   assert.deepEqual(
     project.agents.map((agent) => [agent.id, agent.isWritable === true]),
@@ -2104,13 +2074,14 @@ test("多个自定义 Agent 可以同时保持可写", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", true);
-  project = await addCustomAgent(orchestrator, project.cwd, "QA", "你是 QA。", "BA", true);
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", true);
+  project = await addCustomAgent(orchestrator, "QA", "你是 QA。", "BA", true);
 
   assert.deepEqual(
     project.agents.map((agent) => [agent.id, agent.isWritable === true]),
@@ -2122,19 +2093,18 @@ test("多个自定义 Agent 可以同时保持可写", async () => {
 });
 
 test("saveTopology 会保留同一 source target 下不同 trigger 的多条边", async () => {
+  const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath: createTempDir(),
     enableEventStream: false,
   });
-  const projectPath = createTempDir();
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞挑战", "你负责漏洞挑战。", "漏洞论证", false);
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addCustomAgent(orchestrator, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
+  project = await addCustomAgent(orchestrator, "漏洞挑战", "你负责漏洞挑战。", "漏洞论证", false);
 
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["漏洞论证", "漏洞挑战"],
       edges: [
@@ -2156,7 +2126,7 @@ test("saveTopology 会保留同一 source target 下不同 trigger 的多条边"
     },
   });
 
-  const snapshot = await orchestrator.getWorkspaceSnapshot(project.cwd);
+  const snapshot = await orchestrator.getWorkspaceSnapshot();
   assert.deepEqual(snapshot.topology.edges, [
     {
       source: "漏洞论证",
@@ -2176,20 +2146,19 @@ test("saveTopology 会保留同一 source target 下不同 trigger 的多条边"
 });
 
 test("saveTopology 允许同一 source 把同一个自定义 trigger 路由到多个下游", async () => {
+  const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath: createTempDir(),
     enableEventStream: false,
   });
-  const projectPath = createTempDir();
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞挑战", "你负责漏洞挑战。", "漏洞论证", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "讨论总结", "你负责讨论总结。", "漏洞论证", false);
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addCustomAgent(orchestrator, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
+  project = await addCustomAgent(orchestrator, "漏洞挑战", "你负责漏洞挑战。", "漏洞论证", false);
+  project = await addCustomAgent(orchestrator, "讨论总结", "你负责讨论总结。", "漏洞论证", false);
 
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["漏洞论证", "漏洞挑战", "讨论总结"],
       edges: [
@@ -2209,7 +2178,7 @@ test("saveTopology 允许同一 source 把同一个自定义 trigger 路由到�
     },
   });
 
-  const snapshot = await orchestrator.getWorkspaceSnapshot(project.cwd);
+  const snapshot = await orchestrator.getWorkspaceSnapshot();
   assert.deepEqual(snapshot.topology.edges, [
     {
       source: "漏洞论证",
@@ -2227,21 +2196,20 @@ test("saveTopology 允许同一 source 把同一个自定义 trigger 路由到�
 });
 
 test("saveTopology 会拒绝非尖括号 trigger", async () => {
+  const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath: createTempDir(),
     enableEventStream: false,
   });
-  const projectPath = createTempDir();
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "线索发现", "你负责线索发现。", "线索发现", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞挑战", "你负责漏洞挑战。", "线索发现", false);
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addCustomAgent(orchestrator, "线索发现", "你负责线索发现。", "线索发现", false);
+  project = await addCustomAgent(orchestrator, "漏洞挑战", "你负责漏洞挑战。", "线索发现", false);
 
   await assert.rejects(
     () =>
-      orchestrator.saveTopology({
-        cwd: project.cwd,
-        topology: {
+      orchestrator.saveTopology({ topology: {
           ...project.topology,
           nodes: ["线索发现", "漏洞挑战"],
           edges: [
@@ -2262,6 +2230,7 @@ test("只有第一次 Agent 间传递会携带 [Initial Task]", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -2294,12 +2263,10 @@ test("只有第一次 Agent 间传递会携带 [Initial Task]", async () => {
     return completedResponse(agent, "验证已完成。");
   };
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["BA", "Build"], "BA", []);
-  project = await addCustomAgent(orchestrator, project.cwd, "QA", "你是 QA。", "BA", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["BA", "Build"], "BA", []);
+  project = await addCustomAgent(orchestrator, "QA", "你是 QA。", "BA", false);
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["BA", "Build", "QA"],
       edges: [
@@ -2319,9 +2286,7 @@ test("只有第一次 Agent 间传递会携带 [Initial Task]", async () => {
     },
   });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@BA 请实现 add 方法，并补充验证说明。",
+  const submittedTask = await orchestrator.submitTask({ content: "@BA 请实现 add 方法，并补充验证说明。",
   });
 
   await waitForTaskSnapshot(
@@ -2349,6 +2314,7 @@ test("agent 声明 initialMessage 后，下游实际 prompt 会保留默认转�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -2381,9 +2347,7 @@ test("agent 声明 initialMessage 后，下游实际 prompt 会保留默认转�
     return completedResponse(agent, "线索完备性评估完成。");
   };
 
-  await orchestrator.applyTeamDsl({
-    cwd: projectPath,
-    compiled: compileTeamDsl({
+  await orchestrator.applyTeamDsl({ compiled: compileTeamDsl({
       entry: "线索发现",
       nodes: [
         {
@@ -2423,9 +2387,7 @@ test("agent 声明 initialMessage 后，下游实际 prompt 会保留默认转�
     }),
   });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: projectPath,
-    content: "@线索发现 请继续分析这个漏洞线索。",
+  const submittedTask = await orchestrator.submitTask({ content: "@线索发现 请继续分析这个漏洞线索。",
   });
 
   await waitForTaskSnapshot(
@@ -2452,6 +2414,7 @@ test("initialMessage 已包含当前触发 agent 时，最终 prompt 不会重�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -2484,9 +2447,7 @@ test("initialMessage 已包含当前触发 agent 时，最终 prompt 不会重�
     return completedResponse(agent, "C 完成。");
   };
 
-  await orchestrator.applyTeamDsl({
-    cwd: projectPath,
-    compiled: compileTeamDsl({
+  await orchestrator.applyTeamDsl({ compiled: compileTeamDsl({
       entry: "A",
       nodes: [
         {
@@ -2526,9 +2487,7 @@ test("initialMessage 已包含当前触发 agent 时，最终 prompt 不会重�
     }),
   });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: projectPath,
-    content: "@A 请继续推进。",
+  const submittedTask = await orchestrator.submitTask({ content: "@A 请继续推进。",
   });
 
   await waitForTaskSnapshot(
@@ -2550,14 +2509,13 @@ test("initialMessage 已包含当前触发 agent 时，最终 prompt 不会重�
 });
 
 test("同一个目标 Agent 只会在首次启动时注入 initialMessage，后续自动派发不应重复注入", async () => {
+  const projectPath = createTempDir();
   const orchestrator = new BatchRunnerTestOrchestrator({
+    cwd: projectPath,
     userDataPath: createTempDir(),
     enableEventStream: false,
   });
-  const projectPath = createTempDir();
-  await orchestrator.applyTeamDsl({
-    cwd: projectPath,
-    compiled: compileTeamDsl({
+  await orchestrator.applyTeamDsl({ compiled: compileTeamDsl({
       entry: "A",
       nodes: [
         {
@@ -2607,9 +2565,7 @@ test("同一个目标 Agent 只会在首次启动时注入 initialMessage，后�
     });
   };
 
-  const initializedTask = await orchestrator.initializeTask({
-    cwd: projectPath,
-    title: "initial-message-repeat-check",
+  const initializedTask = await orchestrator.initializeTask({ title: "initial-message-repeat-check",
   });
 
   await orchestrator.runStandaloneAgent({
@@ -2634,8 +2590,8 @@ test("同一个目标 Agent 只会在首次启动时注入 initialMessage，后�
     },
   });
 
-  const taskRecord = orchestrator.store.getTask(projectPath, initializedTask.task.id);
-  const topology = orchestrator.store.getTopology(projectPath);
+  const taskRecord = orchestrator.store.getTask(initializedTask.task.id);
+  const topology = orchestrator.store.getTopology();
   const state = createGraphTaskState({
     taskId: taskRecord.id,
     topology,
@@ -2656,7 +2612,7 @@ test("同一个目标 Agent 只会在首次启动时注入 initialMessage，后�
     responseNote: "",
     rawResponse: "<complete>\nB 的第 1 条结论。",
   };
-  orchestrator.store.insertMessage(projectPath, firstBMessage);
+  orchestrator.store.insertMessage(firstBMessage);
 
   const firstRunners = await orchestrator.runBatchRunners(
     projectPath,
@@ -2698,7 +2654,7 @@ test("同一个目标 Agent 只会在首次启动时注入 initialMessage，后�
     responseNote: "",
     rawResponse: "<complete>\nB 的第 2 条结论。",
   };
-  orchestrator.store.insertMessage(projectPath, secondBMessage);
+  orchestrator.store.insertMessage(secondBMessage);
 
   const secondRunners = await orchestrator.runBatchRunners(
     projectPath,
@@ -2739,22 +2695,20 @@ test("同一个目标 Agent 只会在首次启动时注入 initialMessage，后�
 });
 
 test("多个 spawn 实例并存时，initialMessage 不会串组注入其他实例的来源消息", async () => {
+  const projectPath = createTempDir();
   const orchestrator = new BatchRunnerTestOrchestrator({
+    cwd: projectPath,
     userDataPath: createTempDir(),
     enableEventStream: false,
   });
-  const projectPath = createTempDir();
   const compiled = compileBuiltinTopology("vulnerability.json5");
   stubOpenCodeAttachBaseUrl(orchestrator);
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   await orchestrator.applyTeamDsl({
-    cwd: projectPath,
     compiled,
   });
 
-  const task = await orchestrator.initializeTask({
-    cwd: projectPath,
-    title: "demo",
+  const task = await orchestrator.initializeTask({ title: "demo",
   });
 
   const state = createGraphTaskState({
@@ -2933,7 +2887,7 @@ test("多个 spawn 实例并存时，initialMessage 不会串组注入其他实�
     },
   ];
   for (const message of insertedMessages) {
-    orchestrator.store.insertMessage(projectPath, message);
+    orchestrator.store.insertMessage(message);
   }
 
   const promptByAgent = new Map<string, string>();
@@ -2984,16 +2938,16 @@ test("多个 spawn 实例并存时，initialMessage 不会串组注入其他实�
 });
 
 test("rfc-scanner 的 spawn 首轮派发到漏洞论证时，会额外注入来自线索发现的 initialMessage", async () => {
+  const projectPath = createTempDir();
   const orchestrator = new BatchRunnerTestOrchestrator({
+    cwd: projectPath,
     userDataPath: createTempDir(),
     enableEventStream: false,
   });
-  const projectPath = createTempDir();
   const compiled = compileBuiltinTopology("rfc-scanner.json5");
   stubOpenCodeAttachBaseUrl(orchestrator);
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   await orchestrator.applyTeamDsl({
-    cwd: projectPath,
     compiled,
   });
 
@@ -3013,9 +2967,7 @@ test("rfc-scanner 的 spawn 首轮派发到漏洞论证时，会额外注入来�
     });
   };
 
-  const task = await orchestrator.initializeTask({
-    cwd: projectPath,
-    title: "RFC 5321 第 2.3.8 节",
+  const task = await orchestrator.initializeTask({ title: "RFC 5321 第 2.3.8 节",
   });
 
   const state = createGraphTaskState({
@@ -3095,7 +3047,7 @@ test("rfc-scanner 的 spawn 首轮派发到漏洞论证时，会额外注入来�
     },
   ];
   for (const message of insertedMessages) {
-    orchestrator.store.insertMessage(projectPath, message);
+    orchestrator.store.insertMessage(message);
   }
 
   const runners = await orchestrator.runBatchRunners(
@@ -3129,7 +3081,7 @@ test("rfc-scanner 的 spawn 首轮派发到漏洞论证时，会额外注入来�
   }
   const firstPrompt = argumentPrompts[0] ?? "";
   const storedMessages = orchestrator.store
-    .listMessages(projectPath, task.task.id)
+    .listMessages(task.task.id)
     .map((message) => ({
       sender: message.sender,
       kind: message.kind,
@@ -3156,14 +3108,14 @@ test("rfc-scanner 的 spawn 首轮派发到漏洞论证时，会额外注入来�
 });
 
 test("讨论总结收到嵌套来源段落时，最终可见顺序按拓扑定义顺序输出", async () => {
+  const projectPath = createTempDir();
   const orchestrator = new BatchRunnerTestOrchestrator({
+    cwd: projectPath,
     userDataPath: createTempDir(),
     enableEventStream: false,
   });
-  const projectPath = createTempDir();
   const compiled = compileBuiltinTopology("vulnerability.json5");
   await orchestrator.applyTeamDsl({
-    cwd: projectPath,
     compiled,
   });
 
@@ -3180,9 +3132,7 @@ test("讨论总结收到嵌套来源段落时，最终可见顺序按拓扑定�
   stubOpenCodeAttachBaseUrl(orchestrator);
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
 
-  const task = await orchestrator.submitTask({
-    cwd: projectPath,
-    content: "@线索发现 请持续挖掘当前代码中的可疑漏洞点。",
+  const task = await orchestrator.submitTask({ content: "@线索发现 请持续挖掘当前代码中的可疑漏洞点。",
     mentionAgentId: "线索发现",
   });
 
@@ -3238,12 +3188,12 @@ test("讨论总结收到嵌套来源段落时，最终可见顺序按拓扑定�
     "1. 可疑点标题",
     "SMTP 数据行处理存在一个新的可疑点。",
   ].join("\n");
-  const taskRecord = orchestrator.store.getTask(projectPath, task.task.id);
+  const taskRecord = orchestrator.store.getTask(task.task.id);
   if (!taskRecord) {
     assert.fail("缺少测试任务");
   }
 
-  orchestrator.store.insertMessage(projectPath, {
+  orchestrator.store.insertMessage({
     id: "message:clue",
     taskId: taskRecord.id,
     sender: "线索发现",
@@ -3257,7 +3207,7 @@ test("讨论总结收到嵌套来源段落时，最终可见顺序按拓扑定�
     rawResponse: "<continue>\n1. 可疑点标题\nSMTP 数据行处理存在一个新的可疑点。",
     senderDisplayName: "线索发现",
   });
-  orchestrator.store.insertMessage(projectPath, {
+  orchestrator.store.insertMessage({
     id: "message:challenge",
     taskId: taskRecord.id,
     sender: "漏洞挑战-1",
@@ -3271,7 +3221,7 @@ test("讨论总结收到嵌套来源段落时，最终可见顺序按拓扑定�
     rawResponse: "<complete>\n漏洞挑战-1 给出反驳结论。",
     senderDisplayName: "漏洞挑战-1",
   });
-  orchestrator.store.insertMessage(projectPath, {
+  orchestrator.store.insertMessage({
     id: "message:argument",
     taskId: taskRecord.id,
     sender: "漏洞论证-1",
@@ -3335,6 +3285,7 @@ test("当前 Project 缺少 Build Agent 时，默认会从 start node 开始，�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -3347,12 +3298,10 @@ test("当前 Project 缺少 Build Agent 时，默认会从 start node 开始，�
       timestamp: toUtcIsoTimestamp("2026-04-15T00:00:00.000Z"),
     });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", false);
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@BA 请先整理需求。",
+  const submittedTask = await orchestrator.submitTask({ content: "@BA 请先整理需求。",
   });
 
   const firstUserMessage = submittedTask.messages.find((message) => message.sender === "user");
@@ -3363,9 +3312,7 @@ test("当前 Project 缺少 Build Agent 时，默认会从 start node 开始，�
     ["BA"],
   );
 
-  const defaultSubmittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "请先整理需求。",
+  const defaultSubmittedTask = await orchestrator.submitTask({ content: "请先整理需求。",
   });
 
   const defaultUserMessage = defaultSubmittedTask.messages.findLast((message) => message.sender === "user");
@@ -3376,9 +3323,7 @@ test("当前 Project 缺少 Build Agent 时，默认会从 start node 开始，�
     ["BA"],
   );
 
-  await assert.rejects(async () => orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@Build 请先实现需求。",
+  await assert.rejects(async () => orchestrator.submitTask({ content: "@Build 请先实现需求。",
   }), /@Build 不可用/u);
 });
 
@@ -3386,6 +3331,7 @@ test("单 decisionAgent 判定失败后会把 action_required 回流给 Build", 
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -3427,11 +3373,9 @@ test("单 decisionAgent 判定失败后会把 action_required 回流给 Build", 
       : completedResponse(agent, count, "CodeReview 通过。\n\n<complete>同意当前结果。</complete>");
   };
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["BA", "Build", "CodeReview"], "BA", []);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["BA", "Build", "CodeReview"], "BA", []);
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["BA", "Build", "CodeReview"],
       edges: [
@@ -3464,9 +3408,7 @@ test("单 decisionAgent 判定失败后会把 action_required 回流给 Build", 
     },
   });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@BA 请实现 add 方法，并准备判定修复。",
+  const submittedTask = await orchestrator.submitTask({ content: "@BA 请实现 add 方法，并准备判定修复。",
   });
 
   const snapshot = await waitForTaskSnapshot(
@@ -3496,6 +3438,7 @@ test("修复首个失败 decisionAgent 后，Build 下一轮不会立刻全量�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -3571,17 +3514,13 @@ test("修复首个失败 decisionAgent 后，Build 下一轮不会立刻全量�
     return completedResponse(agent, codeDecisionRunCount, "CodeReview: ok\n\n<complete>同意当前结果。</complete>");
   };
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  let project = await orchestrator.getWorkspaceSnapshot();
   project = await addBuiltinAgents(
-    orchestrator,
-    project.cwd,
-    ["Build", "UnitTest", "TaskReview", "CodeReview"],
+    orchestrator, ["Build", "UnitTest", "TaskReview", "CodeReview"],
     "Build",
     [],
   );
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["Build", "UnitTest", "TaskReview", "CodeReview"],
       edges: [
@@ -3598,9 +3537,7 @@ test("修复首个失败 decisionAgent 后，Build 下一轮不会立刻全量�
     },
   });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@Build 请完成这个需求。",
+  const submittedTask = await orchestrator.submitTask({ content: "@Build 请完成这个需求。",
   });
 
   try {
@@ -3644,6 +3581,7 @@ test("判定 Agent 返回 action_required 后会在其余 decisionAgent 收齐�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -3718,17 +3656,13 @@ test("判定 Agent 返回 action_required 后会在其余 decisionAgent 收齐�
     return completedResponse(agent, codeDecisionRunCount, "CodeReview: ok\n\n<complete>同意当前结果。</complete>");
   };
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
+  let project = await orchestrator.getWorkspaceSnapshot();
   project = await addBuiltinAgents(
-    orchestrator,
-    project.cwd,
-    ["Build", "UnitTest", "TaskReview", "CodeReview"],
+    orchestrator, ["Build", "UnitTest", "TaskReview", "CodeReview"],
     "Build",
     [],
   );
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["Build", "UnitTest", "TaskReview", "CodeReview"],
       edges: [
@@ -3745,9 +3679,7 @@ test("判定 Agent 返回 action_required 后会在其余 decisionAgent 收齐�
     },
   });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@Build 请完成这个需求。",
+  const submittedTask = await orchestrator.submitTask({ content: "@Build 请完成这个需求。",
   });
 
   await waitForTaskSnapshot(
@@ -3805,15 +3737,16 @@ test("Task 启动后仍允许重新 applyTeamDsl，让 task headless/task ui 的
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
-  await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
-  const reapplied = await replaceWorkspaceAgents(orchestrator, project.cwd, "BA", [
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", false);
+  await orchestrator.initializeTask({ title: "demo" });
+  const reapplied = await replaceWorkspaceAgents(orchestrator, "BA", [
     { id: "BA", prompt: "你是新的 BA。", isWritable: false },
     { id: "Build", prompt: getTestAgentPrompt("Build"), isWritable: false },
   ]);
@@ -3833,21 +3766,20 @@ test("Agent 返回 completed 但正文为空时，任务必须失败而不是写
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new StandaloneRunTestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", false);
+  await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["BA"],
       edges: [],
     }),
   });
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+  const task = await orchestrator.initializeTask({ title: "demo" });
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   orchestrator.opencodeRunner.run = async ({ agent }) =>
@@ -3859,7 +3791,7 @@ test("Agent 返回 completed 但正文为空时，任务必须失败而不是写
     });
 
   await orchestrator.runStandaloneAgent({
-    cwd: project.cwd,
+    cwd: projectPath,
     task: task.task,
     agentId: "BA",
     prompt: {
@@ -3889,16 +3821,15 @@ test("单 Agent 且没有下游时，任务结束后仍保留该 Agent 的最终
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", false);
+  await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["BA"],
       edges: [],
     }),
@@ -3912,9 +3843,7 @@ test("单 Agent 且没有下游时，任务结束后仍保留该 Agent 的最终
       timestamp: toUtcIsoTimestamp("2026-04-21T13:10:00.000Z"),
     });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@BA 请输出一句验证成功。",
+  const submittedTask = await orchestrator.submitTask({ content: "@BA 请输出一句验证成功。",
     mentionAgentId: "BA",
   });
 
@@ -3953,21 +3882,20 @@ test("agent 运行中时会先把过程消息追加到 task messages", async () 
   };
 
   const orchestrator = new StandaloneRunTestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", false);
+  await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["BA"],
       edges: [],
     }),
   });
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+  const task = await orchestrator.initializeTask({ title: "demo" });
 
   orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => ({
     sessionId,
@@ -3996,7 +3924,7 @@ test("agent 运行中时会先把过程消息追加到 task messages", async () 
     });
 
   const runPromise = orchestrator.runStandaloneAgent({
-    cwd: project.cwd,
+    cwd: projectPath,
     task: task.task,
     agentId: "BA",
     prompt: {
@@ -4055,22 +3983,21 @@ test("runStandaloneAgent 会用后续同步拿到的真实参数覆盖占位 age
   };
 
   const orchestrator = new StandaloneRunTestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
     runtimeRefreshDebounceMs: 1,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", false);
+  await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["BA"],
       edges: [],
     }),
   });
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+  const task = await orchestrator.initializeTask({ title: "demo" });
 
   let runtimeCallCount = 0;
   orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => {
@@ -4109,7 +4036,7 @@ test("runStandaloneAgent 会用后续同步拿到的真实参数覆盖占位 age
     });
 
   const runPromise = orchestrator.runStandaloneAgent({
-    cwd: project.cwd,
+    cwd: projectPath,
     task: task.task,
     agentId: "BA",
     prompt: {
@@ -4181,22 +4108,21 @@ test("runStandaloneAgent 在同为 complete 时会按结构化来源优先级覆
   };
 
   const orchestrator = new StandaloneRunTestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
     runtimeRefreshDebounceMs: 1,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "BA", "你是 BA。", "BA", false);
+  await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["BA"],
       edges: [],
     }),
   });
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+  const task = await orchestrator.initializeTask({ title: "demo" });
 
   let runtimeCallCount = 0;
   orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => {
@@ -4237,7 +4163,7 @@ test("runStandaloneAgent 在同为 complete 时会按结构化来源优先级覆
     });
 
   const runPromise = orchestrator.runStandaloneAgent({
-    cwd: project.cwd,
+    cwd: projectPath,
     task: task.task,
     agentId: "BA",
     prompt: {
@@ -4316,17 +4242,16 @@ test("自定义 trigger 会按精确标签触发约定下游", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞挑战", "你负责漏洞挑战。", "漏洞论证", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addCustomAgent(orchestrator, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
+  project = await addCustomAgent(orchestrator, "漏洞挑战", "你负责漏洞挑战。", "漏洞论证", false);
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["漏洞论证", "漏洞挑战"],
       edges: [
@@ -4357,9 +4282,7 @@ test("自定义 trigger 会按精确标签触发约定下游", async () => {
     });
   };
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@漏洞论证 请继续当前争议点的论证。",
+  const submittedTask = await orchestrator.submitTask({ content: "@漏洞论证 请继续当前争议点的论证。",
     mentionAgentId: "漏洞论证",
   });
 
@@ -4395,17 +4318,16 @@ test("custom-only trigger 返回未声明的示例 label 时会直接失败，�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞挑战", "你负责漏洞挑战。", "漏洞论证", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addCustomAgent(orchestrator, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
+  project = await addCustomAgent(orchestrator, "漏洞挑战", "你负责漏洞挑战。", "漏洞论证", false);
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["漏洞论证", "漏洞挑战"],
       edges: [
@@ -4427,9 +4349,7 @@ test("custom-only trigger 返回未声明的示例 label 时会直接失败，�
       timestamp: toUtcIsoTimestamp("2026-04-27T10:10:00.000Z"),
     });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@漏洞论证 请继续当前争议点的论证。",
+  const submittedTask = await orchestrator.submitTask({ content: "@漏洞论证 请继续当前争议点的论证。",
     mentionAgentId: "漏洞论证",
   });
 
@@ -4466,16 +4386,15 @@ test("自定义结束 trigger 可以直接命中 __end__", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addCustomAgent(orchestrator, project.cwd, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  await orchestrator.getWorkspaceSnapshot();
+  await addCustomAgent(orchestrator, "漏洞论证", "你负责漏洞论证。", "漏洞论证", false);
+  await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["漏洞论证"],
       edges: [],
       langgraph: {
@@ -4505,9 +4424,7 @@ test("自定义结束 trigger 可以直接命中 __end__", async () => {
       timestamp: toUtcIsoTimestamp("2026-04-27T10:20:00.000Z"),
     });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@漏洞论证 请完成本轮论证。",
+  const submittedTask = await orchestrator.submitTask({ content: "@漏洞论证 请完成本轮论证。",
     mentionAgentId: "漏洞论证",
   });
 
@@ -4532,16 +4449,15 @@ test("判定 Agent 未返回合法标签时必须直接判 invalid 并终止任�
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build", "TaskReview"], "Build", []);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["Build", "TaskReview"], "Build", []);
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["Build", "TaskReview"],
       edges: [
@@ -4569,9 +4485,7 @@ test("判定 Agent 未返回合法标签时必须直接判 invalid 并终止任�
     });
   };
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@Build 请完成这个需求。",
+  const submittedTask = await orchestrator.submitTask({ content: "@Build 请完成这个需求。",
     mentionAgentId: "Build",
   });
 
@@ -4612,13 +4526,14 @@ test("判定 Agent 执行中止时不会伪造成整改意见", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new StandaloneRunTestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build", "CodeReview"], "Build", []);
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["Build", "CodeReview"], "Build", []);
   const topology = {
     ...project.topology,
     edges: [
@@ -4638,10 +4553,9 @@ test("判定 Agent 执行中止时不会伪造成整改意见", async () => {
     ],
   };
   await orchestrator.saveTopology({
-    cwd: project.cwd,
     topology,
   });
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+  const task = await orchestrator.initializeTask({ title: "demo" });
   orchestrator.opencodeRunner.run = async () =>
     buildErrorExecutionResult({
       agent: "CodeReview",
@@ -4652,7 +4566,7 @@ test("判定 Agent 执行中止时不会伪造成整改意见", async () => {
     });
 
   await orchestrator.runStandaloneAgent({
-    cwd: project.cwd,
+    cwd: projectPath,
     task: task.task,
     agentId: "CodeReview",
     prompt: {
@@ -4692,6 +4606,7 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
   const projectPath = createTempDir();
 
   const orchestrator = new StandaloneRunTestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -4706,12 +4621,10 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
       timestamp: toUtcIsoTimestamp("2026-04-15T00:00:00.000Z"),
     });
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", []);
-  project = await addCustomAgent(orchestrator, project.cwd, "QA", "你是 QA。", "Build", false);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["Build"], "Build", []);
+  project = await addCustomAgent(orchestrator, "QA", "你是 QA。", "Build", false);
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["Build", "QA"],
       edges: [
@@ -4724,10 +4637,10 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
       ],
     },
   });
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+  const task = await orchestrator.initializeTask({ title: "demo" });
 
   await orchestrator.runStandaloneAgent({
-    cwd: project.cwd,
+    cwd: projectPath,
     task: task.task,
     agentId: "Build",
     prompt: {
@@ -4741,7 +4654,7 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
   assert.equal(snapshot.task.status, "finished");
 
   await orchestrator.runStandaloneAgent({
-    cwd: project.cwd,
+    cwd: projectPath,
     task: task.task,
     agentId: "QA",
     prompt: {
@@ -4774,16 +4687,15 @@ test("最大连续回流达到上限后，聊天页面会直接展示明确失�
   let unitTestRunCount = 0;
 
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  const project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  await addBuiltinAgents(orchestrator, project.cwd, ["Build", "UnitTest"], "Build", ["Build"]);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  await orchestrator.getWorkspaceSnapshot();
+  await addBuiltinAgents(orchestrator, ["Build", "UnitTest"], "Build", ["Build"]);
+  await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["Build", "UnitTest"],
       edges: [
         { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
@@ -4792,9 +4704,7 @@ test("最大连续回流达到上限后，聊天页面会直接展示明确失�
     }),
   });
 
-  const task = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@Build 请完成需求并通过 UnitTest",
+  const task = await orchestrator.submitTask({ content: "@Build 请完成需求并通过 UnitTest",
     mentionAgentId: "Build",
   });
   orchestrator.opencodeRunner.run = async ({ agent }) => {
@@ -4874,16 +4784,15 @@ test("聊天页面会按每条 action_required 边的单独上限展示失败原
   let unitTestRunCount = 0;
 
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
 
-  const project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  await addBuiltinAgents(orchestrator, project.cwd, ["Build", "UnitTest"], "Build", ["Build"]);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: withAgentNodeRecords({
+  await orchestrator.getWorkspaceSnapshot();
+  await addBuiltinAgents(orchestrator, ["Build", "UnitTest"], "Build", ["Build"]);
+  await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["Build", "UnitTest"],
       edges: [
         { source: "Build", target: "UnitTest", trigger: "<default>", messageMode: "last" },
@@ -4892,9 +4801,7 @@ test("聊天页面会按每条 action_required 边的单独上限展示失败原
     }),
   });
 
-  const task = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@Build 请完成需求并通过 UnitTest",
+  const task = await orchestrator.submitTask({ content: "@Build 请完成需求并通过 UnitTest",
     mentionAgentId: "Build",
   });
   orchestrator.opencodeRunner.run = async ({ agent }) => {
@@ -4966,6 +4873,7 @@ test("并发判定失败时不会提前追加任务结束系统消息", async ()
   let taskDecisionRunCount = 0;
 
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -5016,11 +4924,9 @@ test("并发判定失败时不会提前追加任务结束系统消息", async ()
     });
   };
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build", "UnitTest", "TaskReview"], "Build", []);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["Build", "UnitTest", "TaskReview"], "Build", []);
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["Build", "UnitTest", "TaskReview"],
       edges: [
@@ -5034,9 +4940,7 @@ test("并发判定失败时不会提前追加任务结束系统消息", async ()
     },
   });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@Build 请完成这个需求。",
+  const submittedTask = await orchestrator.submitTask({ content: "@Build 请完成这个需求。",
   });
 
   await waitForTaskSnapshot(
@@ -5091,6 +4995,7 @@ test("修复批次的 dispatch 窗口里，不会被 getTaskSnapshot 提前补�
   let taskDecisionRunCount = 0;
 
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
@@ -5136,11 +5041,9 @@ test("修复批次的 dispatch 窗口里，不会被 getTaskSnapshot 提前补�
     });
   };
 
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build", "UnitTest", "TaskReview"], "Build", []);
-  await orchestrator.saveTopology({
-    cwd: project.cwd,
-    topology: {
+  let project = await orchestrator.getWorkspaceSnapshot();
+  project = await addBuiltinAgents(orchestrator, ["Build", "UnitTest", "TaskReview"], "Build", []);
+  await orchestrator.saveTopology({ topology: {
       ...project.topology,
       nodes: ["Build", "UnitTest", "TaskReview"],
       edges: [
@@ -5153,9 +5056,7 @@ test("修复批次的 dispatch 窗口里，不会被 getTaskSnapshot 提前补�
     },
   });
 
-  const submittedTask = await orchestrator.submitTask({
-    cwd: project.cwd,
-    content: "@Build 请完成这个需求。",
+  const submittedTask = await orchestrator.submitTask({ content: "@Build 请完成这个需求。",
   });
 
   const snapshotDuringRedispatchWindow = await waitForTaskSnapshot(
@@ -5210,20 +5111,22 @@ test("getWorkspaceSnapshot 不会再跨进程回放当前工作区任务", async
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", []);
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
+  await orchestrator.getWorkspaceSnapshot();
+  await addBuiltinAgents(orchestrator, ["Build"], "Build", []);
+  const task = await orchestrator.initializeTask({ title: "demo" });
 
   const reloaded = new TestOrchestrator({
+    cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(reloaded);
-  const snapshot = await reloaded.getWorkspaceSnapshot(project.cwd);
+  const snapshot = await reloaded.getWorkspaceSnapshot();
 
   assert.equal(snapshot.tasks.some((item) => item.task.id === task.task.id), false);
 });

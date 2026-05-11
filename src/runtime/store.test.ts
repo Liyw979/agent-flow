@@ -18,7 +18,7 @@ test("StoreService 在空工作区读取时不会物化旧工作区快照文件"
   const cwd = createTempDir();
   const store = new StoreService();
 
-  const state = store.getState(cwd);
+  const state = store.getState();
 
   assert.deepEqual(state.tasks, []);
   assert.equal(fs.existsSync(path.join(cwd, ".agent-team", LEGACY_WORKSPACE_STATE_BASENAME)), false);
@@ -28,7 +28,7 @@ test("StoreService 会在内存里保存 topology / tasks / taskAgents / message
   const cwd = createTempDir();
   const store = new StoreService();
 
-  store.upsertTopology(cwd, {
+  store.upsertTopology({
     nodes: ["Build"],
     edges: [],
     langgraph: {
@@ -59,15 +59,15 @@ test("StoreService 会在内存里保存 topology / tasks / taskAgents / message
     completedAt: "",
     initializedAt: "",
   });
-  store.insertTaskAgent(cwd, {
-          taskId: "task-1",
+  store.insertTaskAgent({
+    taskId: "task-1",
     id: "Build",
     opencodeSessionId: "agent-session",
     opencodeAttachBaseUrl: "http://127.0.0.1:4999",
     status: "running",
     runCount: 1,
   });
-  store.insertMessage(cwd, {
+  store.insertMessage({
     id: "message-1",
     taskId: "task-1",
     sender: "system",
@@ -76,14 +76,14 @@ test("StoreService 会在内存里保存 topology / tasks / taskAgents / message
     kind: "system-message",
   });
 
-  assert.equal(store.getTopology(cwd).nodes[0], "Build");
-  assert.equal(store.getTask(cwd, "task-1").createdAt, "2026-04-21T00:00:00.000Z");
-  assert.equal(store.listTaskAgents(cwd, "task-1")[0]?.opencodeAttachBaseUrl, "http://127.0.0.1:4999");
-  assert.equal(store.listMessages(cwd, "task-1")[0]?.id, "message-1");
+  assert.equal(store.getTopology().nodes[0], "Build");
+  assert.equal(store.getTask("task-1").createdAt, "2026-04-21T00:00:00.000Z");
+  assert.equal(store.listTaskAgents("task-1")[0]?.opencodeAttachBaseUrl, "http://127.0.0.1:4999");
+  assert.equal(store.listMessages("task-1")[0]?.id, "message-1");
   assert.equal(fs.existsSync(path.join(cwd, ".agent-team", LEGACY_WORKSPACE_STATE_BASENAME)), false);
 });
 
-test("StoreService 会在内存里维护 task locator，并在删除任务时清掉索引", () => {
+test("StoreService 删除任务时会同步清掉关联 agent 与消息", () => {
   const cwd = createTempDir();
   const store = new StoreService();
 
@@ -98,7 +98,25 @@ test("StoreService 会在内存里维护 task locator，并在删除任务时清
     initializedAt: "",
   });
 
-  assert.equal(store.getTaskLocatorCwd("task-1"), cwd);
-  store.deleteTask(cwd, "task-1");
-  assert.equal(store.getTaskLocatorCwd("task-1"), null);
+  store.insertTaskAgent({
+    taskId: "task-1",
+    id: "Build",
+    opencodeSessionId: "session",
+    opencodeAttachBaseUrl: "http://127.0.0.1:4999",
+    status: "running",
+    runCount: 1,
+  });
+  store.insertMessage({
+    id: "message-1",
+    taskId: "task-1",
+    sender: "system",
+    content: "Task 已创建",
+    timestamp: toUtcIsoTimestamp("2026-04-21T00:00:01.000Z"),
+    kind: "system-message",
+  });
+
+  store.deleteTask("task-1");
+  assert.deepEqual(store.listTasks(), []);
+  assert.deepEqual(store.listTaskAgents("task-1"), []);
+  assert.deepEqual(store.listMessages("task-1"), []);
 });

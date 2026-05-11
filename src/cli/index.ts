@@ -103,31 +103,25 @@ async function disposeCliContext(context: CliContext, options: CliDisposeOptions
   return report;
 }
 
-async function createCliContext(options?: {
+async function createCliContext(input: {
+  cwd: string;
   userDataPath?: string;
-  enableEventStream?: boolean;
+  enableEventStream: boolean;
 }): Promise<CliContext> {
-  const userDataPath = options?.userDataPath ?? resolveCliUserDataPath();
+  const userDataPath = input.userDataPath ?? resolveCliUserDataPath();
+  const cwd = resolveWorkspaceCwdFromFilesystem(input.cwd, process.cwd());
   await ensureRuntimeAssets(userDataPath);
   const orchestrator = new Orchestrator({
+    cwd,
     userDataPath,
     autoOpenTaskSession: false,
-    enableEventStream: options?.enableEventStream ?? false,
+    enableEventStream: input.enableEventStream,
   });
   await orchestrator.initialize();
   return {
     orchestrator,
     userDataPath,
   };
-}
-
-async function resolveProject(
-  context: CliContext,
-  cwd?: string,
-): Promise<WorkspaceSnapshot> {
-  return context.orchestrator.getWorkspaceSnapshot(
-    resolveWorkspaceCwdFromFilesystem(cwd, process.cwd()),
-  );
 }
 
 async function ensureJson5TopologyApplied(
@@ -139,7 +133,6 @@ async function ensureJson5TopologyApplied(
     return workspace;
   }
   return context.orchestrator.applyTeamDsl({
-    cwd: workspace.cwd,
     compiled,
   });
 }
@@ -275,7 +268,6 @@ async function resolveUiHostBinding() {
 
 async function ensureUiHost(
   context: CliContext,
-  cwd: string,
   taskId: string,
   webRoot: string,
   port: number,
@@ -283,7 +275,6 @@ async function ensureUiHost(
 ) : Promise<{ host: ActiveUiHost; port: number; url: string }> {
   const host = await startWebHost({
     orchestrator: context.orchestrator,
-    cwd,
     taskId,
     port,
     webRoot,
@@ -320,12 +311,11 @@ async function handleTaskHeadlessCommand(
   diagnostics: TaskRunDiagnostics,
   compiledTopology: ReturnType<typeof compileTeamDsl>,
 ) {
-  let workspace = await resolveProject(context, command.cwd);
+  let workspace = await context.orchestrator.getWorkspaceSnapshot();
   workspace = await ensureJson5TopologyApplied(context, workspace, compiledTopology);
   const initialMessage = command.message!.trim();
 
   const snapshot = await context.orchestrator.submitTask({
-    cwd: workspace.cwd,
     newTaskId: diagnostics.taskId,
     content: initialMessage,
   });
@@ -357,11 +347,10 @@ async function handleTaskUiCommand(
     isResume: false,
   });
 
-  let workspace = await resolveProject(context, command.cwd);
+  let workspace = await context.orchestrator.getWorkspaceSnapshot();
   workspace = await ensureJson5TopologyApplied(context, workspace, compiledTopology);
   const webRoot = await ensureUiAssetsAvailable(context.userDataPath);
   const snapshot = await context.orchestrator.submitTask({
-    cwd: workspace.cwd,
     newTaskId: diagnostics.taskId,
     content: command.message!.trim(),
   });
@@ -374,7 +363,6 @@ async function handleTaskUiCommand(
   printTaskRunDiagnostics(diagnostics, uiUrl);
   const { host, url } = await ensureUiHost(
     context,
-    snapshot.task.cwd,
     snapshot.task.id,
     webRoot,
     uiPort,
@@ -421,9 +409,14 @@ async function run() {
     await ensureOpencodePreflightPassed();
   }
 
-  const context = await createCliContext(
-    userDataPath ? { userDataPath } : undefined,
-  );
+  const context = await createCliContext({
+    cwd:
+      (command.kind === "task.headless" || command.kind === "task.ui")
+        ? (command.cwd ?? process.cwd())
+        : process.cwd(),
+    ...(userDataPath ? { userDataPath } : {}),
+    enableEventStream: false,
+  });
   let observedSettledTaskState = false;
   let forceProcessExit = false;
   let interrupted = false;

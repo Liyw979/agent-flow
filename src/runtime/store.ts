@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   buildTopologyNodeRecords,
   createTopologyLangGraphRecord,
@@ -99,18 +98,18 @@ function createDefaultWorkspaceState(): WorkspaceStateFile {
 }
 
 export class StoreService {
-  private readonly workspaceStates = new Map<string, WorkspaceStateFile>();
+  private state: WorkspaceStateFile;
 
-  private readonly taskLocatorById = new Map<string, string>();
-
-  constructor() {}
-
-  listTasks(cwd: string): TaskRecord[] {
-    return sortByCreatedAtDesc(this.readWorkspaceState(cwd).tasks);
+  constructor() {
+    this.state = createDefaultWorkspaceState();
   }
 
-  getTask(cwd: string, taskId: string): TaskRecord {
-    const task = this.readWorkspaceState(cwd).tasks.find((item) => item.id === taskId);
+  listTasks(): TaskRecord[] {
+    return sortByCreatedAtDesc(this.state.tasks);
+  }
+
+  getTask(taskId: string): TaskRecord {
+    const task = this.state.tasks.find((item) => item.id === taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
@@ -118,33 +117,23 @@ export class StoreService {
   }
 
   insertTask(record: TaskRecord) {
-    this.updateWorkspaceState(record.cwd, (state) => ({
+    this.updateWorkspaceState((state) => ({
       ...state,
       tasks: uniqueById([...state.tasks, record]),
     }));
-    this.taskLocatorById.set(record.id, path.resolve(record.cwd));
   }
 
-  deleteTask(cwd: string, taskId: string) {
-    this.updateWorkspaceState(cwd, (state) => ({
+  deleteTask(taskId: string) {
+    this.updateWorkspaceState((state) => ({
       ...state,
       tasks: state.tasks.filter((task) => task.id !== taskId),
       taskAgents: state.taskAgents.filter((agent) => agent.taskId !== taskId),
       messages: state.messages.filter((message) => message.taskId !== taskId),
     }));
-    this.taskLocatorById.delete(taskId);
   }
 
-  getTaskLocatorCwd(taskId: string): string | null {
-    return this.taskLocatorById.get(taskId) ?? null;
-  }
-
-  removeTaskLocator(taskId: string) {
-    this.taskLocatorById.delete(taskId);
-  }
-
-  updateTaskStatus(cwd: string, taskId: string, status: TaskRecord["status"], completedAt = "") {
-    this.updateWorkspaceState(cwd, (state) => ({
+  updateTaskStatus(taskId: string, status: TaskRecord["status"], completedAt = "") {
+    this.updateWorkspaceState((state) => ({
       ...state,
       tasks: state.tasks.map((task) =>
         task.id === taskId
@@ -158,8 +147,8 @@ export class StoreService {
     }));
   }
 
-  updateTaskAgentCount(cwd: string, taskId: string, agentCount: number) {
-    this.updateWorkspaceState(cwd, (state) => ({
+  updateTaskAgentCount(taskId: string, agentCount: number) {
+    this.updateWorkspaceState((state) => ({
       ...state,
       tasks: state.tasks.map((task) =>
         task.id === taskId
@@ -172,8 +161,8 @@ export class StoreService {
     }));
   }
 
-  updateTaskInitialized(cwd: string, taskId: string, initializedAt: string) {
-    this.updateWorkspaceState(cwd, (state) => ({
+  updateTaskInitialized(taskId: string, initializedAt: string) {
+    this.updateWorkspaceState((state) => ({
       ...state,
       tasks: state.tasks.map((task) =>
         task.id === taskId
@@ -186,21 +175,21 @@ export class StoreService {
     }));
   }
 
-  listTaskAgents(cwd: string, taskId: string): TaskAgentRecord[] {
-    return [...this.readWorkspaceState(cwd).taskAgents]
+  listTaskAgents(taskId: string): TaskAgentRecord[] {
+    return [...this.state.taskAgents]
       .filter((agent) => agent.taskId === taskId)
       .sort((left, right) => left.id.localeCompare(right.id));
   }
 
-  insertTaskAgent(cwd: string, record: TaskAgentRecord) {
-    this.updateWorkspaceState(cwd, (state) => ({
+  insertTaskAgent(record: TaskAgentRecord) {
+    this.updateWorkspaceState((state) => ({
       ...state,
       taskAgents: uniqueById([...state.taskAgents, record]),
     }));
   }
 
-  updateTaskAgentRun(cwd: string, taskId: string, agentId: string, status: TaskAgentRecord["status"]) {
-    this.updateWorkspaceState(cwd, (state) => ({
+  updateTaskAgentRun(taskId: string, agentId: string, status: TaskAgentRecord["status"]) {
+    this.updateWorkspaceState((state) => ({
       ...state,
       taskAgents: state.taskAgents.map((agent) =>
         agent.taskId === taskId && agent.id === agentId
@@ -214,8 +203,8 @@ export class StoreService {
     }));
   }
 
-  updateTaskAgentStatus(cwd: string, taskId: string, agentId: string, status: TaskAgentRecord["status"]) {
-    this.updateWorkspaceState(cwd, (state) => ({
+  updateTaskAgentStatus(taskId: string, agentId: string, status: TaskAgentRecord["status"]) {
+    this.updateWorkspaceState((state) => ({
       ...state,
       taskAgents: state.taskAgents.map((agent) =>
         agent.taskId === taskId && agent.id === agentId
@@ -228,49 +217,36 @@ export class StoreService {
     }));
   }
 
-  getTopology(cwd: string): TopologyRecord {
-    return this.readWorkspaceState(cwd).topology;
+  getTopology(): TopologyRecord {
+    return this.state.topology;
   }
 
-  upsertTopology(cwd: string, topology: TopologyRecord) {
-    this.updateWorkspaceState(cwd, (state) => ({
+  upsertTopology(topology: TopologyRecord) {
+    this.updateWorkspaceState((state) => ({
       ...state,
       topology,
     }));
   }
 
-  listMessages(cwd: string, taskId?: string | null): MessageRecord[] {
+  listMessages(taskId?: string | null): MessageRecord[] {
     const scoped =
       typeof taskId === "string"
-        ? this.readWorkspaceState(cwd).messages.filter((message) => message.taskId === taskId)
-        : this.readWorkspaceState(cwd).messages;
+        ? this.state.messages.filter((message) => message.taskId === taskId)
+        : this.state.messages;
     return sortMessages(scoped);
   }
 
-  insertMessage(cwd: string, record: MessageRecord) {
-    this.updateWorkspaceState(cwd, (state) => ({
+  insertMessage(record: MessageRecord) {
+    this.updateWorkspaceState((state) => ({
       ...state,
       messages: sortMessages(uniqueById([...state.messages, record])),
     }));
   }
 
-  getState(cwd: string): WorkspaceStateFile {
-    return this.readWorkspaceState(cwd);
+  getState(): WorkspaceStateFile {
+    return this.state;
   }
-
-  hasWorkspaceState(cwd: string): boolean {
-    return this.workspaceStates.has(path.resolve(cwd));
-  }
-
-  private readWorkspaceState(cwd: string): WorkspaceStateFile {
-    const normalizedCwd = path.resolve(cwd);
-    return this.workspaceStates.get(normalizedCwd) ?? createDefaultWorkspaceState();
-  }
-
-  private updateWorkspaceState(cwd: string, updater: (state: WorkspaceStateFile) => WorkspaceStateFile) {
-    const normalizedCwd = path.resolve(cwd);
-    const current = this.readWorkspaceState(normalizedCwd);
-    const next = updater(current);
-    this.workspaceStates.set(normalizedCwd, next);
+  private updateWorkspaceState(updater: (state: WorkspaceStateFile) => WorkspaceStateFile) {
+    this.state = updater(this.state);
   }
 }

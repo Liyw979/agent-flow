@@ -49,7 +49,7 @@ test("startWebHost 会按 JSON5 解析 /api/tasks/submit 请求体", async () =>
             id: "task-123",
             title: "demo",
             status: "running",
-            cwd: payload.cwd ?? "/tmp/demo",
+            cwd: "/tmp/demo",
             agentCount: 0,
             createdAt: "2026-04-28T00:00:00.000Z",
             completedAt: "",
@@ -72,7 +72,6 @@ test("startWebHost 会按 JSON5 解析 /api/tasks/submit 请求体", async () =>
         throw new Error("unexpected openAgentTerminal");
       },
     } as never,
-    cwd: "/tmp/demo",
     taskId: "task-123",
     port,
     webRoot: null,
@@ -87,7 +86,6 @@ test("startWebHost 会按 JSON5 解析 /api/tasks/submit 请求体", async () =>
         "content-type": "application/json",
       },
       body: `{
-        cwd: "/tmp/demo",
         content: "请开始执行",
         newTaskId: "task-123",
       }`,
@@ -95,7 +93,6 @@ test("startWebHost 会按 JSON5 解析 /api/tasks/submit 请求体", async () =>
 
     assert.equal(response.status, 200);
     assert.deepEqual(capturedPayload, {
-      cwd: "/tmp/demo",
       content: "请开始执行",
       newTaskId: "task-123",
     });
@@ -145,7 +142,6 @@ test("startWebHost 会同时监听 IPv4 和 IPv6 loopback，避免 localhost 命
         throw new Error("unexpected openAgentTerminal");
       },
     } as never,
-    cwd: "/tmp/demo",
     taskId: "task-123",
     port,
     webRoot: null,
@@ -219,7 +215,6 @@ test("startWebHost 任一 bind host 监听失败时会关闭已监听 server 并
             throw new Error("unexpected openAgentTerminal");
           },
         } as never,
-        cwd: "/tmp/demo",
         taskId: "task-123",
         port,
         webRoot: null,
@@ -272,7 +267,6 @@ test("startWebHost 任一 bind host 监听失败时会关闭已监听 server 并
         throw new Error("unexpected openAgentTerminal");
       },
     } as never,
-    cwd: "/tmp/demo",
     taskId: "task-123",
     port,
     webRoot: null,
