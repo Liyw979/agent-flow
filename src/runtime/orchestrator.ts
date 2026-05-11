@@ -395,14 +395,6 @@ export class Orchestrator {
       payload.compiled.topology,
     );
     this.store.upsertTopology(normalizedCwd, normalized);
-    for (const overlay of this.taskRuntimeOverlays.values()) {
-      if (overlay.cwd === normalizedCwd) {
-        await this.setInjectedConfigForTask({
-          id: overlay.taskId,
-          cwd: overlay.cwd,
-        });
-      }
-    }
     return this.hydrateWorkspace(normalizedCwd);
   }
 
@@ -1161,16 +1153,17 @@ export class Orchestrator {
     reason: "initialized" | "session-created",
     agentSessions: ReadonlyMap<string, string>,
   ) {
-    appendAppLog(
-      "info",
-      "task.opencode_sessions_snapshot",
-      {
-        cwd: task.cwd,
-        reason,
-        agentSessions: this.listTaskAgentSessionEntries(task, agentSessions),
-      },
-      { taskId: task.id },
-    );
+    runWithTaskLogScope(task.id, () => {
+      appendAppLog(
+        "info",
+        "task.opencode_sessions_snapshot",
+        {
+          cwd: task.cwd,
+          reason,
+          agentSessions: this.listTaskAgentSessionEntries(task, agentSessions),
+        },
+      );
+    });
   }
 
   private overlayTaskAgents(
@@ -1194,9 +1187,10 @@ export class Orchestrator {
     if (existingSessionId) {
       return existingSessionId;
     }
+    const injectedConfig = this.buildInjectedConfigForCwd(task.cwd);
     const sessionId = await runWithTaskLogScope(task.id, async () => {
-      await this.setInjectedConfigForTask(task);
-      overlay.attachBaseUrl = await this.opencodeClient.getAttachBaseUrl(task.cwd);
+      const server = await this.opencodeClient.ensureServerStarted(task.cwd, injectedConfig);
+      overlay.attachBaseUrl = `http://${this.opencodeClient.host}:${server.port}`;
       return this.opencodeClient.createSession(
         task.cwd,
         `${task.title}:${agent.id}`,
@@ -1238,7 +1232,9 @@ export class Orchestrator {
     this.syncTaskAgents(task, agents);
     const currentTask = this.store.getTask(task.cwd, task.id);
     await this.ensureTaskAgentSessions(currentTask);
-    await this.ensureTaskRuntimeEventStream(currentTask);
+    if (this.hasTaskRuntimeSessions(currentTask.id)) {
+      await this.ensureTaskRuntimeEventStream(currentTask);
+    }
 
     const refreshedTask = this.store.getTask(task.cwd, task.id);
     if (!refreshedTask.initializedAt) {
@@ -1301,11 +1297,13 @@ export class Orchestrator {
     return (firstLine ?? "未命名任务").slice(0, 80);
   }
 
-  private async setInjectedConfigForTask(task: Pick<TaskRecord, "id" | "cwd">) {
-    const injectedConfig: OpenCodeInjectedConfig = buildInjectedConfigFromAgents(
-      this.listWorkspaceAgents(task.cwd),
-    );
-    await this.opencodeClient.setInjectedConfigContent(task.cwd, injectedConfig);
+  private buildInjectedConfigForCwd(cwd: string): OpenCodeInjectedConfig {
+    return buildInjectedConfigFromAgents(this.listWorkspaceAgents(cwd));
+  }
+
+  private hasTaskRuntimeSessions(taskId: string): boolean {
+    const overlay = this.taskRuntimeOverlays.get(taskId);
+    return overlay !== undefined && [...overlay.agentSessions.values()].some((sessionId) => sessionId.trim().length > 0);
   }
 
   private findAgent(
@@ -2003,7 +2001,6 @@ export class Orchestrator {
     concurrentBatchSize: number,
     forwardedAgentMessage: string,
   ): Promise<GraphAgentResult> {
-    await this.setInjectedConfigForTask(task);
     this.store.updateTaskAgentRun(task.cwd, task.id, runtimeAgentId, "running");
     this.updateTaskStatusIfActive(task.cwd, task.id, "running");
     const currentAgent = this.store
@@ -2079,12 +2076,21 @@ export class Orchestrator {
         runtimeAgentId,
         executableAgentId,
       });
+      const allowedDecisionTriggers = decisionAgent
+        ? this.resolveAllowedDecisionTriggers({
+            state,
+            topology,
+            runtimeAgentId,
+            executableAgentId,
+          })
+        : [];
       const responsePromise = this.opencodeRunner.run({
         cwd: currentTask.cwd,
         taskId: task.id,
         sessionId: agentSessionId,
         content: dispatchedContent,
         agent: executableAgentId,
+        allowedDecisionTriggers: allowedDecisionTriggers.map((item) => item.trigger),
       });
       const response = await this.awaitExecutionWithProgressSync({
         execution: responsePromise,
@@ -2099,14 +2105,6 @@ export class Orchestrator {
             `${runtimeAgentId} 返回错误状态`,
         );
       }
-      const allowedDecisionTriggers = decisionAgent
-        ? this.resolveAllowedDecisionTriggers({
-            state,
-            topology,
-            runtimeAgentId,
-            executableAgentId,
-          })
-        : [];
       const parsedDecision = parseDecisionPure(
         response.finalMessage,
         decisionAgent,
@@ -2787,6 +2785,9 @@ export class Orchestrator {
 
     const overlay = this.taskRuntimeOverlays.get(task.id);
     if (!overlay) {
+      return;
+    }
+    if (![...overlay.agentSessions.values()].some((sessionId) => sessionId.trim().length > 0)) {
       return;
     }
     const normalizedCwd = path.resolve(overlay.cwd);

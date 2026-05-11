@@ -9,6 +9,7 @@ interface RunAgentPayload extends SubmitMessagePayload {
   cwd: string;
   taskId: string;
   sessionId: string;
+  allowedDecisionTriggers: string[];
 }
 
 const RETRYABLE_EXECUTION_INTERVAL_MS = 60_000;
@@ -94,6 +95,7 @@ export class OpenCodeRunner {
         payload.sessionId,
         submitted,
         payload.agent,
+        payload.allowedDecisionTriggers,
       );
       if (result.status === "completed") {
         return result;

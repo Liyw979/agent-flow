@@ -24,29 +24,23 @@ function createTempDir() {
 
 function createClient(cwd = createTempDir()) {
   const client = new OpenCodeClient() as OpenCodeClient & {
-    servers: Map<string, {
-      cwd: string;
-      serverHandle: Promise<{ process: null; port: number }> | null;
+    runningServeByCwd: Map<string, Promise<{ process: null; port: number }>>;
+    workspaceEvents: Map<string, {
       eventPump: Promise<void> | null;
-      injectedConfigContent: {
-        agent: Record<string, unknown>;
-      };
+      eventSubscribers: Set<(event: Record<string, unknown>) => void>;
     }>;
     request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
     getSessionMessage: (cwd: string, sessionId: string, messageId: string) => Promise<unknown>;
     listSessionMessages: (cwd: string, sessionId: string, limit?: number) => Promise<unknown[]>;
   };
   const normalizedCwd = path.resolve(cwd);
-  client.servers.set(normalizedCwd, {
-    cwd: normalizedCwd,
-    serverHandle: Promise.resolve({
-      process: null,
-      port: 43127,
-    }),
+  client.runningServeByCwd.set(normalizedCwd, Promise.resolve({
+    process: null,
+    port: 43127,
+  }));
+  client.workspaceEvents.set(normalizedCwd, {
     eventPump: null,
-    injectedConfigContent: {
-      agent: {},
-    },
+    eventSubscribers: new Set(),
   });
   return {
     client,
@@ -80,22 +74,15 @@ async function withFastForwardedTimeouts<T>(
 test("request 会跟随当前 serverHandle 的实际端口", async () => {
   const { client, cwd } = createClient();
   const typed = client as OpenCodeClient & {
-    servers: Map<string, {
-      cwd: string;
-      serverHandle: Promise<{ process: null; port: number }> | null;
-      eventPump: Promise<void> | null;
-      injectedConfigContent: {
-        agent: Record<string, unknown>;
-      };
-    }>;
+    runningServeByCwd: Map<string, Promise<{ process: null; port: number }>>;
     request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
   };
-  const state = typed.servers.get(cwd);
+  const state = typed.runningServeByCwd.get(cwd);
   assert.notEqual(state, undefined);
-  state!.serverHandle = Promise.resolve({
+  typed.runningServeByCwd.set(cwd, Promise.resolve({
     process: null,
     port: 43127,
-  });
+  }));
 
   const originalFetch = globalThis.fetch;
   let requestedUrl = "";
@@ -247,14 +234,6 @@ test("submitMessage 最终请求体不注入 system 字段", async () => {
 test("resolveExecutionResult 在 completed 响应触发重试时会先立刻重试一次，再按 60 秒间隔继续重试", async () => {
   const { client, cwd } = createClient();
   const typed = client as OpenCodeClient & {
-    servers: Map<string, {
-      cwd: string;
-      serverHandle: Promise<{ process: null; port: number }> | null;
-      eventPump: Promise<void> | null;
-      injectedConfigContent: {
-        agent: Record<string, unknown>;
-      };
-    }>;
     waitForMessageCompletion: (
       cwd: string,
       sessionId: string,
@@ -273,14 +252,6 @@ test("resolveExecutionResult 在 completed 响应触发重试时会先立刻重�
         content: string;
       },
     ) => Promise<OpenCodeNormalizedMessage>;
-  };
-  typed.servers.get(cwd)!.injectedConfigContent = {
-    agent: {
-      TaskReview: {
-        mode: "primary",
-        prompt: "<continue> <complete> 回复要求（二选一）： 1. <456> (新的可疑点)... 2. <123> (没有新线索)...",
-      },
-    },
   };
   const submittedContents = ["初始请求"];
   const submittedAt: number[] = [];
@@ -328,9 +299,21 @@ test("resolveExecutionResult 在 completed 响应触发重试时会先立刻重�
         sender: "assistant",
         timestamp: toUtcIsoTimestamp("2026-05-11T00:01:00.000Z"),
         error: null,
-        raw: null,
+        raw: {
+          info: {
+            config: {
+              agent: {
+                TaskReview: {
+                  mode: "primary",
+                  prompt: "<continue> <complete> 回复要求（二选一）： 1. <456> (新的可疑点)... 2. <123> (没有新线索)...",
+                },
+              },
+            },
+          },
+        },
       },
       "TaskReview",
+      ["<continue>", "<complete>"],
     );
   }, 60_000);
 
@@ -498,7 +481,7 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
     timestamp: toUtcIsoTimestamp(completedAt),
     error: null,
     raw: null,
-  }, "TaskReview");
+  }, "TaskReview", []);
   const elapsed = Date.now() - startedAt;
 
   assert.equal(result.finalMessage, "已完成");
@@ -552,7 +535,7 @@ test("resolveExecutionResult 在没有任何 assistant 消息时会在原地重�
       timestamp: toUtcIsoTimestamp("2026-04-25T00:00:00.000Z"),
       error: null,
       raw: null,
-    }, "BA"));
+    }, "BA", []));
   assert.equal(result.finalMessage, "已恢复正式回复");
   assert.equal(resolveCount, 2);
 });
@@ -801,39 +784,30 @@ for (const scenario of [
   });
 }
 
-test("配置变更不会重启当前 cwd 的 serve，且会写入 OpenCode 配置", async () => {
+test("配置只会在 serve 启动前写入启动配置快照，不请求 OpenCode 接口", async () => {
   const { client, cwd } = createClient();
+  const typed = client as OpenCodeClient & {
+    runningServeByCwd: Map<string, Promise<{ process: null; port: number }>>;
+  };
 
-  let startServerCount = 0;
-  Reflect.set(client, "startServer", async () => {
-    startServerCount += 1;
+  const originalFetch = globalThis.fetch;
+  let fetchCount = 0;
+  let receivedConfig: unknown = null;
+  globalThis.fetch = (async () => {
+    fetchCount += 1;
+    return new Response("", { status: 200 });
+  }) as typeof fetch;
+  Reflect.set(client, "startServer", async (_targetCwd: string, config: { agent: Record<string, unknown> }) => {
+    receivedConfig = config;
     return {
       process: null,
       port: 43127,
     };
   });
 
-  const originalFetch = globalThis.fetch;
-  const requests: Array<{ method: string | undefined; url: string; body: unknown }> = [];
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    requests.push({
-      method: init?.method,
-      url: String(input),
-      body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
-    });
-    return new Response("", { status: 200 });
-  }) as typeof fetch;
-
   try {
-    await client.setInjectedConfigContent(cwd, {
-      agent: {
-        BA: {
-          mode: "primary",
-          prompt: "你是 BA。",
-        },
-      },
-    });
-    await client.setInjectedConfigContent(cwd, {
+    typed.runningServeByCwd.delete(cwd);
+    await client.ensureServerStarted(cwd, {
       agent: {
         BA: {
           mode: "primary",
@@ -849,173 +823,94 @@ test("配置变更不会重启当前 cwd 的 serve，且会写入 OpenCode 配�
     globalThis.fetch = originalFetch;
   }
 
-  assert.equal(startServerCount, 0);
-  assert.deepEqual(requests, [
-    {
-      method: "PATCH",
-      url: "http://127.0.0.1:43127/global/config",
-      body: {
-        config: {
-          agent: {
-            BA: {
-              mode: "primary",
-              prompt: "你是 BA。",
-            },
-          },
-        },
-      },
-    },
-    {
-      method: "PATCH",
-      url: "http://127.0.0.1:43127/global/config",
-      body: {
-        config: {
-          agent: {
-            BA: {
-              mode: "primary",
-              prompt: "你是 BA。",
-            },
-            TaskReview: {
-              mode: "primary",
-              prompt: "你是 TaskReview。",
-            },
-          },
-        },
-      },
-    },
-  ]);
-});
-
-test("配置更新失败时会回滚缓存并抛错", async () => {
-  const { client, cwd } = createClient();
-  const typed = client as OpenCodeClient & {
-    servers: Map<string, {
-      cwd: string;
-      serverHandle: Promise<{ process: null; port: number }> | null;
-      eventPump: Promise<void> | null;
-      injectedConfigContent: {
-        agent: Record<string, unknown>;
-      };
-    }>;
-  };
-
-  const originalFetch = globalThis.fetch;
-  let requestCount = 0;
-  globalThis.fetch = (async () => {
-    requestCount += 1;
-    return new Response("", { status: requestCount === 1 ? 500 : 200 });
-  }) as typeof fetch;
-
-  try {
-    await assert.rejects(
-      client.setInjectedConfigContent(cwd, {
-        agent: {
-          BA: {
-            mode: "primary",
-            prompt: "你是 BA。",
-          },
-        },
-      }),
-      /OpenCode 配置更新失败: 500/,
-    );
-    assert.deepEqual(typed.servers.get(cwd)?.injectedConfigContent, {
-      agent: {},
-    });
-
-    await client.setInjectedConfigContent(cwd, {
-      agent: {
-        BA: {
-          mode: "primary",
-          prompt: "你是 BA。",
-        },
-      },
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-
-  assert.equal(requestCount, 2);
-  assert.deepEqual(typed.servers.get(cwd)?.injectedConfigContent, {
+  assert.equal(fetchCount, 0);
+  assert.deepEqual(receivedConfig, {
     agent: {
       BA: {
         mode: "primary",
         prompt: "你是 BA。",
       },
-    },
-  });
-});
-
-test("同一 cwd 的配置更新会串行执行，最终以最后一次写入为准", async () => {
-  const { client, cwd } = createClient();
-  const typed = client as OpenCodeClient & {
-    servers: Map<string, {
-      cwd: string;
-      serverHandle: Promise<{ process: null; port: number }> | null;
-      eventPump: Promise<void> | null;
-      injectedConfigContent: {
-        agent: Record<string, unknown>;
-      };
-    }>;
-  };
-
-  const originalFetch = globalThis.fetch;
-  let fetchCount = 0;
-  let releaseFirstFetch: (() => void) | undefined;
-  const firstFetch = new Promise<void>((resolve) => {
-    releaseFirstFetch = resolve;
-  });
-  const appliedConfigs: unknown[] = [];
-  globalThis.fetch = (async (_input, init) => {
-    fetchCount += 1;
-    const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
-    if (fetchCount === 1) {
-      await firstFetch;
-    }
-    appliedConfigs.push(body?.config ?? null);
-    return new Response("", { status: 200 });
-  }) as typeof fetch;
-
-  const firstConfig = {
-    agent: {
-      BA: {
-        mode: "primary" as const,
-        prompt: "你是 BA。",
-      },
-    },
-  };
-  const secondConfig = {
-    agent: {
-      BA: {
-        mode: "primary" as const,
-        prompt: "你是 BA。",
-      },
       TaskReview: {
-        mode: "primary" as const,
+        mode: "primary",
         prompt: "你是 TaskReview。",
       },
     },
-  };
+  });
+});
 
-  try {
-    const firstPromise = client.setInjectedConfigContent(cwd, firstConfig);
-    const secondPromise = client.setInjectedConfigContent(cwd, secondConfig);
-    await Promise.resolve();
-    assert.equal(fetchCount, 1);
-    releaseFirstFetch?.();
-    await Promise.all([firstPromise, secondPromise]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+test("serve 启动后再次 ensureServerStarted 不会更新启动配置快照", async () => {
+  const cwd = createTempDir();
+  const client = new OpenCodeClient();
+  let startServerCount = 0;
+  Reflect.set(client, "startServer", async () => {
+    startServerCount += 1;
+    return {
+      process: null,
+      port: 43127,
+    };
+  });
 
-  assert.equal(fetchCount, 2);
-  assert.deepEqual(appliedConfigs, [firstConfig, secondConfig]);
-  assert.deepEqual(typed.servers.get(cwd)?.injectedConfigContent, secondConfig);
+  await client.ensureServerStarted(cwd, {
+    agent: {
+      BA: {
+        mode: "primary",
+        prompt: "启动前配置",
+      },
+    },
+  });
+  await client.ensureServerStarted(cwd, {
+    agent: {
+      BA: {
+        mode: "primary",
+        prompt: "启动后新配置",
+      },
+    },
+  });
+  assert.equal(startServerCount, 1);
+});
+
+test("ensureServerStarted 会把启动配置显式传给 startServer", async () => {
+  const cwd = createTempDir();
+  const client = new OpenCodeClient();
+  let capturedConfig: unknown = null;
+  Reflect.set(client, "startServer", async (_targetCwd: string, config: unknown) => {
+    capturedConfig = config;
+    return {
+      process: null,
+      port: 43127,
+    };
+  });
+
+  await client.ensureServerStarted(cwd, {
+    agent: {
+      BA: {
+        mode: "primary",
+        prompt: "显式传入配置",
+      },
+      TaskReview: {
+        mode: "primary",
+        prompt: "你是 TaskReview。",
+      },
+    },
+  });
+
+  assert.deepEqual(capturedConfig, {
+    agent: {
+      BA: {
+        mode: "primary",
+        prompt: "显式传入配置",
+      },
+      TaskReview: {
+        mode: "primary",
+        prompt: "你是 TaskReview。",
+      },
+    },
+  });
 });
 
 test("同一 cwd 只会复用一个 serve 端口", async () => {
-  const client = new OpenCodeClient() as OpenCodeClient & {
-    startServer: (cwd: string) => Promise<{ process: null; port: number }>;
-    request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
+  const client = new TestOpenCodeClient() as TestOpenCodeClient & {
+    startServer: (cwd: string, config: { agent: Record<string, unknown> }) => Promise<{ process: null; port: number }>;
   };
   const cwd = createTempDir();
   let startServerCount = 0;
@@ -1036,6 +931,7 @@ test("同一 cwd 只会复用一个 serve 端口", async () => {
   }) as typeof fetch;
 
   try {
+    await client.ensureServerStarted(cwd, { agent: {} });
     await client.request("/session", {
       method: "GET",
       cwd,
@@ -1056,9 +952,8 @@ test("同一 cwd 只会复用一个 serve 端口", async () => {
 });
 
 test("不同 cwd 会各自启动独立的 serve 端口", async () => {
-  const client = new OpenCodeClient() as OpenCodeClient & {
-    startServer: (cwd: string) => Promise<{ process: null; port: number }>;
-    request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
+  const client = new TestOpenCodeClient() as TestOpenCodeClient & {
+    startServer: (cwd: string, config: { agent: Record<string, unknown> }) => Promise<{ process: null; port: number }>;
   };
   const firstCwd = createTempDir();
   const secondCwd = createTempDir();
@@ -1076,6 +971,8 @@ test("不同 cwd 会各自启动独立的 serve 端口", async () => {
   globalThis.fetch = (async () => new Response("", { status: 200 })) as typeof fetch;
 
   try {
+    await client.ensureServerStarted(firstCwd, { agent: {} });
+    await client.ensureServerStarted(secondCwd, { agent: {} });
     await client.request("/session", { method: "GET", cwd: firstCwd });
     await client.request("/session", { method: "GET", cwd: secondCwd });
   } finally {
@@ -1092,8 +989,12 @@ test("同一 cwd 下多个订阅者会共享一个 event pump 并同时收到事
   let emitEvent: (event: Record<string, unknown>) => void = () => undefined;
   let releasePump: () => void = () => undefined;
   let notifyFirstPumpReady: () => void = () => undefined;
+  let notifySecondSubscriberReady: () => void = () => undefined;
   const firstPumpReady = new Promise<void>((resolve) => {
     notifyFirstPumpReady = resolve;
+  });
+  const secondSubscriberReady = new Promise<void>((resolve) => {
+    notifySecondSubscriberReady = resolve;
   });
 
   Reflect.set(client, "startServer", async () => ({
@@ -1111,13 +1012,18 @@ test("同一 cwd 下多个订阅者会共享一个 event pump 并同时收到事
 
   const firstEvents: Array<Record<string, unknown>> = [];
   const secondEvents: Array<Record<string, unknown>> = [];
+  await client.ensureServerStarted(cwd, { agent: {} });
   const firstConnect = client.connectEvents(cwd, (event) => {
     firstEvents.push(event);
   });
   await firstPumpReady;
   const secondConnect = client.connectEvents(cwd, (event) => {
     secondEvents.push(event);
+  }).then(() => undefined);
+  queueMicrotask(() => {
+    notifySecondSubscriberReady();
   });
+  await secondSubscriberReady;
 
   emitEvent({ type: "session.idle", properties: { sessionID: "session-1" } });
   releasePump();
@@ -1128,10 +1034,11 @@ test("同一 cwd 下多个订阅者会共享一个 event pump 并同时收到事
   assert.deepEqual(firstEvents, [{ type: "session.idle", properties: { sessionID: "session-1" } }]);
   assert.deepEqual(secondEvents, [{ type: "session.idle", properties: { sessionID: "session-1" } }]);
 });
-test("getAttachBaseUrl 会启动当前 task 自己的 serve", async () => {
+
+test("getAttachBaseUrl 只读取已经启动的 serve 地址", async () => {
   const cwd = createTempDir();
   const client = new OpenCodeClient() as OpenCodeClient & {
-    startServer: (cwd: string) => Promise<{ process: null; port: number }>;
+    startServer: (cwd: string, config: { agent: Record<string, unknown> }) => Promise<{ process: null; port: number }>;
   };
 
   let startServerCalled = false;
@@ -1143,10 +1050,21 @@ test("getAttachBaseUrl 会启动当前 task 自己的 serve", async () => {
     };
   };
 
+  await client.ensureServerStarted(cwd, { agent: {} });
   const baseUrl = await client.getAttachBaseUrl(cwd);
 
   assert.equal(baseUrl, "http://127.0.0.1:43128");
   assert.equal(startServerCalled, true);
+});
+
+test("getAttachBaseUrl 在 serve 未启动时直接报错", async () => {
+  const cwd = createTempDir();
+  const client = new OpenCodeClient();
+
+  await assert.rejects(
+    client.getAttachBaseUrl(cwd),
+    /尚未启动/,
+  );
 });
 
 test("buildRuntimeSnapshot 会保留同一条消息内 thinking 和 tool 的原始顺序", () => {

@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseJson5 } from "@shared/json5";
 import { withOptionalValue } from "@shared/object-utils";
-import { normalizeTopologyEdgeTrigger } from "@shared/types";
 import { parseDecision } from "./decision-parser";
 import { buildSubmitMessageBody } from "./opencode-request-body";
 import { toOpenCodeAgentId } from "./opencode-agent-id";
@@ -70,7 +69,6 @@ export interface OpenCodeSessionRuntime {
 
 const MAX_RUNTIME_MESSAGES = 100;
 const SERVE_BASE_URL_TIMEOUT_MS = 10_000;
-const CONFIG_UPDATE_TIMEOUT_MS = 12_000;
 const TRANSPORT_ERROR_RECOVERY_TIMEOUT_MS = 180_000;
 const RETRYABLE_CLIENT_INTERVAL_MS = 60_000;
 interface SessionWaiter {
@@ -80,11 +78,8 @@ interface SessionWaiter {
   reject: (error: Error) => void;
 }
 
-interface WorkspaceServerState {
-  cwd: string;
-  serverHandle: Promise<ServeHandle> | null;
+interface WorkspaceEventState {
   eventPump: Promise<void> | null;
-  injectedConfigContent: OpenCodeInjectedConfig;
   eventSubscribers: Set<(event: OpenCodeEvent) => void>;
 }
 
@@ -120,15 +115,6 @@ type TransportRecoveryInspection =
     result: OpenCodeExecutionResult;
   };
 
-type ConfiguredDecisionMode =
-  | {
-    kind: "plain";
-  }
-  | {
-    kind: "decision";
-    triggers: string[];
-  };
-
 class RetryableSubmitMessageError extends Error {}
 
 class RetryableExecutionResultError extends Error {}
@@ -137,7 +123,8 @@ export interface OpenCodeShutdownReport {
 }
 
 export class OpenCodeClient {
-  readonly servers = new Map<string, WorkspaceServerState>();
+  readonly runningServeByCwd = new Map<string, Promise<ServeHandle>>();
+  readonly workspaceEvents = new Map<string, WorkspaceEventState>();
   readonly host = "127.0.0.1";
   readonly sessionIdleAt = new Map<string, number>();
   readonly sessionErrors = new Map<string, string>();
@@ -146,77 +133,33 @@ export class OpenCodeClient {
 
   constructor() {}
 
-  protected getWorkspaceServerState(cwd: string): WorkspaceServerState {
+  protected getWorkspaceEventState(cwd: string): WorkspaceEventState {
     const key = path.resolve(cwd);
-    const existing = this.servers.get(key);
+    const existing = this.workspaceEvents.get(key);
     if (existing) {
       return existing;
     }
 
-    const created: WorkspaceServerState = {
-      cwd: key,
-      serverHandle: null,
+    const created: WorkspaceEventState = {
       eventPump: null,
-      injectedConfigContent: {
-        agent: {},
-      },
       eventSubscribers: new Set(),
     };
-    this.servers.set(key, created);
+    this.workspaceEvents.set(key, created);
     return created;
   }
 
-  async ensureServer(cwd: string): Promise<ServeHandle> {
-    const state = this.getWorkspaceServerState(cwd);
-    if (state.serverHandle) {
-      const cached = await state.serverHandle;
-      if (this.canReuseCachedServerHandle(cached)) {
-        return cached;
-      }
-      await this.terminateServeHandle(cached).catch(() => undefined);
-      state.serverHandle = null;
-      state.eventPump = null;
+  async ensureServerStarted(cwd: string, config: OpenCodeInjectedConfig): Promise<ServeHandle> {
+    const normalized = path.resolve(cwd);
+    const runningServer = this.runningServeByCwd.get(normalized);
+    if (runningServer) {
+      return runningServer;
     }
-
-    state.serverHandle = this.startServer(state.cwd).catch((error) => {
-      if (state.serverHandle) {
-        state.serverHandle = null;
-      }
+    const startingServer = this.startServer(normalized, config).catch((error) => {
+      this.runningServeByCwd.delete(normalized);
       throw error;
     });
-    return state.serverHandle;
-  }
-
-  protected canReuseCachedServerHandle(cached: ServeHandle): boolean {
-    return Number.isInteger(cached.port) && cached.port > 0;
-  }
-
-  async setInjectedConfigContent(cwd: string, config: OpenCodeInjectedConfig): Promise<void> {
-    const state = this.getWorkspaceServerState(cwd);
-    const baseServerHandle = state.serverHandle ?? this.ensureServer(cwd);
-    const update = baseServerHandle.then(async (server) => {
-      if (JSON.stringify(config) === JSON.stringify(state.injectedConfigContent)) {
-        return server;
-      }
-      const response = await this.fetchWithTimeout(
-        `${this.buildBaseUrl(server.port)}/global/config`,
-        {
-          method: "PATCH",
-          headers: {
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ config }),
-        },
-        CONFIG_UPDATE_TIMEOUT_MS,
-      );
-      if (!response.ok) {
-        throw new Error(`OpenCode 配置更新失败: ${response.status}`);
-      }
-      state.injectedConfigContent = config;
-      return server;
-    });
-    state.serverHandle = update.catch(() => baseServerHandle);
-    await update;
+    this.runningServeByCwd.set(normalized, startingServer);
+    return startingServer;
   }
 
   async createSession(
@@ -256,9 +199,9 @@ export class OpenCodeClient {
 
   async connectEvents(cwd: string, onEvent: (event: OpenCodeEvent) => void): Promise<void> {
     const normalized = path.resolve(cwd);
-    const state = this.getWorkspaceServerState(normalized);
+    const state = this.getWorkspaceEventState(normalized);
     state.eventSubscribers.add(onEvent);
-    const server = await this.ensureServer(normalized);
+    const server = await this.getExistingServer(normalized);
     if (state.eventPump) {
       return state.eventPump;
     }
@@ -267,7 +210,7 @@ export class OpenCodeClient {
       for (const subscriber of state.eventSubscribers) {
         subscriber(event);
       }
-    }, server, state.cwd).finally(() => {
+    }, server, normalized).finally(() => {
       if (state.eventPump) {
         state.eventPump = null;
       }
@@ -276,7 +219,7 @@ export class OpenCodeClient {
   }
 
   disconnectEvents(cwd: string, onEvent: (event: OpenCodeEvent) => void): void {
-    const state = this.servers.get(path.resolve(cwd));
+    const state = this.workspaceEvents.get(path.resolve(cwd));
     state?.eventSubscribers.delete(onEvent);
   }
 
@@ -346,9 +289,9 @@ export class OpenCodeClient {
     sessionId: string,
     submitted: OpenCodeNormalizedMessage,
     agentId: string,
+    allowedDecisionTriggers: string[],
   ): Promise<OpenCodeExecutionResult> {
     const normalized = path.resolve(cwd);
-    const decisionMode = this.resolveConfiguredDecisionMode(normalized, agentId);
     let currentSubmitted = submitted;
     let immediateRetryUsed = false;
     while (true) {
@@ -393,7 +336,7 @@ export class OpenCodeClient {
           timestamp: latest.timestamp,
           rawMessage: latest,
         };
-        if (result.status === "error" || decisionMode.kind === "plain") {
+        if (result.status === "error" || allowedDecisionTriggers.length === 0) {
           return result;
         }
 
@@ -401,7 +344,7 @@ export class OpenCodeClient {
           parseDecision(
             result.finalMessage,
             true,
-            decisionMode.triggers.map((trigger) => ({ trigger })),
+            allowedDecisionTriggers.map((trigger) => ({ trigger })),
           ).kind === "valid"
         ) {
           return result;
@@ -416,7 +359,7 @@ export class OpenCodeClient {
           sessionId,
           {
             agent: agentId,
-            content: `需要返回：${decisionMode.triggers.join(" / ")}`,
+            content: `需要返回：${allowedDecisionTriggers.join(" / ")}`,
           },
         );
       } catch (error) {
@@ -506,8 +449,9 @@ export class OpenCodeClient {
 
   async shutdown(cwd: string): Promise<OpenCodeShutdownReport> {
     const normalizedCwd = path.resolve(cwd);
-    const state = this.servers.get(normalizedCwd);
-    if (!state?.serverHandle) {
+    const state = this.workspaceEvents.get(normalizedCwd);
+    const runningServer = this.runningServeByCwd.get(normalizedCwd);
+    if (!runningServer) {
       this.clearSessionStateForCwd(normalizedCwd);
       state?.eventSubscribers.clear();
       return {
@@ -520,54 +464,24 @@ export class OpenCodeClient {
     };
     let server: ServeHandle | null = null;
     try {
-      server = await state.serverHandle;
+      server = await runningServer;
       report = await this.terminateServeHandle(server);
     } catch {
       // ignore shutdown errors
     } finally {
-      state.serverHandle = null;
-      state.eventPump = null;
-      state.eventSubscribers.clear();
+      this.runningServeByCwd.delete(normalizedCwd);
+      if (state) {
+        state.eventPump = null;
+        state.eventSubscribers.clear();
+      }
       this.clearSessionStateForCwd(normalizedCwd);
     }
     return report;
   }
 
-  private resolveConfiguredDecisionMode(
-    cwd: string,
-    agentId: string,
-  ): ConfiguredDecisionMode {
-    const configured = this.getWorkspaceServerState(cwd).injectedConfigContent;
-    const rawAgent = configured.agent[toOpenCodeAgentId(agentId)];
-    if (!rawAgent || typeof rawAgent !== "object" || Array.isArray(rawAgent)) {
-      return {
-        kind: "plain",
-      };
-    }
-    const prompt = (rawAgent as Record<string, unknown>)["prompt"];
-    if (typeof prompt !== "string" || !prompt.trim()) {
-      return {
-        kind: "plain",
-      };
-    }
-
-    const contiguousMatches = [
-      ...prompt.matchAll(/(?:<([^\s<>/]+)>)(?:\s*(?:\/|、|,|，|or\b|and\b|或)?\s*<([^\s<>/]+)>)+/giu),
-    ].flatMap((match) => match[0].match(/<([^\s<>/]+)>/gu) ?? []);
-    if (contiguousMatches.length > 0) {
-      return {
-        kind: "decision",
-        triggers: [...new Set(contiguousMatches.map((value) => normalizeTopologyEdgeTrigger(value)))],
-      };
-    }
-    return {
-      kind: "plain",
-    };
-  }
-
   async shutdownAll(): Promise<OpenCodeShutdownReport> {
     const reports = await Promise.all(
-      [...this.servers.keys()].map((cwd) => this.shutdown(cwd)),
+      [...new Set([...this.runningServeByCwd.keys(), ...this.workspaceEvents.keys()])].map((cwd) => this.shutdown(cwd)),
     );
     return {
       killedPids: [...new Set(reports.flatMap((report) => report.killedPids))],
@@ -577,12 +491,8 @@ export class OpenCodeClient {
   async deleteProject(cwd: string): Promise<void> {
     const key = path.resolve(cwd);
     await this.shutdown(key);
-    const state = this.servers.get(key);
-    if (!state) {
-      return;
-    }
-
-    this.servers.delete(key);
+    this.workspaceEvents.delete(key);
+    this.runningServeByCwd.delete(key);
   }
 
   private clearSessionStateForCwd(cwd: string) {
@@ -742,9 +652,7 @@ export class OpenCodeClient {
     });
   }
 
-  protected async startServer(cwd: string): Promise<ServeHandle> {
-    const state = this.getWorkspaceServerState(cwd);
-
+  protected async startServer(cwd: string, config: OpenCodeInjectedConfig): Promise<ServeHandle> {
     const serverEnv = { ...process.env };
     // Isolate the embedded runtime from parent OpenCode config injection.
     delete serverEnv["OPENCODE_CONFIG"];
@@ -754,8 +662,11 @@ export class OpenCodeClient {
     delete serverEnv["OPENCODE_CLIENT"];
     serverEnv["OPENCODE_CLIENT"] = "agent-team-orchestrator";
     serverEnv["OPENCODE_DISABLE_PROJECT_CONFIG"] = "true";
+    if (Object.keys(config.agent).length > 0) {
+      serverEnv["OPENCODE_CONFIG_CONTENT"] = JSON.stringify(config);
+    }
     appendAppLog("info", "opencode.serve_starting", {
-      cwd: state.cwd,
+      cwd,
     });
     const launchArgs = ["serve"];
     const spawnSpec = process.platform === "win32"
@@ -765,7 +676,7 @@ export class OpenCodeClient {
             "/d",
             "/s",
             "/c",
-            `cd /d ${state.cwd} && opencode ${launchArgs.join(" ")}`,
+            `cd /d ${cwd} && opencode ${launchArgs.join(" ")}`,
           ],
         }
       : {
@@ -798,7 +709,7 @@ export class OpenCodeClient {
     const baseUrl = await this.waitForServeBaseUrl(childProcess, stdoutChunks, stderrChunks).catch(async (error) => {
       await this.killChildProcessTree(childProcess).catch(() => undefined);
       appendAppLog("error", "opencode.serve_start_failed", {
-        cwd: state.cwd,
+        cwd,
         command: spawnSpec.command,
         args: spawnSpec.args,
         message: error instanceof Error ? error.message : String(error),
@@ -815,7 +726,7 @@ export class OpenCodeClient {
           : `OpenCode serve 健康检查失败: ${baseUrl}/global/health 未在预期时间内返回成功`;
       await this.killChildProcessTree(childProcess).catch(() => undefined);
       appendAppLog("error", "opencode.serve_start_failed", {
-        cwd: state.cwd,
+        cwd,
         port,
         baseUrl,
         command: spawnSpec.command,
@@ -828,7 +739,7 @@ export class OpenCodeClient {
     }
 
     appendAppLog("info", "opencode.serve_started", {
-      cwd: state.cwd,
+      cwd,
       port,
       baseUrl,
       command: spawnSpec.command,
@@ -842,8 +753,17 @@ export class OpenCodeClient {
   }
 
   async getAttachBaseUrl(cwd: string): Promise<string> {
-    const server = await this.ensureServer(cwd);
+    const server = await this.getExistingServer(cwd);
     return this.buildBaseUrl(server.port);
+  }
+
+  private async getExistingServer(cwd: string): Promise<ServeHandle> {
+    const normalized = path.resolve(cwd);
+    const server = this.runningServeByCwd.get(normalized);
+    if (!server) {
+      throw new Error(`cwd ${normalized} 对应的 OpenCode serve 尚未启动。`);
+    }
+    return server;
   }
 
   private findListeningPids(port: number): number[] {
@@ -969,7 +889,7 @@ export class OpenCodeClient {
         }
       }
     } finally {
-      const state = this.servers.get(cwd);
+      const state = this.workspaceEvents.get(cwd);
       if (state) {
         state.eventPump = null;
       }
@@ -1039,7 +959,7 @@ export class OpenCodeClient {
         headers,
       }, "body", options.body), timeoutMs);
     };
-    const server = await this.ensureServer(normalized);
+    const server = await this.getExistingServer(normalized);
     const url = `${this.buildBaseUrl(server.port)}${pathname}`;
     try {
       return await requestWithServer(server);
