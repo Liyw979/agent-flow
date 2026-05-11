@@ -159,15 +159,15 @@ function findLastForwardableInitialSourceMessage(
         return current;
       }
       if (current.kind === "missing") {
-        return { message, index };
+        return { kind: "found", message, index };
       }
       if (message.timestamp > current.message.timestamp) {
-        return { message, index };
+        return { kind: "found", message, index };
       }
       if (message.timestamp < current.message.timestamp) {
         return current;
       }
-      return index > current.index ? { message, index } : current;
+      return index > current.index ? { kind: "found", message, index } : current;
     },
     { kind: "missing" },
   );
