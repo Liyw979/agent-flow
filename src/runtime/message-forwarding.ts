@@ -69,7 +69,6 @@ export function buildDownstreamForwardedContextFromMessages(
     initialMessageRouting: InitialMessageRouting;
     sourceAgentId: string;
     initialMessageSourceAliasesByAgentId: Record<string, string[]>;
-    initialMessageForwardedAgentMessageByAgentId: Record<string, string>;
     globalSourceOrder: string[];
   },
 ): DownstreamForwardedContext {
@@ -82,7 +81,6 @@ export function buildDownstreamForwardedContextFromMessages(
     options.initialMessageRouting,
     options.sourceAgentId,
     options.initialMessageSourceAliasesByAgentId,
-    options.initialMessageForwardedAgentMessageByAgentId,
     options.globalSourceOrder,
   );
   if (!agentMessage) {
@@ -101,7 +99,6 @@ function resolveForwardedAgentMessage(
   initialMessageRouting: InitialMessageRouting,
   sourceAgentId: string,
   initialMessageSourceAliasesByAgentId: Record<string, string[]>,
-  initialMessageForwardedAgentMessageByAgentId: Record<string, string>,
   globalSourceOrder: string[],
 ): string {
   const orderedEntries = buildOrderedForwardingEntries(
@@ -111,7 +108,6 @@ function resolveForwardedAgentMessage(
     initialMessageRouting,
     sourceAgentId,
     initialMessageSourceAliasesByAgentId,
-    initialMessageForwardedAgentMessageByAgentId,
     globalSourceOrder,
   );
   const aggregatedSections = aggregateForwardingEntries(orderedEntries);
@@ -135,6 +131,48 @@ type InitialMessageEntryResolution =
       kind: "missing";
     };
 
+type ForwardableInitialSourceMessageResolution =
+  | {
+      kind: "found";
+      message: MessageRecord;
+      index: number;
+    }
+  | {
+      kind: "missing";
+    };
+
+function findLastForwardableInitialSourceMessage(
+  messages: MinimalMessage[],
+  agentId: string,
+  aliases: string[],
+): ForwardableInitialSourceMessageResolution {
+  const candidates = new Set<string>([
+    ...aliases.map((value) => value.trim()).filter(Boolean),
+    agentId.trim(),
+  ]);
+  return messages.reduce<ForwardableInitialSourceMessageResolution>(
+    (current, message, index) => {
+      if (
+        !isForwardableInitialSourceMessage(message)
+        || ![...candidates].some((candidate) => matchesForwardingMessageAgentAlias(message, candidate))
+      ) {
+        return current;
+      }
+      if (current.kind === "missing") {
+        return { message, index };
+      }
+      if (message.timestamp > current.message.timestamp) {
+        return { message, index };
+      }
+      if (message.timestamp < current.message.timestamp) {
+        return current;
+      }
+      return index > current.index ? { message, index } : current;
+    },
+    { kind: "missing" },
+  );
+}
+
 function buildDefaultForwardingEntries(
   latestSourceContent: string,
   messageMode: TopologyEdgeMessageMode,
@@ -155,7 +193,6 @@ function buildOrderedForwardingEntries(
   initialMessageRouting: InitialMessageRouting,
   sourceAgentId: string,
   initialMessageSourceAliasesByAgentId: Record<string, string[]>,
-  initialMessageForwardedAgentMessageByAgentId: Record<string, string>,
   globalSourceOrder: string[],
 ): ForwardingEntry[] {
   const defaultEntries = buildDefaultForwardingEntries(
@@ -167,7 +204,6 @@ function buildOrderedForwardingEntries(
     messages,
     initialMessageRouting,
     initialMessageSourceAliasesByAgentId,
-    initialMessageForwardedAgentMessageByAgentId,
   );
   return sortForwardingEntriesByGlobalOrder(
     [...defaultEntries, ...initialEntries],
@@ -180,18 +216,20 @@ function buildInitialMessageEntries(
   messages: MinimalMessage[],
   initialMessageRouting: InitialMessageRouting,
   initialMessageSourceAliasesByAgentId: Record<string, string[]>,
-  initialMessageForwardedAgentMessageByAgentId: Record<string, string>,
 ): ForwardingEntry[] {
   if (initialMessageRouting.mode !== "list") {
     return [];
   }
 
   return initialMessageRouting.agentIds.map((agentId) => {
+    const aliases = initialMessageSourceAliasesByAgentId[agentId];
+    if (!aliases) {
+      throw new Error(`initialMessage 指定的来源 Agent 缺少别名解析结果：${agentId}`);
+    }
     const resolution = resolveInitialMessageEntryByAgentId(
       messages,
       agentId,
-      initialMessageSourceAliasesByAgentId[agentId] ?? [],
-      initialMessageForwardedAgentMessageByAgentId[agentId] ?? "",
+      aliases,
     );
     if (resolution.kind === "missing") {
       throw new Error(`initialMessage 指定的来源 Agent 缺少可转发消息：${agentId}`);
@@ -266,69 +304,30 @@ function resolveInitialMessageEntryByAgentId(
   messages: MinimalMessage[],
   agentId: string,
   aliases: string[],
-  forwardedAgentMessage: string,
 ): InitialMessageEntryResolution {
-  const candidates = [...new Set([
-    ...aliases.map((value) => value.trim()).filter(Boolean),
-    agentId.trim(),
-  ])];
-  for (const candidate of candidates) {
-    const matchedMessage = messages.find((message) =>
-      isForwardableInitialSourceMessage(message)
-      && matchesForwardingMessageAgentAlias(message, candidate),
-    );
-    if (!matchedMessage) {
-      continue;
-    }
-    const content = normalizeForwardableMessageContent(matchedMessage);
-    if (!content) {
-      continue;
-    }
-    const sourceForwardedEntry = extractForwardingEntriesFromContent(
-      forwardedAgentMessage.trim(),
-    ).find((entry) => matchesAlias(entry.sourceAgentId, candidate));
+  const matchedMessage = findLastForwardableInitialSourceMessage(messages, agentId, aliases);
+  if (matchedMessage.kind === "missing") {
     return {
-      kind: "found",
-      entry: {
-        sourceAgentId: matchedMessage.sender.trim() || agentId,
-        content: sourceForwardedEntry?.content.trim() || content,
-      },
+      kind: "missing",
     };
   }
+  const content = normalizeForwardableMessageContent(matchedMessage.message);
+  if (!content) {
+    return {
+      kind: "missing",
+    };
+  }
+  const sourceAgentId = matchedMessage.message.sender.trim();
+  if (!sourceAgentId) {
+    throw new Error(`initialMessage 命中的来源消息缺少 sender：${agentId}`);
+  }
   return {
-    kind: "missing",
-  };
-}
-
-function extractForwardingEntriesFromContent(content: string): ForwardingEntry[] {
-  const trimmed = content.trim();
-  if (!trimmed.startsWith("[From ")) {
-    return [];
-  }
-
-  const sectionPattern = /^\[From ([^\]]+?) Agent\]\n/gu;
-  const matches = [...trimmed.matchAll(sectionPattern)];
-  if (matches.length === 0) {
-    return [];
-  }
-
-  const entries: ForwardingEntry[] = [];
-  for (let index = 0; index < matches.length; index += 1) {
-    const currentMatch = matches[index];
-    const nextMatch = matches[index + 1];
-    const sourceAgentId = currentMatch?.[1]?.trim() ?? "";
-    const contentStart = (currentMatch?.index ?? 0) + (currentMatch?.[0]?.length ?? 0);
-    const contentEnd = nextMatch?.index ?? trimmed.length;
-    const sectionContent = trimmed.slice(contentStart, contentEnd).trim();
-    if (!sourceAgentId || !sectionContent) {
-      continue;
-    }
-    entries.push({
+    kind: "found",
+    entry: {
       sourceAgentId,
-      content: sectionContent,
-    });
-  }
-  return entries;
+      content,
+    },
+  };
 }
 
 function matchesAlias(sourceAgentId: string, alias: string): boolean {

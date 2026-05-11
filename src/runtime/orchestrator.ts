@@ -1672,25 +1672,6 @@ export class Orchestrator {
     return [...aliases].filter(Boolean);
   }
 
-  private resolveInitialMessageForwardedAgentMessages(
-    state: GraphTaskState,
-    routing: InitialMessageRouting,
-    initialMessageSourceAliasesByAgentId: Record<string, string[]>,
-  ): Record<string, string> {
-    if (routing.mode !== "list") {
-      return {};
-    }
-    return Object.fromEntries(
-      routing.agentIds.map((agentId) => {
-        const aliases = initialMessageSourceAliasesByAgentId[agentId] ?? [];
-        const matchedAgentId = [agentId, ...aliases].find((candidate) =>
-          Boolean(state.forwardedAgentMessageByName[candidate]),
-        ) ?? "";
-        return [agentId, matchedAgentId ? state.forwardedAgentMessageByName[matchedAgentId] ?? "" : ""];
-      }),
-    );
-  }
-
   private resolveGlobalSourceOrder(state: GraphTaskState): string[] {
     return buildEffectiveTopology(state).nodes;
   }
@@ -1801,12 +1782,6 @@ export class Orchestrator {
             initialMessageRouting: dispatchInitialMessageRouting,
             sourceAgentId: job.sourceAgentId,
             initialMessageSourceAliasesByAgentId,
-            initialMessageForwardedAgentMessageByAgentId:
-              this.resolveInitialMessageForwardedAgentMessages(
-                state,
-                dispatchInitialMessageRouting,
-                initialMessageSourceAliasesByAgentId,
-              ),
             globalSourceOrder: this.resolveGlobalSourceOrder(state),
           },
         );
@@ -1883,12 +1858,6 @@ export class Orchestrator {
             initialMessageRouting: dispatchInitialMessageRouting,
             sourceAgentId: batch.sourceAgentId,
             initialMessageSourceAliasesByAgentId,
-            initialMessageForwardedAgentMessageByAgentId:
-              this.resolveInitialMessageForwardedAgentMessages(
-                state,
-                dispatchInitialMessageRouting,
-                initialMessageSourceAliasesByAgentId,
-              ),
             globalSourceOrder: this.resolveGlobalSourceOrder(state),
           },
         );
