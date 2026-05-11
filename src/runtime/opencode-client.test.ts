@@ -96,9 +96,10 @@ async function withFastForwardedTimeouts<T>(
 
   Date.now = () => nowMs;
   globalThis.setTimeout = (((handler: (...args: unknown[]) => void, _timeout: number, ...args: unknown[]) => {
-    nowMs += stepMs;
-    handler(...args);
-    return 0 as unknown as ReturnType<typeof setTimeout>;
+    return originalSetTimeout(() => {
+      nowMs += stepMs;
+      handler(...args);
+    }, 0);
   }) as typeof setTimeout);
 
   try {
