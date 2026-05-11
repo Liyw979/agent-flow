@@ -281,6 +281,7 @@ export class OpenCodeClient {
   ): Promise<OpenCodeNormalizedMessage> {
     const normalized = this.normalizeTarget(target);
     const opencodeAgent = toOpenCodeAgentId(payload.agent);
+    let immediateRetryUsed = false;
     while (true) {
       try {
         const body = buildSubmitMessageBody({
@@ -330,7 +331,10 @@ export class OpenCodeClient {
         if (!(error instanceof RetryableSubmitMessageError)) {
           throw error;
         }
-        await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
+        if (immediateRetryUsed) {
+          await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
+        }
+        immediateRetryUsed = true;
       }
     }
   }
@@ -344,6 +348,7 @@ export class OpenCodeClient {
     const normalized = this.normalizeTarget(target);
     const decisionMode = this.resolveConfiguredDecisionMode(normalized, agentId);
     let currentSubmitted = submitted;
+    let immediateRetryUsed = false;
     while (true) {
       try {
         const submittedAt = Date.parse(currentSubmitted.timestamp) || Date.now();
@@ -400,7 +405,10 @@ export class OpenCodeClient {
           return result;
         }
 
-        await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
+        if (immediateRetryUsed) {
+          await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
+        }
+        immediateRetryUsed = true;
         currentSubmitted = await this.submitMessage(
           normalized,
           sessionId,
@@ -413,7 +421,10 @@ export class OpenCodeClient {
         if (!(error instanceof RetryableExecutionResultError)) {
           throw error;
         }
-        await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
+        if (immediateRetryUsed) {
+          await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
+        }
+        immediateRetryUsed = true;
       }
     }
   }
