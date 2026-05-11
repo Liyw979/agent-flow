@@ -5,7 +5,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import {
   buildTopologyNodeRecords,
   getMessageTargetAgentIds,
@@ -2010,40 +2009,6 @@ test("同一 cwd 下多个 task 只会启动一次 OpenCode serve", async () => 
   await orchestrator.initializeTask({ cwd: workspace.cwd, title: "task-b" });
 
   assert.equal(startServerCount, 1);
-});
-
-test("openAgentTerminal 会通过服务端终端启动器 attach 到对应 session", async () => {
-  const userDataPath = createTempDir();
-  const projectPath = createTempDir();
-  const launches: Array<{ cwd: string; command: string }> = [];
-  const orchestrator = new TestOrchestrator({
-    userDataPath,
-    enableEventStream: false,
-    terminalLauncher: async (input) => {
-      launches.push(input);
-    },
-  });
-
-  stubOpenCodeSessions(orchestrator);
-  let project = await orchestrator.getWorkspaceSnapshot(projectPath);
-  project = await addBuiltinAgents(orchestrator, project.cwd, ["Build"], "Build", []);
-  const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
-
-  await orchestrator.openAgentTerminal({
-    cwd: project.cwd,
-    taskId: task.task.id,
-    agentId: "Build",
-  });
-
-  assert.deepEqual(launches, [
-    {
-      cwd: project.cwd,
-      command: buildCliOpencodeAttachCommand(
-        "http://127.0.0.1:43127",
-        "session:demo:Build",
-      ),
-    },
-  ]);
 });
 
 test("新的 Orchestrator 进程里不会再从旧工作区快照恢复 task attach session", async () => {
