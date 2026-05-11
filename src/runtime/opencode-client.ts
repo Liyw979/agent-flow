@@ -1,5 +1,4 @@
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseJson5 } from "@shared/json5";
 import { parseDecision } from "./decision-parser";
@@ -126,7 +125,7 @@ interface TimedOutTransportExecutionResult {
   kind: "timed_out";
 }
 
-export type TransportRecoveryResult =
+type TransportRecoveryResult =
   | RecoveredTransportExecutionResult
   | TimedOutTransportExecutionResult;
 
@@ -367,7 +366,6 @@ export class OpenCodeClient {
           normalized,
           sessionId,
           currentSubmitted.id,
-          currentSubmitted.timestamp,
           8000,
         );
         let latest: OpenCodeNormalizedMessage;
@@ -377,8 +375,15 @@ export class OpenCodeClient {
             this.waitForSessionSettled(sessionId, submittedAt, 8000).then(() =>
               this.getSessionMessage(normalized, sessionId, currentSubmitted.id)),
           ]);
-        } catch {
-          latest = await this.getLatestAssistantMessage(normalized, sessionId);
+        } catch (error) {
+          try {
+            latest = await this.getLatestAssistantMessage(normalized, sessionId);
+          } catch (latestError) {
+            if (error instanceof RetryableExecutionResultError) {
+              throw error;
+            }
+            throw latestError;
+          }
         }
 
         const finalMessage = latest.content || latest.error;
@@ -1024,7 +1029,7 @@ export class OpenCodeClient {
   ): Promise<Response> {
     const normalized = path.resolve(options.cwd);
     const headers: Record<string, string> = {};
-    if (options.body) {
+    if (options.method === "POST") {
       headers["content-type"] = "application/json";
     }
     headers["x-opencode-directory"] = normalized;
@@ -1129,7 +1134,6 @@ export class OpenCodeClient {
     cwd: string,
     sessionId: string,
     messageId: string,
-    fallbackTimestamp: string,
     timeoutMs: number,
   ): Promise<OpenCodeNormalizedMessage> {
     const startedAt = Date.now();
