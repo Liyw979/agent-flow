@@ -22,35 +22,61 @@ function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "agent-team-opencode-client-"));
 }
 
+function createDetachedServeHandle(port: number) {
+  return {
+    process: {
+      kind: "detached" as const,
+    },
+    port,
+  };
+}
+
+function createNormalizedMessage(input: {
+  id: string;
+  content: string;
+  timestamp: string;
+  sender: string;
+  error: string;
+  raw: unknown;
+}): OpenCodeNormalizedMessage {
+  return {
+    id: input.id,
+    content: input.content,
+    sender: input.sender,
+    timestamp: toUtcIsoTimestamp(input.timestamp),
+    error: input.error,
+    raw: input.raw,
+  };
+}
+
+const idleEventPumpPromise = Promise.resolve();
+
 function createClient(cwd = createTempDir()) {
   const client = new OpenCodeClient() as OpenCodeClient & {
     runningServe: {
       cwd: string;
-      handle: Promise<{ process: null; port: number }>;
+      handle: Promise<ReturnType<typeof createDetachedServeHandle>>;
     };
     workspaceEventState: {
       cwd: string;
       state: {
-        eventPump: Promise<void> | null;
+        eventPump: Promise<void>;
         eventSubscribers: Set<(event: Record<string, unknown>) => void>;
       };
     };
     request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
     getSessionMessage: (cwd: string, sessionId: string, messageId: string) => Promise<unknown>;
-    listSessionMessages: (cwd: string, sessionId: string, limit?: number) => Promise<unknown[]>;
+    listSessionMessages: (cwd: string, sessionId: string, limit: number) => Promise<unknown[]>;
   };
   const normalizedCwd = path.resolve(cwd);
   client.runningServe = {
     cwd: normalizedCwd,
-    handle: Promise.resolve({
-      process: null,
-      port: 43127,
-    }),
+    handle: Promise.resolve(createDetachedServeHandle(43127)),
   };
   client.workspaceEventState = {
     cwd: normalizedCwd,
     state: {
-      eventPump: null,
+      eventPump: idleEventPumpPromise,
       eventSubscribers: new Set(),
     },
   };
@@ -69,7 +95,7 @@ async function withFastForwardedTimeouts<T>(
   let nowMs = originalDateNow();
 
   Date.now = () => nowMs;
-  globalThis.setTimeout = (((handler: (...args: unknown[]) => void, _timeout?: number, ...args: unknown[]) => {
+  globalThis.setTimeout = (((handler: (...args: unknown[]) => void, _timeout: number, ...args: unknown[]) => {
     nowMs += stepMs;
     handler(...args);
     return 0 as unknown as ReturnType<typeof setTimeout>;
@@ -83,22 +109,28 @@ async function withFastForwardedTimeouts<T>(
   }
 }
 
+function assertActivityAt<T>(
+  items: T[],
+  index: number,
+): T {
+  const item = items[index];
+  assert.ok(item);
+  return item as T;
+}
+
 test("request 会跟随当前 serverHandle 的实际端口", async () => {
   await withFastForwardedTimeouts(async () => {
     const { client, cwd } = createClient();
     const typed = client as OpenCodeClient & {
       runningServe: {
         cwd: string;
-        handle: Promise<{ process: null; port: number }>;
+        handle: Promise<ReturnType<typeof createDetachedServeHandle>>;
       };
       request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
     };
     typed.runningServe = {
       cwd,
-      handle: Promise.resolve({
-      process: null,
-      port: 43127,
-      }),
+      handle: Promise.resolve(createDetachedServeHandle(43127)),
     };
 
     const originalFetch = globalThis.fetch;
@@ -147,8 +179,9 @@ test("request 失败时会写入 task 级失败日志", async () => {
 
   const logFilePath = buildTaskLogFilePath(userDataPath, "task-request-failed");
   const records = fs.readFileSync(logFilePath, "utf8").trim().split("\n").map((line) => parseJson5<Record<string, unknown>>(line));
-  assert.equal(records.at(-1)?.["event"], "opencode.request_failed");
-  assert.equal(records.at(-1)?.["taskId"], "task-request-failed");
+  const latestRecord = records.at(-1) || {};
+  assert.equal(latestRecord["event"], "opencode.request_failed");
+  assert.equal(latestRecord["taskId"], "task-request-failed");
 });
 
 test("submitMessage 在空响应体或空对象响应时会在原地重试直到拿到有效消息实体", async () => {
@@ -223,7 +256,7 @@ test("submitMessage 最终请求体不注入 system 字段", async () => {
   const { client, cwd } = createClient();
   let capturedBody = "";
   client.request = async (_pathname, options) => {
-    capturedBody = options.body ?? "";
+    capturedBody = options.body;
     return new Response(JSON.stringify({
       id: "msg-1",
       role: "assistant",
@@ -258,10 +291,10 @@ test("resolveExecutionResult 在 completed 响应触发重试时会先立刻重�
       messageId: string,
       after: string,
       timeoutMs: number,
-    ) => Promise<OpenCodeNormalizedMessage | null>;
+    ) => Promise<OpenCodeNormalizedMessage>;
     waitForSessionSettled: (sessionId: string, after: number, timeoutMs: number) => Promise<void>;
-    getSessionMessage: (cwd: string, sessionId: string, messageId: string) => Promise<OpenCodeNormalizedMessage | null>;
-    getLatestAssistantMessage: (cwd: string, sessionId: string) => Promise<OpenCodeNormalizedMessage | null>;
+    getSessionMessage: (cwd: string, sessionId: string, messageId: string) => Promise<OpenCodeNormalizedMessage>;
+    getLatestAssistantMessage: (cwd: string, sessionId: string) => Promise<OpenCodeNormalizedMessage>;
     submitMessage: (
       cwd: string,
       sessionId: string,
@@ -276,34 +309,38 @@ test("resolveExecutionResult 在 completed 响应触发重试时会先立刻重�
   let submitCount = 1;
   let replyCount = 0;
 
-  typed.waitForSessionSettled = async () => new Promise<void>(() => undefined);
-  typed.getSessionMessage = async () => null;
-  typed.getLatestAssistantMessage = async () => null;
+  typed.waitForSessionSettled = async () => new Promise<void>(() => {});
+  typed.getSessionMessage = async () => {
+    throw new Error("message not found");
+  };
+  typed.getLatestAssistantMessage = async () => {
+    throw new Error("latest assistant message not found");
+  };
   typed.submitMessage = async (_target, _sessionId, payload) => {
     submitCount += 1;
     submittedContents.push(payload.content);
     submittedAt.push(Date.now());
-    return {
+    return createNormalizedMessage({
       id: `submitted-${submitCount}`,
       content: payload.content,
       sender: "assistant",
-      timestamp: toUtcIsoTimestamp(`2026-05-11T00:01:0${submitCount}.000Z`),
-      error: null,
-      raw: null,
-    };
+      timestamp: `2026-05-11T00:01:0${submitCount}.000Z`,
+      error: "",
+      raw: {},
+    });
   };
   typed.waitForMessageCompletion = async (_target, _sessionId, messageId) => {
     replyCount += 1;
-    return {
+    return createNormalizedMessage({
       id: `reply-${messageId}`,
       content: replyCount < 3
         ? "<456> 非法判定"
         : "<continue>第三次恢复</continue>",
       sender: "assistant",
-      timestamp: toUtcIsoTimestamp("2026-05-11T00:01:10.000Z"),
-      error: null,
-      raw: null,
-    };
+      timestamp: "2026-05-11T00:01:10.000Z",
+      error: "",
+      raw: {},
+    });
   };
 
   const result = await withFastForwardedTimeouts(() => {
@@ -312,12 +349,13 @@ test("resolveExecutionResult 在 completed 响应触发重试时会先立刻重�
       cwd,
       "session-1",
       {
-        id: "submitted-1",
-        content: "初始请求",
-        sender: "assistant",
-        timestamp: toUtcIsoTimestamp("2026-05-11T00:01:00.000Z"),
-        error: null,
-        raw: {
+        ...createNormalizedMessage({
+          id: "submitted-1",
+          content: "初始请求",
+          sender: "assistant",
+          timestamp: "2026-05-11T00:01:00.000Z",
+          error: "",
+          raw: {
           info: {
             config: {
               agent: {
@@ -328,7 +366,8 @@ test("resolveExecutionResult 在 completed 响应触发重试时会先立刻重�
               },
             },
           },
-        },
+          },
+        }),
       },
       "TaskReview",
       ["<continue>", "<complete>"],
@@ -372,7 +411,7 @@ test("createSession logs invalid responses into the task log file", async () => 
   ));
 
   const lines = fs.readFileSync(buildTaskLogFilePath(userDataPath, taskId), "utf8").trim().split("\n");
-  const record = parseJson5<Record<string, unknown>>(lines.at(-1) ?? "{}");
+  const record = parseJson5<Record<string, unknown>>(lines.at(-1) || "{}");
   assert.equal(record["event"], "opencode.create_session_invalid_response");
   assert.equal(record["taskId"], taskId);
 });
@@ -394,7 +433,7 @@ test("createSession 在响应体不是合法 JSON5 时仍走 invalid response �
   ));
 
   const lines = fs.readFileSync(buildTaskLogFilePath(userDataPath, taskId), "utf8").trim().split("\n");
-  const record = parseJson5<Record<string, unknown>>(lines.at(-1) ?? "{}");
+  const record = parseJson5<Record<string, unknown>>(lines.at(-1) || "{}");
   assert.equal(record["event"], "opencode.create_session_invalid_response");
   assert.equal(record["taskId"], taskId);
 });
@@ -406,9 +445,15 @@ test("session message 请求不注入 AbortSignal，确保长任务不会被请�
   };
 
   const originalFetch = globalThis.fetch;
-  let capturedSignal: AbortSignal | null | undefined;
+  let capturedSignal: AbortSignal | string = "unobserved";
   globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
-    capturedSignal = args[1]?.signal;
+    const requestInit = args[1];
+    capturedSignal = typeof requestInit === "object"
+      && requestInit
+      && "signal" in requestInit
+      && requestInit.signal instanceof AbortSignal
+      ? requestInit.signal
+      : "unobserved";
     return new Response("", { status: 200 });
   }) as typeof fetch;
 
@@ -422,7 +467,7 @@ test("session message 请求不注入 AbortSignal，确保长任务不会被请�
     globalThis.fetch = originalFetch;
   }
 
-  assert.equal(capturedSignal, undefined);
+  assert.equal(capturedSignal, "unobserved");
 });
 
 test("createSession 超时后不应重启 runtime，也不应自动重试", async () => {
@@ -444,14 +489,16 @@ test("createSession 超时后不应重启 runtime，也不应自动重试", asyn
   assert.equal(requestCount, 1);
 });
 
-test("消息查询接口空响应体时返回空结果而不是抛错", async () => {
+test("消息查询接口空响应体时对单条消息抛错，对列表返回空数组", async () => {
   const { client, cwd } = createClient();
   client.request = async () => new Response("", { status: 200 });
 
-  const message = await client.getSessionMessage(cwd, "session-1", "msg-1");
-  const list = await client.listSessionMessages(cwd, "session-1");
+  const list = await client.listSessionMessages(cwd, "session-1", 0);
 
-  assert.equal(message, null);
+  await assert.rejects(
+    client.getSessionMessage(cwd, "session-1", "msg-1"),
+    /响应无效/,
+  );
   assert.deepEqual(list, []);
 });
 
@@ -465,7 +512,7 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
       messageId: string,
       fallbackTimestamp: string,
       timeoutMs: number,
-    ) => Promise<OpenCodeNormalizedMessage | null>;
+    ) => Promise<OpenCodeNormalizedMessage>;
     getLatestAssistantMessage: (cwd: string, sessionId: string) => Promise<unknown>;
     getSessionRuntime: (cwd: string, sessionId: string) => Promise<OpenCodeSessionRuntime>;
   };
@@ -473,33 +520,35 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
   typed.waitForSessionSettled = async () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
   };
-  typed.waitForMessageCompletion = async () => ({
+  typed.waitForMessageCompletion = async () => createNormalizedMessage({
     id: "msg-1",
     content: "已完成",
     sender: "assistant",
-    timestamp: toUtcIsoTimestamp(completedAt),
-    error: null,
+    timestamp: completedAt,
+    error: "",
     raw: { completedAt },
   });
-  typed.getLatestAssistantMessage = async () => null;
+  typed.getLatestAssistantMessage = async () => {
+    throw new Error("不应该走到 getLatestAssistantMessage");
+  };
   typed.getSessionRuntime = async () => ({
     sessionId: "session-1",
     messageCount: 1,
     updatedAt: completedAt,
-    headline: null,
+    headline: "",
     activeToolNames: [],
     activities: [],
   });
 
   const startedAt = Date.now();
-  const result = await typed.resolveExecutionResult(cwd, "session-1", {
+  const result = await typed.resolveExecutionResult(cwd, "session-1", createNormalizedMessage({
     id: "msg-1",
     content: "",
     sender: "assistant",
-    timestamp: toUtcIsoTimestamp(completedAt),
-    error: null,
-    raw: null,
-  }, "TaskReview", []);
+    timestamp: completedAt,
+    error: "",
+    raw: {},
+  }), "TaskReview", []);
   const elapsed = Date.now() - startedAt;
 
   assert.equal(result.finalMessage, "已完成");
@@ -516,44 +565,46 @@ test("resolveExecutionResult 在没有任何 assistant 消息时会在原地重�
       messageId: string,
       fallbackTimestamp: string,
       timeoutMs: number,
-    ) => Promise<OpenCodeNormalizedMessage | null>;
+    ) => Promise<OpenCodeNormalizedMessage>;
     getLatestAssistantMessage: (cwd: string, sessionId: string) => Promise<unknown>;
     getSessionRuntime: (cwd: string, sessionId: string) => Promise<OpenCodeSessionRuntime>;
   };
 
-  typed.waitForSessionSettled = async () => undefined;
+  typed.waitForSessionSettled = async () => {};
   let resolveCount = 0;
-  typed.waitForMessageCompletion = async () => null;
+  typed.waitForMessageCompletion = async () => {
+    throw new Error("OpenCode session session-1 未返回任何有效的 assistant 消息");
+  };
   typed.getLatestAssistantMessage = async () => {
     resolveCount += 1;
     return resolveCount === 1
-      ? null
-      : {
+      ? (() => { throw new Error("OpenCode session session-1 未返回任何有效的 assistant 消息"); })()
+      : createNormalizedMessage({
           id: "msg-final",
           content: "已恢复正式回复",
           sender: "assistant",
-          timestamp: toUtcIsoTimestamp("2026-04-25T00:01:00.000Z"),
-          error: null,
-          raw: null,
-        };
+          timestamp: "2026-04-25T00:01:00.000Z",
+          error: "",
+          raw: {},
+        });
   };
   typed.getSessionRuntime = async () => ({
     sessionId: "session-1",
     messageCount: 0,
-    updatedAt: null,
-    headline: null,
+    updatedAt: "",
+    headline: "",
     activeToolNames: [],
     activities: [],
   });
 
-  const result = await withFastForwardedTimeouts(() => typed.resolveExecutionResult(cwd, "session-1", {
+  const result = await withFastForwardedTimeouts(() => typed.resolveExecutionResult(cwd, "session-1", createNormalizedMessage({
       id: "msg-user",
       content: "请整理需求",
       sender: "user",
-      timestamp: toUtcIsoTimestamp("2026-04-25T00:00:00.000Z"),
-      error: null,
-      raw: null,
-    }, "BA", []));
+      timestamp: "2026-04-25T00:00:00.000Z",
+      error: "",
+      raw: {},
+    }), "BA", []));
   assert.equal(result.finalMessage, "已恢复正式回复");
   assert.equal(resolveCount, 2);
 });
@@ -568,7 +619,7 @@ function readTaskLogRecords(userDataPath: string, taskId: string) {
 function createTransportRecoveryClient(messages: unknown[]) {
   const { client, cwd } = createClient();
   const typed = client as OpenCodeClient & {
-    listSessionMessages: (cwd: string, sessionId: string, limit?: number) => Promise<unknown[]>;
+    listSessionMessages: (cwd: string, sessionId: string, limit: number) => Promise<unknown[]>;
   };
   typed.listSessionMessages = async () => messages;
   return { client, cwd };
@@ -762,7 +813,7 @@ for (const scenario of [
     const { client, cwd } = createTransportRecoveryClient(scenario.messages);
 
     const recovered = await runWithTaskLogScope(scenario.taskId, () => withFastForwardedTimeouts(() => (
-      scenario.timeoutMs === undefined
+      typeof scenario.timeoutMs !== "number"
         ? client.recoverExecutionResultAfterTransportError(
             cwd,
             "session-1",
@@ -779,25 +830,28 @@ for (const scenario of [
     )));
 
     if (scenario.expected.recovered) {
-      assert.notEqual(recovered, null);
-      assert.equal(recovered?.status, "completed");
-      assert.equal(recovered?.messageId, scenario.expected.messageId);
-      assert.equal(recovered?.finalMessage, scenario.expected.finalMessage);
+      assert.equal(recovered.kind, "recovered");
+      if (recovered.kind === "recovered") {
+        assert.equal(recovered.result.status, "completed");
+        assert.equal(recovered.result.messageId, scenario.expected.messageId);
+        assert.equal(recovered.result.finalMessage, scenario.expected.finalMessage);
+      }
       return;
     }
 
-    assert.equal(recovered, null);
+    assert.equal(recovered.kind, "timed_out");
     const records = readTaskLogRecords(userDataPath, scenario.taskId);
     assert.deepEqual(records.map((record) => record["event"]), [
       "opencode.transport_recovery_started",
       scenario.expected.logEvent,
     ]);
-    assert.equal(records[1]?.["recoveryState"], scenario.expected.recoveryState);
-    assert.equal(records[1]?.["relatedReplyCount"], scenario.expected.relatedReplyCount);
-    assert.equal(records[1]?.["latestRelatedMessageId"], scenario.expected.latestRelatedMessageId);
-    assert.equal(records[1]?.["latestRelatedParentMessageId"], scenario.expected.latestRelatedParentMessageId);
+    const timeoutRecord = records[1] || {};
+    assert.equal(timeoutRecord["recoveryState"], scenario.expected.recoveryState);
+    assert.equal(timeoutRecord["relatedReplyCount"], scenario.expected.relatedReplyCount);
+    assert.equal(timeoutRecord["latestRelatedMessageId"], scenario.expected.latestRelatedMessageId);
+    assert.equal(timeoutRecord["latestRelatedParentMessageId"], scenario.expected.latestRelatedParentMessageId);
     if ("latestRelatedFinish" in scenario.expected) {
-      assert.equal(records[1]?.["latestRelatedFinish"], scenario.expected.latestRelatedFinish);
+      assert.equal(timeoutRecord["latestRelatedFinish"], scenario.expected.latestRelatedFinish);
     }
   });
 }
@@ -807,23 +861,20 @@ test("配置只会在 serve 启动前写入启动配置快照，不请求 OpenCo
   const typed = client as OpenCodeClient & {
     runningServe: {
       cwd: string;
-      handle: Promise<{ process: null; port: number }>;
+      handle: Promise<ReturnType<typeof createDetachedServeHandle>>;
     };
   };
 
   const originalFetch = globalThis.fetch;
   let fetchCount = 0;
-  let receivedConfig: unknown = null;
+  let receivedConfig: unknown = {};
   globalThis.fetch = (async () => {
     fetchCount += 1;
     return new Response("", { status: 200 });
   }) as typeof fetch;
   Reflect.set(client, "startServer", async (_targetCwd: string, config: { agent: Record<string, unknown> }) => {
     receivedConfig = config;
-    return {
-      process: null,
-      port: 43127,
-    };
+    return createDetachedServeHandle(43127);
   });
 
   try {
@@ -831,7 +882,7 @@ test("配置只会在 serve 启动前写入启动配置快照，不请求 OpenCo
       cwd: "",
       handle: Promise.reject(new Error("OpenCode serve 尚未启动。")),
     };
-    typed.runningServe.handle.catch(() => undefined);
+    void typed.runningServe.handle.catch(() => "");
     await client.ensureServerStarted(cwd, {
       agent: {
         BA: {
@@ -869,10 +920,7 @@ test("serve 启动后再次 ensureServerStarted 不会更新启动配置快照",
   let startServerCount = 0;
   Reflect.set(client, "startServer", async () => {
     startServerCount += 1;
-    return {
-      process: null,
-      port: 43127,
-    };
+    return createDetachedServeHandle(43127);
   });
 
   await client.ensureServerStarted(cwd, {
@@ -897,13 +945,10 @@ test("serve 启动后再次 ensureServerStarted 不会更新启动配置快照",
 test("ensureServerStarted 会把启动配置显式传给 startServer", async () => {
   const cwd = createTempDir();
   const client = new OpenCodeClient();
-  let capturedConfig: unknown = null;
+  let capturedConfig: unknown = {};
   Reflect.set(client, "startServer", async (_targetCwd: string, config: unknown) => {
     capturedConfig = config;
-    return {
-      process: null,
-      port: 43127,
-    };
+    return createDetachedServeHandle(43127);
   });
 
   await client.ensureServerStarted(cwd, {
@@ -935,17 +980,14 @@ test("ensureServerStarted 会把启动配置显式传给 startServer", async () 
 
 test("同一 cwd 只会复用一个 serve 端口", async () => {
   const client = new TestOpenCodeClient() as TestOpenCodeClient & {
-    startServer: (cwd: string, config: { agent: Record<string, unknown> }) => Promise<{ process: null; port: number }>;
+    startServer: (cwd: string, config: { agent: Record<string, unknown> }) => Promise<ReturnType<typeof createDetachedServeHandle>>;
   };
   const cwd = createTempDir();
   let startServerCount = 0;
 
   client.startServer = async () => {
     startServerCount += 1;
-    return {
-      process: null,
-      port: 43127,
-    };
+    return createDetachedServeHandle(43127);
   };
 
   const originalFetch = globalThis.fetch;
@@ -978,7 +1020,7 @@ test("同一 cwd 只会复用一个 serve 端口", async () => {
 
 test("第二个不同 cwd 的 serve 启动请求会被拒绝", async () => {
   const client = new TestOpenCodeClient() as TestOpenCodeClient & {
-    startServer: (cwd: string, config: { agent: Record<string, unknown> }) => Promise<{ process: null; port: number }>;
+    startServer: (cwd: string, config: { agent: Record<string, unknown> }) => Promise<ReturnType<typeof createDetachedServeHandle>>;
   };
   const firstCwd = createTempDir();
   const secondCwd = createTempDir();
@@ -986,10 +1028,7 @@ test("第二个不同 cwd 的 serve 启动请求会被拒绝", async () => {
 
   client.startServer = async () => {
     startServerCount += 1;
-    return {
-      process: null,
-      port: 43127 + startServerCount,
-    };
+    return createDetachedServeHandle(43127 + startServerCount);
   };
 
   const originalFetch = globalThis.fetch;
@@ -1012,10 +1051,10 @@ test("同一 cwd 下多个订阅者会共享一个 event pump 并同时收到事
   const client = new OpenCodeClient();
   const cwd = createTempDir();
   let startEventPumpCount = 0;
-  let emitEvent: (event: Record<string, unknown>) => void = () => undefined;
-  let releasePump: () => void = () => undefined;
-  let notifyFirstPumpReady: () => void = () => undefined;
-  let notifySecondSubscriberReady: () => void = () => undefined;
+  let emitEvent: (event: Record<string, unknown>) => void = () => {};
+  let releasePump: () => void = () => {};
+  let notifyFirstPumpReady: () => void = () => {};
+  let notifySecondSubscriberReady: () => void = () => {};
   const firstPumpReady = new Promise<void>((resolve) => {
     notifyFirstPumpReady = resolve;
   });
@@ -1023,10 +1062,7 @@ test("同一 cwd 下多个订阅者会共享一个 event pump 并同时收到事
     notifySecondSubscriberReady = resolve;
   });
 
-  Reflect.set(client, "startServer", async () => ({
-    process: null,
-    port: 43127,
-  }));
+  Reflect.set(client, "startServer", async () => createDetachedServeHandle(43127));
   Reflect.set(client, "startEventPump", async (onEvent: (event: Record<string, unknown>) => void) => {
     startEventPumpCount += 1;
     return new Promise<void>((resolve) => {
@@ -1045,7 +1081,7 @@ test("同一 cwd 下多个订阅者会共享一个 event pump 并同时收到事
   await firstPumpReady;
   const secondConnect = client.connectEvents(cwd, (event) => {
     secondEvents.push(event);
-  }).then(() => undefined);
+  }).then(() => "");
   queueMicrotask(() => {
     notifySecondSubscriberReady();
   });
@@ -1064,16 +1100,13 @@ test("同一 cwd 下多个订阅者会共享一个 event pump 并同时收到事
 test("getAttachBaseUrl 只读取已经启动的 serve 地址", async () => {
   const cwd = createTempDir();
   const client = new OpenCodeClient() as OpenCodeClient & {
-    startServer: (cwd: string, config: { agent: Record<string, unknown> }) => Promise<{ process: null; port: number }>;
+    startServer: (cwd: string, config: { agent: Record<string, unknown> }) => Promise<ReturnType<typeof createDetachedServeHandle>>;
   };
 
   let startServerCalled = false;
   client.startServer = async () => {
     startServerCalled = true;
-    return {
-      process: null,
-      port: 43128,
-    };
+    return createDetachedServeHandle(43128);
   };
 
   await client.ensureServerStarted(cwd, { agent: {} });
@@ -1304,10 +1337,11 @@ test("buildRuntimeSnapshot 在工具参数形似 JSON5 但非法时回退为原�
   ]);
 
   assert.equal(snapshot.activities.length, 1);
-  assert.equal(snapshot.activities[0]?.kind, "tool");
-  assert.equal(snapshot.activities[0]?.label, "glob");
-  assert.equal(snapshot.activities[0]?.detail, "参数: {bad}");
-  assert.equal(snapshot.activities[0]?.timestamp, "2026-04-21T12:52:26.000Z");
+  const firstActivity = assertActivityAt(snapshot.activities, 0);
+  assert.equal(firstActivity.kind, "tool");
+  assert.equal(firstActivity.label, "glob");
+  assert.equal(firstActivity.detail, "参数: {bad}");
+  assert.equal(firstActivity.timestamp, "2026-04-21T12:52:26.000Z");
 });
 
 test("buildRuntimeSnapshot 会优先使用 tool state.input 作为更完整的参数来源", () => {
@@ -1338,12 +1372,13 @@ test("buildRuntimeSnapshot 会优先使用 tool state.input 作为更完整的�
   ]);
 
   assert.equal(snapshot.activities.length, 1);
-  assert.equal(snapshot.activities[0]?.kind, "tool");
-  assert.equal(snapshot.activities[0]?.detail, "参数: filePath=/tmp/demo.txt");
-  assert.equal(snapshot.activities[0]?.detailState, "complete");
-  assert.equal(snapshot.activities[0]?.detailParseMode, "structured");
-  assert.equal(snapshot.activities[0]?.detailPayloadKeyCount, 1);
-  assert.equal(snapshot.activities[0]?.detailHasPlaceholderValue, false);
+  const firstActivity = assertActivityAt(snapshot.activities, 0);
+  assert.equal(firstActivity.kind, "tool");
+  assert.equal(firstActivity.detail, "参数: filePath=/tmp/demo.txt");
+  assert.equal(firstActivity.detailState, "complete");
+  assert.equal(firstActivity.detailParseMode, "structured");
+  assert.equal(firstActivity.detailPayloadKeyCount, 1);
+  assert.equal(firstActivity.detailHasPlaceholderValue, false);
 });
 
 test("startEventPump 在单条 SSE 数据非法时保留原始载荷并继续消费后续事件", async () => {
@@ -1351,7 +1386,7 @@ test("startEventPump 在单条 SSE 数据非法时保留原始载荷并继续消
   const typed = client as unknown as {
     startEventPump: (
       onEvent: (event: Record<string, unknown>) => void,
-      server: { process: null; port: number },
+      server: ReturnType<typeof createDetachedServeHandle>,
       cwd: string,
     ) => Promise<void>;
   };
@@ -1370,7 +1405,7 @@ test("startEventPump 在单条 SSE 数据非法时保留原始载荷并继续消
   try {
     await typed.startEventPump((event: Record<string, unknown>) => {
       events.push(event);
-    }, { process: null, port: 43127 }, cwd);
+    }, createDetachedServeHandle(43127), cwd);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -128,20 +128,21 @@ export class OpenCodeRunner {
         startedAt,
         errorMessage,
       );
-      if (!recovered) {
+      if (recovered.kind === "timed_out") {
         return {
           kind: "none",
         };
       }
-      if (recovered.status === "completed") {
+      const result = recovered.result;
+      if (result.status === "completed") {
         return {
           kind: "completed",
-          result: recovered,
+          result,
         };
       }
       return {
         kind: "error-result",
-        result: recovered,
+        result,
       };
     } catch (error) {
       return {
