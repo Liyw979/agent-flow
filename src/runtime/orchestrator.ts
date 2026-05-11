@@ -536,8 +536,8 @@ export class Orchestrator {
           status: agent.status,
           runtimeStatus: agent.status,
           messageCount: 0,
-          updatedAt: null,
-          headline: null,
+          updatedAt: "",
+          headline: "",
           activeToolNames: [],
           activities: [],
         };
@@ -566,7 +566,7 @@ export class Orchestrator {
             headline:
               agent.status === "running"
                 ? "运行中，正在等待 OpenCode 返回实时消息"
-                : null,
+                : "",
           };
         }
       }),

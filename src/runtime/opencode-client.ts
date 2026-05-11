@@ -2,27 +2,33 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { parseJson5 } from "@shared/json5";
-import { withOptionalValue } from "@shared/object-utils";
 import { parseDecision } from "./decision-parser";
 import { buildSubmitMessageBody } from "./opencode-request-body";
 import { toOpenCodeAgentId } from "./opencode-agent-id";
 import { appendAppLog } from "./app-log";
 import { extractOpenCodeServeBaseUrl } from "./opencode-serve-launch";
-import { resolveOpenCodeRequestTimeoutMs } from "./opencode-request-timeout";
+import { getOpenCodeRequestTimeoutMs, shouldTimeboxOpenCodeRequest } from "./opencode-request-timeout";
 import { resolveWindowsCmdPath } from "./windows-shell";
 import type { OpenCodeInjectedConfig } from "./project-agent-source";
 import { toUtcIsoTimestamp, type UtcIsoTimestamp } from "@shared/types";
 
+interface SpawnedServeProcessHandle {
+  kind: "spawned";
+  process: ChildProcessWithoutNullStreams;
+}
+
+interface DetachedServeProcessHandle {
+  kind: "detached";
+}
+
+type ServeProcessHandle = SpawnedServeProcessHandle | DetachedServeProcessHandle;
+
 interface ServeHandle {
-  process: ChildProcessWithoutNullStreams | null;
+  process: ServeProcessHandle;
   port: number;
 }
 
-interface OpenCodeEvent {
-  directory?: string;
-  payload?: Record<string, unknown>;
-  [key: string]: unknown;
-}
+type OpenCodeEvent = Record<string, unknown>;
 
 export interface SubmitMessagePayload {
   content: string;
@@ -34,7 +40,7 @@ export interface OpenCodeNormalizedMessage {
   content: string;
   sender: string;
   timestamp: UtcIsoTimestamp;
-  error: string | null;
+  error: string;
   raw: unknown;
 }
 
@@ -61,8 +67,8 @@ export interface OpenCodeRuntimeActivity {
 export interface OpenCodeSessionRuntime {
   sessionId: string;
   messageCount: number;
-  updatedAt: string | null;
-  headline: string | null;
+  updatedAt: string;
+  headline: string;
   activeToolNames: string[];
   activities: OpenCodeRuntimeActivity[];
 }
@@ -79,9 +85,20 @@ interface SessionWaiter {
 }
 
 interface WorkspaceEventState {
-  eventPump: Promise<void> | null;
+  eventPump: Promise<void>;
   eventSubscribers: Set<(event: OpenCodeEvent) => void>;
 }
+
+type RequestOptions =
+  | {
+      method: "GET";
+      cwd: string;
+    }
+  | {
+      method: "POST";
+      cwd: string;
+      body: string;
+    };
 
 interface RunningServeState {
   cwd: string;
@@ -99,6 +116,19 @@ interface RelatedTransportReplySnapshot {
   finish: string;
   parentMessageId: string;
 }
+
+interface RecoveredTransportExecutionResult {
+  kind: "recovered";
+  result: OpenCodeExecutionResult;
+}
+
+interface TimedOutTransportExecutionResult {
+  kind: "timed_out";
+}
+
+export type TransportRecoveryResult =
+  | RecoveredTransportExecutionResult
+  | TimedOutTransportExecutionResult;
 
 type TransportRecoveryInspection =
   | {
@@ -132,16 +162,18 @@ export interface OpenCodeShutdownReport {
   killedPids: number[];
 }
 
+const idleEventPumpPromise = Promise.resolve();
+
 const idleRunningServeState: RunningServeState = {
   cwd: "",
   handle: Promise.reject(new Error("OpenCode serve 尚未启动。")),
 };
-idleRunningServeState.handle.catch(() => undefined);
+void idleRunningServeState.handle.catch(() => "");
 
 const idleWorkspaceEventState: WorkspaceEventEntry = {
   cwd: "",
   state: {
-    eventPump: null,
+    eventPump: idleEventPumpPromise,
     eventSubscribers: new Set(),
   },
 };
@@ -164,7 +196,7 @@ export class OpenCodeClient {
     }
 
     const created: WorkspaceEventState = {
-      eventPump: null,
+      eventPump: idleEventPumpPromise,
       eventSubscribers: new Set(),
     };
     this.workspaceEventState = {
@@ -214,9 +246,9 @@ export class OpenCodeClient {
       throw new Error(`OpenCode 创建 session 失败: ${response.status}`);
     }
 
-    const data = (await this.readJsonResponse(response)) as { id?: string } | null;
-    if (typeof data?.id === "string" && data.id.trim()) {
-      return data.id;
+    const data = this.asRecord(await this.readJsonResponse(response));
+    if (typeof data["id"] === "string" && data["id"].trim()) {
+      return data["id"];
     }
 
     appendAppLog("error", "opencode.create_session_invalid_response", {
@@ -232,20 +264,21 @@ export class OpenCodeClient {
     const state = this.getWorkspaceEventState(normalized);
     state.eventSubscribers.add(onEvent);
     const server = await this.getExistingServer(normalized);
-    if (state.eventPump) {
+    if (state.eventPump !== idleEventPumpPromise) {
       return state.eventPump;
     }
 
-    state.eventPump = this.startEventPump((event) => {
+    const eventPump = this.startEventPump((event) => {
       for (const subscriber of state.eventSubscribers) {
         subscriber(event);
       }
     }, server, normalized).finally(() => {
-      if (state.eventPump) {
-        state.eventPump = null;
+      if (state.eventPump === eventPump) {
+        state.eventPump = idleEventPumpPromise;
       }
     });
-    await state.eventPump;
+    state.eventPump = eventPump;
+    await eventPump;
   }
 
   disconnectEvents(cwd: string, onEvent: (event: OpenCodeEvent) => void): void {
@@ -283,8 +316,8 @@ export class OpenCodeClient {
           throw new RetryableSubmitMessageError(`OpenCode 请求失败: ${response.status}`);
         }
 
-        const raw = await this.readJsonResponse(response);
-        if (!raw || typeof raw !== "object") {
+        const raw = this.asRecord(await this.readJsonResponse(response));
+        if (Object.keys(raw).length === 0) {
           appendAppLog("error", "opencode.submit_message_invalid_response", {
             cwd: normalized,
             sessionId,
@@ -293,8 +326,8 @@ export class OpenCodeClient {
           });
           throw new RetryableSubmitMessageError("OpenCode 提交消息响应缺少有效的消息实体");
         }
-        const envelope = this.asRecord(raw);
-        const info = this.asRecord(envelope["info"] ?? raw);
+        const envelope = raw;
+        const info = this.asRecord("info" in envelope ? envelope["info"] : raw);
         if (typeof info["id"] !== "string" && typeof envelope["id"] !== "string") {
           appendAppLog("error", "opencode.submit_message_invalid_response", {
             cwd: normalized,
@@ -304,7 +337,7 @@ export class OpenCodeClient {
           });
           throw new RetryableSubmitMessageError("OpenCode 提交消息响应缺少有效的消息实体");
         }
-        return this.normalizeMessageEnvelope(raw as Record<string, unknown>, opencodeAgent);
+        return this.normalizeMessageEnvelope(raw, opencodeAgent);
       } catch (error) {
         if (!(error instanceof RetryableSubmitMessageError)) {
           throw error;
@@ -337,27 +370,18 @@ export class OpenCodeClient {
           currentSubmitted.timestamp,
           8000,
         );
-        let latest = await Promise.race([
-          messageCompletionPromise,
-          this.waitForSessionSettled(sessionId, submittedAt, 8000)
-            .then(async () => {
-              const current = await this.getSessionMessage(normalized, sessionId, currentSubmitted.id);
-              return current && this.isTerminalMessage(current) ? current : null;
-            })
-            .catch(() => null),
-        ]);
-
-        if (!latest) {
-          latest =
-            (await messageCompletionPromise) ??
-            (await this.getLatestAssistantMessage(normalized, sessionId));
+        let latest: OpenCodeNormalizedMessage;
+        try {
+          latest = await Promise.race([
+            messageCompletionPromise,
+            this.waitForSessionSettled(sessionId, submittedAt, 8000).then(() =>
+              this.getSessionMessage(normalized, sessionId, currentSubmitted.id)),
+          ]);
+        } catch {
+          latest = await this.getLatestAssistantMessage(normalized, sessionId);
         }
 
-        if (!latest) {
-          throw new RetryableExecutionResultError(`OpenCode session ${sessionId} 未返回任何有效的 assistant 消息`);
-        }
-
-        const finalMessage = latest.content || latest.error || "";
+        const finalMessage = latest.content || latest.error;
         if (!finalMessage.trim()) {
           throw new RetryableExecutionResultError(this.buildEmptyAssistantResultError(sessionId, latest));
         }
@@ -413,7 +437,7 @@ export class OpenCodeClient {
     startedAt: string,
     errorMessage: string,
     timeoutMs = TRANSPORT_ERROR_RECOVERY_TIMEOUT_MS,
-  ): Promise<OpenCodeExecutionResult | null> {
+  ): Promise<TransportRecoveryResult> {
     const normalized = path.resolve(cwd);
     const startedAtMs = Date.parse(startedAt);
     const lowerBound = Number.isFinite(startedAtMs) ? startedAtMs - 2_000 : Date.now() - 2_000;
@@ -435,7 +459,10 @@ export class OpenCodeClient {
           recoveredMessageId: inspection.result.messageId,
           recoveredAt: inspection.result.timestamp,
         });
-        return inspection.result;
+        return {
+          kind: "recovered",
+          result: inspection.result,
+        };
       }
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
@@ -448,7 +475,10 @@ export class OpenCodeClient {
         recoveredMessageId: finalInspection.result.messageId,
         recoveredAt: finalInspection.result.timestamp,
       });
-      return finalInspection.result;
+      return {
+        kind: "recovered",
+        result: finalInspection.result,
+      };
     }
 
     appendAppLog("error", "opencode.transport_recovery_timed_out", {
@@ -459,7 +489,9 @@ export class OpenCodeClient {
       timeoutMs,
       ...this.buildTransportRecoveryTimeoutDetails(finalInspection),
     });
-    return null;
+    return {
+      kind: "timed_out",
+    };
   }
 
   async getSessionRuntime(
@@ -471,8 +503,8 @@ export class OpenCodeClient {
       return {
         sessionId,
         messageCount: 0,
-        updatedAt: null,
-        headline: null,
+        updatedAt: "",
+        headline: "",
         activeToolNames: [],
         activities: [],
       };
@@ -486,15 +518,13 @@ export class OpenCodeClient {
     if (activeCwd && activeCwd !== normalizedCwd) {
       throw new Error(`当前进程只允许一个 cwd。已有 cwd: ${activeCwd}，拒绝访问: ${normalizedCwd}`);
     }
-    const state = this.workspaceEventState.cwd === normalizedCwd
-      ? this.workspaceEventState.state
-      : null;
-    const runningServer = this.runningServe.cwd === normalizedCwd
-      ? this.runningServe.handle
-      : null;
-    if (!runningServer) {
+    const ownsWorkspaceState = this.workspaceEventState.cwd === normalizedCwd;
+    const ownsRunningServer = this.runningServe.cwd === normalizedCwd;
+    if (!ownsRunningServer) {
       this.clearSessionState();
-      state?.eventSubscribers.clear();
+      if (ownsWorkspaceState) {
+        this.workspaceEventState.state.eventSubscribers.clear();
+      }
       return {
         killedPids: [],
       };
@@ -503,17 +533,16 @@ export class OpenCodeClient {
     let report: OpenCodeShutdownReport = {
       killedPids: [],
     };
-    let server: ServeHandle | null = null;
     try {
-      server = await runningServer;
+      const server = await this.runningServe.handle;
       report = await this.terminateServeHandle(server);
     } catch {
       // ignore shutdown errors
     } finally {
       this.runningServe = idleRunningServeState;
-      if (state) {
-        state.eventPump = null;
-        state.eventSubscribers.clear();
+      if (ownsWorkspaceState) {
+        this.workspaceEventState.state.eventPump = idleEventPumpPromise;
+        this.workspaceEventState.state.eventSubscribers.clear();
       }
       this.workspaceEventState = idleWorkspaceEventState;
       this.clearSessionState();
@@ -552,8 +581,8 @@ export class OpenCodeClient {
     const killedPids = this.findListeningPids(server.port)
       .filter((pid) => this.isOpenCodeServeProcess(pid));
 
-    if (server.process) {
-      await this.killChildProcessTree(server.process);
+    if (server.process.kind === "spawned") {
+      await this.killChildProcessTree(server.process.process);
     }
 
     for (const pid of this.findListeningPids(server.port)) {
@@ -603,7 +632,7 @@ export class OpenCodeClient {
     child: ChildProcessWithoutNullStreams,
     timeoutMs: number,
   ): Promise<boolean> {
-    if (child.exitCode !== null || child.signalCode !== null) {
+    if (typeof child.exitCode === "number" || typeof child.signalCode === "string") {
       return Promise.resolve(true);
     }
 
@@ -659,7 +688,7 @@ export class OpenCodeClient {
         if (!Number.isInteger(pid) || !Number.isInteger(parentPid) || pid <= 0 || parentPid <= 0) {
           continue;
         }
-        const current = childPidsByParent.get(parentPid) ?? [];
+        const current = childPidsByParent.get(parentPid) || [];
         current.push(pid);
         childPidsByParent.set(parentPid, current);
       }
@@ -672,7 +701,7 @@ export class OpenCodeClient {
           continue;
         }
         ordered.push(currentPid);
-        for (const childPid of childPidsByParent.get(currentPid) ?? []) {
+        for (const childPid of childPidsByParent.get(currentPid) || []) {
           pending.push(childPid);
         }
       }
@@ -733,7 +762,7 @@ export class OpenCodeClient {
       },
     );
 
-    let spawnErrorMessage: string | null = null;
+    let spawnErrorMessage = "";
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];
     childProcess.on("error", (error) => {
@@ -748,7 +777,7 @@ export class OpenCodeClient {
     });
 
     const baseUrl = await this.waitForServeBaseUrl(childProcess, stdoutChunks, stderrChunks).catch(async (error) => {
-      await this.killChildProcessTree(childProcess).catch(() => undefined);
+      await this.killChildProcessTree(childProcess).catch(() => "");
       appendAppLog("error", "opencode.serve_start_failed", {
         cwd,
         command: spawnSpec.command,
@@ -761,11 +790,11 @@ export class OpenCodeClient {
     });
     const port = this.parsePortFromBaseUrl(baseUrl);
     const healthy = await this.waitForHealthy(baseUrl);
-    if (spawnErrorMessage !== null || !healthy) {
-      const message = spawnErrorMessage !== null
+    if (spawnErrorMessage || !healthy) {
+      const message = spawnErrorMessage
         ? `OpenCode serve 启动失败: ${spawnErrorMessage}`
           : `OpenCode serve 健康检查失败: ${baseUrl}/global/health 未在预期时间内返回成功`;
-      await this.killChildProcessTree(childProcess).catch(() => undefined);
+      await this.killChildProcessTree(childProcess).catch(() => "");
       appendAppLog("error", "opencode.serve_start_failed", {
         cwd,
         port,
@@ -788,7 +817,10 @@ export class OpenCodeClient {
     });
 
     return {
-      process: childProcess,
+      process: {
+        kind: "spawned",
+        process: childProcess,
+      },
       port,
     };
   }
@@ -906,7 +938,7 @@ export class OpenCodeClient {
 
         buffer += decoder.decode(value, { stream: true });
         const chunks = buffer.split("\n\n");
-        buffer = chunks.pop() ?? "";
+        buffer = chunks.pop() || "";
 
         for (const chunk of chunks) {
           const dataLines = chunk
@@ -931,7 +963,7 @@ export class OpenCodeClient {
       }
     } finally {
       if (this.workspaceEventState.cwd === cwd) {
-        this.workspaceEventState.state.eventPump = null;
+        this.workspaceEventState.state.eventPump = idleEventPumpPromise;
       }
     }
   }
@@ -954,12 +986,12 @@ export class OpenCodeClient {
     const properties = this.asRecord(event["properties"]);
 
     if (eventType === "session.idle") {
-      const sessionId = typeof properties["sessionID"] === "string" ? properties["sessionID"] : null;
+      const sessionId = this.readNonEmptyString(properties["sessionID"]);
       if (!sessionId) {
         return;
       }
       this.sessionIdleAt.set(sessionId, Date.now());
-      const waiters = this.sessionWaiters.get(sessionId) ?? [];
+      const waiters = this.sessionWaiters.get(sessionId) || [];
       const ready = waiters.filter((waiter) => waiter.after <= Date.now());
       this.sessionWaiters.set(
         sessionId,
@@ -972,13 +1004,13 @@ export class OpenCodeClient {
     }
 
     if (eventType === "session.error") {
-      const sessionId = typeof properties["sessionID"] === "string" ? properties["sessionID"] : null;
+      const sessionId = this.readNonEmptyString(properties["sessionID"]);
       if (!sessionId) {
         return;
       }
-      const error = this.extractEventError(properties["error"]) ?? "OpenCode session 发生未知错误";
+      const error = this.extractEventError(properties["error"]) || "OpenCode session 发生未知错误";
       this.sessionErrors.set(sessionId, error);
-      const waiters = this.sessionWaiters.get(sessionId) ?? [];
+      const waiters = this.sessionWaiters.get(sessionId) || [];
       this.sessionWaiters.delete(sessionId);
       for (const waiter of waiters) {
         waiter.reject(new Error(error));
@@ -988,11 +1020,7 @@ export class OpenCodeClient {
 
   protected async request(
     pathname: string,
-    options: {
-      method: "GET" | "POST";
-      cwd: string;
-      body?: string;
-    },
+    options: RequestOptions,
   ): Promise<Response> {
     const normalized = path.resolve(options.cwd);
     const headers: Record<string, string> = {};
@@ -1001,16 +1029,22 @@ export class OpenCodeClient {
     }
     headers["x-opencode-directory"] = normalized;
 
-    const timeoutMs = resolveOpenCodeRequestTimeoutMs({
+    const shouldTimebox = shouldTimeboxOpenCodeRequest({
       pathname,
       method: options.method,
     });
     const requestWithServer = async (server: ServeHandle) => {
       const url = `${this.buildBaseUrl(server.port)}${pathname}`;
-      return this.fetchWithTimeout(url, withOptionalValue({
+      const requestInit: RequestInit = {
         method: options.method,
         headers,
-      }, "body", options.body), timeoutMs);
+      };
+      if (options.method === "POST") {
+        requestInit.body = options.body;
+      }
+      return this.fetchWithTimeout(url, {
+        ...requestInit,
+      }, shouldTimebox);
     };
     const server = await this.getExistingServer(normalized);
     const url = `${this.buildBaseUrl(server.port)}${pathname}`;
@@ -1027,12 +1061,14 @@ export class OpenCodeClient {
     }
   }
 
-  private async fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number | null): Promise<Response> {
-    if (timeoutMs === null) {
+  private async fetchWithTimeout(url: string, init: RequestInit, shouldTimebox: boolean): Promise<Response> {
+    if (!shouldTimebox) {
       return fetch(url, init);
     }
+    const timeoutMs = getOpenCodeRequestTimeoutMs();
     const controller = new AbortController();
-    const timeoutMessage = `OpenCode 请求超时: ${(init.method ?? "GET").toUpperCase()} ${url} 超过 ${timeoutMs}ms`;
+    const method = typeof init.method === "string" ? init.method.toUpperCase() : "GET";
+    const timeoutMessage = `OpenCode 请求超时: ${method} ${url} 超过 ${timeoutMs}ms`;
     const timeout = setTimeout(() => {
       controller.abort(new Error(timeoutMessage));
     }, timeoutMs);
@@ -1077,7 +1113,7 @@ export class OpenCodeClient {
         },
       };
       const timeout = setTimeout(() => {
-        const waiters = this.sessionWaiters.get(sessionId) ?? [];
+        const waiters = this.sessionWaiters.get(sessionId) || [];
         this.sessionWaiters.set(
           sessionId,
           waiters.filter((item) => item !== waiter),
@@ -1085,7 +1121,7 @@ export class OpenCodeClient {
         resolve();
       }, timeoutMs);
 
-      this.sessionWaiters.set(sessionId, [...(this.sessionWaiters.get(sessionId) ?? []), waiter]);
+      this.sessionWaiters.set(sessionId, [...(this.sessionWaiters.get(sessionId) || []), waiter]);
     });
   }
 
@@ -1095,46 +1131,48 @@ export class OpenCodeClient {
     messageId: string,
     fallbackTimestamp: string,
     timeoutMs: number,
-  ): Promise<OpenCodeNormalizedMessage | null> {
+  ): Promise<OpenCodeNormalizedMessage> {
     const startedAt = Date.now();
-    let latestNonEmptyMessage: OpenCodeNormalizedMessage | null = null;
+    let latestNonEmptyMessage = "";
     while (Date.now() - startedAt < timeoutMs) {
-      const message = await this.getSessionMessage(cwd, sessionId, messageId);
-      if (message?.content.trim()) {
-        latestNonEmptyMessage = message;
-      }
-      if (message && this.isTerminalMessage(message)) {
-        return message;
+      try {
+        const message = await this.getSessionMessage(cwd, sessionId, messageId);
+        if (message.content.trim()) {
+          latestNonEmptyMessage = message.content;
+        }
+        if (this.isTerminalMessage(message)) {
+          return message;
+        }
+      } catch {
+        // keep polling until timeout
       }
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
 
-    return this.getSessionMessage(cwd, sessionId, messageId).then(
-      (message) =>
-        message ??
-        latestNonEmptyMessage ?? {
-          id: messageId,
-          content: "",
-          sender: "assistant",
-          timestamp: toUtcIsoTimestamp(fallbackTimestamp),
-          error: null,
-          raw: null,
-        },
-    );
+    try {
+      return await this.getSessionMessage(cwd, sessionId, messageId);
+    } catch {
+      if (latestNonEmptyMessage) {
+        throw new RetryableExecutionResultError(
+          `OpenCode session ${sessionId} 返回了未完成的 assistant 消息: messageId=${messageId}, preview=${this.shortenText(latestNonEmptyMessage, 48)}`,
+        );
+      }
+      throw new RetryableExecutionResultError(`OpenCode session ${sessionId} 未返回任何有效的 assistant 消息`);
+    }
   }
 
   async getLatestAssistantMessage(
     cwd: string,
     sessionId: string,
-  ): Promise<OpenCodeNormalizedMessage | null> {
-    const list = await this.listSessionMessages(cwd, sessionId);
+  ): Promise<OpenCodeNormalizedMessage> {
+    const list = await this.listSessionMessages(cwd, sessionId, 0);
     for (let index = list.length - 1; index >= 0; index -= 1) {
       const message = this.normalizeMessageEnvelope(list[index], "assistant");
       if (message.sender === "assistant" || message.sender === "system" || message.sender === "unknown") {
         return message;
       }
     }
-    return null;
+    throw new RetryableExecutionResultError(`OpenCode session ${sessionId} 未返回任何有效的 assistant 消息`);
   }
 
   private async inspectTransportRecovery(
@@ -1152,7 +1190,7 @@ export class OpenCodeClient {
 
     const normalizedRecords = messages.map((raw) => {
       const envelope = this.asRecord(raw);
-      const info = this.asRecord(envelope["info"] ?? raw);
+      const info = this.asRecord("info" in envelope ? envelope["info"] : raw);
       const normalized = this.normalizeMessageEnvelope(raw, "assistant");
       return {
         raw,
@@ -1207,7 +1245,7 @@ export class OpenCodeClient {
       kind: "recovered",
       result: {
         status: message.error ? "error" : "completed",
-        finalMessage: message.content || message.error || "",
+        finalMessage: message.content || message.error,
         messageId: message.id,
         timestamp: message.timestamp,
         rawMessage: message,
@@ -1267,13 +1305,13 @@ export class OpenCodeClient {
       if (!parentMessageId) {
         continue;
       }
-      const siblings = childrenByParent.get(parentMessageId) ?? [];
+      const siblings = childrenByParent.get(parentMessageId) || [];
       siblings.push(record);
       childrenByParent.set(parentMessageId, siblings);
     }
 
     const relatedReplies: typeof records = [];
-    const pending = [...(childrenByParent.get(rootMessageId) ?? [])];
+    const pending = [...(childrenByParent.get(rootMessageId) || [])];
     const seenMessageIds = new Set<string>();
 
     while (pending.length > 0) {
@@ -1294,7 +1332,7 @@ export class OpenCodeClient {
         continue;
       }
       relatedReplies.push(current);
-      pending.push(...(childrenByParent.get(currentMessageId) ?? []));
+      pending.push(...(childrenByParent.get(currentMessageId) || []));
     }
 
     return relatedReplies;
@@ -1313,27 +1351,27 @@ export class OpenCodeClient {
     cwd: string,
     sessionId: string,
     messageId: string,
-  ): Promise<OpenCodeNormalizedMessage | null> {
+  ): Promise<OpenCodeNormalizedMessage> {
     const response = await this.request(`/session/${sessionId}/message/${messageId}`, {
       method: "GET",
       cwd,
     });
     if (!response.ok) {
-      return null;
+      throw new RetryableExecutionResultError(`OpenCode session ${sessionId} 未找到消息 ${messageId}`);
     }
-    const raw = await this.readJsonResponse(response);
-    if (!raw || typeof raw !== "object") {
-      return null;
+    const raw = this.asRecord(await this.readJsonResponse(response));
+    if (Object.keys(raw).length === 0) {
+      throw new RetryableExecutionResultError(`OpenCode session ${sessionId} 的消息 ${messageId} 响应无效`);
     }
-    return this.normalizeMessageEnvelope(raw as Record<string, unknown>, "assistant");
+    return this.normalizeMessageEnvelope(raw, "assistant");
   }
 
   async listSessionMessages(
     cwd: string,
     sessionId: string,
-    limit?: number,
+    limit: number,
   ): Promise<unknown[]> {
-    const pathname = limit
+    const pathname = limit > 0
       ? `/session/${sessionId}/message?limit=${limit}`
       : `/session/${sessionId}/message`;
     const response = await this.request(pathname, {
@@ -1344,21 +1382,25 @@ export class OpenCodeClient {
       return [];
     }
 
-    const raw = await this.readJsonResponse(response);
-    return Array.isArray(raw) ? raw : [];
+    try {
+      const parsed = await this.readJsonResponse(response);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   }
 
-  private async readJsonResponse(response: Response): Promise<unknown | null> {
+  private async readJsonResponse(response: Response): Promise<unknown> {
     const raw = await response.text();
     const trimmed = raw.trim();
     if (!trimmed) {
-      return null;
+      return {};
     }
 
     try {
       return parseJson5(trimmed);
     } catch {
-      return null;
+      return {};
     }
   }
 
@@ -1367,17 +1409,11 @@ export class OpenCodeClient {
     fallbackSender: string,
   ): OpenCodeNormalizedMessage {
     const envelope = this.asRecord(raw);
-    const info = this.asRecord(envelope["info"] ?? raw);
+    const info = this.asRecord("info" in envelope ? envelope["info"] : raw);
     const parts = Array.isArray(envelope["parts"]) ? (envelope["parts"] as Array<Record<string, unknown>>) : [];
     const time = this.asRecord(info["time"]);
-    const created =
-      this.toIsoString(time["created"]) ??
-      this.toIsoString(info["createdAt"]) ??
-      new Date().toISOString();
-    const completed =
-      this.toIsoString(time["completed"]) ??
-      this.toIsoString(info["completedAt"]) ??
-      null;
+    const created = this.toIsoString(time["created"]) || this.toIsoString(info["createdAt"]) || new Date().toISOString();
+    const completed = this.toIsoString(time["completed"]) || this.toIsoString(info["completedAt"]);
     const sender =
       typeof info["role"] === "string"
         ? info["role"]
@@ -1394,29 +1430,26 @@ export class OpenCodeClient {
             : "";
 
     return {
-      id:
-        (typeof info["id"] === "string" ? info["id"] : null) ??
-        (typeof envelope["id"] === "string" ? envelope["id"] : null) ??
-        randomUUID(),
+      id: this.readNonEmptyString(info["id"]) || this.readNonEmptyString(envelope["id"]),
       content,
       sender,
-      timestamp: toUtcIsoTimestamp(completed ?? created),
-      error: this.extractEventError(info["error"] ?? envelope["error"]),
+      timestamp: toUtcIsoTimestamp(completed || created),
+      error: this.extractEventError("error" in info ? info["error"] : envelope["error"]),
       raw,
     };
   }
 
   private isTerminalMessage(message: OpenCodeNormalizedMessage): boolean {
-    return this.hasCompletedTimestamp(message.raw) || message.error !== null;
+    return this.hasCompletedTimestamp(message.raw) || Boolean(message.error);
   }
 
   private hasCompletedTimestamp(raw: unknown): boolean {
     const envelope = this.asRecord(raw);
-    const info = this.asRecord(envelope["info"] ?? raw);
+    const info = this.asRecord("info" in envelope ? envelope["info"] : raw);
     const time = this.asRecord(info["time"]);
     return (
-      this.toIsoString(time["completed"]) !== null ||
-      this.toIsoString(info["completedAt"]) !== null
+      Boolean(this.toIsoString(time["completed"])) ||
+      Boolean(this.toIsoString(info["completedAt"]))
     );
   }
 
@@ -1425,7 +1458,7 @@ export class OpenCodeClient {
     message: OpenCodeNormalizedMessage,
   ): string {
     const record = this.asRecord(message.raw);
-    const info = this.asRecord(record["info"] ?? message.raw);
+    const info = this.asRecord("info" in record ? record["info"] : message.raw);
     const parts = Array.isArray(record["parts"]) ? (record["parts"] as Array<Record<string, unknown>>) : [];
     const finish = typeof info["finish"] === "string" && info["finish"].trim()
       ? info["finish"].trim()
@@ -1437,10 +1470,8 @@ export class OpenCodeClient {
     return `OpenCode session ${sessionId} 返回了空的 assistant 结果: messageId=${message.id}, finish=${finish}, partTypes=${partSummary}`;
   }
 
-  private extractParentMessageId(info: Record<string, unknown>): string | null {
-    return typeof info["parentID"] === "string" && info["parentID"].trim()
-      ? info["parentID"]
-      : null;
+  private extractParentMessageId(info: Record<string, unknown>): string {
+    return this.readNonEmptyString(info["parentID"]);
   }
 
   private isRecoverableReplyCandidate(
@@ -1513,7 +1544,7 @@ export class OpenCodeClient {
       }
     }
 
-    const latestActivity = activities.at(-1) ?? null;
+    const latestActivity = activities.at(-1);
     const recentToolNames = activities
       .filter((activity) => activity.kind === "tool")
       .map((activity) => activity.label.replace(/^tool:\s*/i, "").trim())
@@ -1524,8 +1555,8 @@ export class OpenCodeClient {
     return {
       sessionId,
       messageCount: messages.length,
-      updatedAt: latestActivity?.timestamp ?? null,
-      headline: latestActivity?.detail ?? null,
+      updatedAt: latestActivity ? latestActivity.timestamp : "",
+      headline: latestActivity ? latestActivity.detail : "",
       activeToolNames: recentToolNames.length > 0 ? recentToolNames : toolNames.slice(-2).reverse(),
       activities,
     };
@@ -1557,7 +1588,7 @@ export class OpenCodeClient {
     message: OpenCodeNormalizedMessage,
     messageIndex: number,
     partIndex: number,
-  ): OpenCodeRuntimeActivity | null {
+  ): OpenCodeRuntimeActivity | false {
     const type = typeof part["type"] === "string" ? part["type"] : "";
     const timestamp = message.timestamp;
     const toolName = this.extractToolName(part);
@@ -1609,7 +1640,7 @@ export class OpenCodeClient {
 
     const detail = this.extractPartDetail(part);
     if (!detail) {
-      return null;
+      return false;
     }
 
     return {
@@ -1625,38 +1656,27 @@ export class OpenCodeClient {
     };
   }
 
-  private extractToolName(part: Record<string, unknown>): string | null {
+  private extractToolName(part: Record<string, unknown>): string {
     const type = typeof part["type"] === "string" ? part["type"].toLowerCase() : "";
-    const directTool =
-      (typeof part["toolName"] === "string" && part["toolName"].trim()) ||
-      (typeof part["tool"] === "string" && part["tool"].trim()) ||
-      (typeof part["name"] === "string" && part["name"].trim()) ||
-      null;
+    const directTool = this.readNonEmptyString(part["toolName"])
+      || this.readNonEmptyString(part["tool"])
+      || this.readNonEmptyString(part["name"]);
 
     if (directTool && type.includes("tool")) {
       return directTool;
     }
 
     const toolRecord = this.asRecord(part["tool"]);
-    if (typeof toolRecord["name"] === "string" && toolRecord["name"].trim()) {
-      return toolRecord["name"].trim();
-    }
-    if (typeof toolRecord["id"] === "string" && toolRecord["id"].trim()) {
-      return toolRecord["id"].trim();
+    const toolRecordName = this.readNonEmptyString(toolRecord["name"])
+      || this.readNonEmptyString(toolRecord["id"]);
+    if (toolRecordName) {
+      return toolRecordName;
     }
 
     const callRecord = this.asRecord(part["call"]);
-    if (typeof callRecord["tool"] === "string" && callRecord["tool"].trim()) {
-      return callRecord["tool"].trim();
-    }
-    if (typeof callRecord["name"] === "string" && callRecord["name"].trim()) {
-      return callRecord["name"].trim();
-    }
-    if (typeof callRecord["id"] === "string" && callRecord["id"].trim()) {
-      return callRecord["id"].trim();
-    }
-
-    return null;
+    return this.readNonEmptyString(callRecord["tool"])
+      || this.readNonEmptyString(callRecord["name"])
+      || this.readNonEmptyString(callRecord["id"]);
   }
 
   private extractPartDetail(part: Record<string, unknown>): string {
@@ -1674,7 +1694,7 @@ export class OpenCodeClient {
       .map((value) => value.trim())
       .filter(Boolean);
 
-    return textCandidates[0] ?? "";
+    return textCandidates[0] || "";
   }
 
   private extractReasoningDetail(part: Record<string, unknown>): string {
@@ -1767,7 +1787,7 @@ export class OpenCodeClient {
     hasPlaceholderValue: boolean;
     parseMode: OpenCodeRuntimeActivity["detailParseMode"];
   } {
-    if (value == null || depth > 4) {
+    if ((!value && value !== 0 && value !== false) || depth > 4) {
       return {
         detail: "",
         payloadKeyCount: 0,
@@ -1846,7 +1866,7 @@ export class OpenCodeClient {
     const record = this.asRecord(value);
     const preferredEntries = Object.entries(record)
       .filter(([key, item]) => {
-        if (item == null || item === "") {
+        if ((!item && item !== 0 && item !== false) || item === "") {
           return false;
         }
         return !["output", "result", "response", "summary", "reasoning"].includes(key);
@@ -1855,18 +1875,14 @@ export class OpenCodeClient {
       .map(([key, item]) => {
         const summarized = this.extractStructuredToolCallDetail(item, depth + 1);
         return summarized.detail
-          ? {
+          ? [{
               detail: `${key}=${summarized.detail}`,
               payloadKeyCount: summarized.payloadKeyCount,
               hasPlaceholderValue: summarized.hasPlaceholderValue,
-            }
-          : null;
+            }]
+          : [];
       })
-      .filter((item): item is {
-        detail: string;
-        payloadKeyCount: number;
-        hasPlaceholderValue: boolean;
-      } => item !== null);
+      .flat();
 
     if (preferredEntries.length > 0) {
       return {
@@ -1925,7 +1941,7 @@ export class OpenCodeClient {
   }
 
   private extractStructuredArgsDetail(value: unknown, depth = 0): string {
-    if (value == null || depth > 4) {
+    if ((!value && value !== 0 && value !== false) || depth > 4) {
       return "";
     }
 
@@ -1959,7 +1975,7 @@ export class OpenCodeClient {
     const record = this.asRecord(value);
     const preferredEntries = Object.entries(record)
       .filter(([key, item]) => {
-        if (item == null || item === "") {
+        if ((!item && item !== 0 && item !== false) || item === "") {
           return false;
         }
         return !["output", "result", "response", "summary", "reasoning"].includes(key);
@@ -1988,7 +2004,7 @@ export class OpenCodeClient {
   }
 
   private extractStructuredDetail(value: unknown, depth = 0): string {
-    if (value == null || depth > 3) {
+    if ((!value && value !== 0 && value !== false) || depth > 3) {
       return "";
     }
 
@@ -2040,7 +2056,7 @@ export class OpenCodeClient {
     }
 
     const entries = Object.entries(record)
-      .filter(([, item]) => item != null && item !== "")
+      .filter(([, item]) => item !== "" && item !== false && item !== 0 && Boolean(item))
       .slice(0, 4)
       .map(([key, item]) => {
         const summarized = this.extractStructuredDetail(item, depth + 1) || this.shortenText(String(item), 40);
@@ -2055,7 +2071,11 @@ export class OpenCodeClient {
     return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   }
 
-  private extractEventError(value: unknown): string | null {
+  private readNonEmptyString(value: unknown): string {
+    return typeof value === "string" && value.trim() ? value.trim() : "";
+  }
+
+  private extractEventError(value: unknown): string {
     const record = this.asRecord(value);
     if (typeof record["message"] === "string") {
       return record["message"];
@@ -2064,10 +2084,10 @@ export class OpenCodeClient {
     if (typeof data["message"] === "string") {
       return data["message"];
     }
-    return null;
+    return "";
   }
 
-  private toIsoString(value: unknown): string | null {
+  private toIsoString(value: unknown): string {
     if (typeof value === "string") {
       const parsed = new Date(value);
       return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
@@ -2075,7 +2095,7 @@ export class OpenCodeClient {
     if (typeof value === "number") {
       return new Date(value).toISOString();
     }
-    return null;
+    return "";
   }
 
   private async waitForHealthy(baseUrl: string): Promise<boolean> {

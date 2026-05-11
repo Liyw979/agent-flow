@@ -4,6 +4,45 @@ import assert from "node:assert/strict";
 import { OpenCodeRunner } from "./opencode-runner";
 import { toUtcIsoTimestamp } from "@shared/types";
 
+function createMessage(
+  id: string,
+  content: string,
+  timestamp: string,
+  sender: string,
+  error: string,
+) {
+  return {
+    id,
+    content,
+    sender,
+    timestamp: toUtcIsoTimestamp(timestamp),
+    error,
+    raw: {},
+  };
+}
+
+function createRecoveryResult(result: {
+  status: "completed" | "error";
+  finalMessage: string;
+  messageId: string;
+  timestamp: string;
+  rawMessage: ReturnType<typeof createMessage>;
+}) {
+  return {
+    kind: "recovered" as const,
+    result: {
+      ...result,
+      timestamp: toUtcIsoTimestamp(result.timestamp),
+    },
+  };
+}
+
+function createTimedOutRecoveryResult() {
+  return {
+    kind: "timed_out" as const,
+  };
+}
+
 function createClockRecorder() {
   const delays: number[] = [];
   return {
@@ -34,14 +73,7 @@ for (const scenario of [
       finalMessage: "补回来的正式回复",
       messageId: "msg-final",
       timestamp: toUtcIsoTimestamp(scenario.timestamp),
-      rawMessage: {
-        id: "msg-final",
-        content: "补回来的正式回复",
-        sender: "assistant",
-        timestamp: toUtcIsoTimestamp(scenario.messageTimestamp),
-        error: null,
-        raw: null,
-      },
+      rawMessage: createMessage("msg-final", "补回来的正式回复", scenario.messageTimestamp, "assistant", ""),
     };
 
     const client = {
@@ -61,7 +93,11 @@ for (const scenario of [
         assert.equal(sessionId, "session-1");
         assert.match(startedAt, /^\d{4}-\d{2}-\d{2}T/);
         assert.equal(errorMessage, scenario.errorMessage);
-        return expectedResult;
+        return createRecoveryResult({
+          ...expectedResult,
+          timestamp: scenario.timestamp,
+          rawMessage: expectedResult.rawMessage,
+        });
       },
     };
 
@@ -90,12 +126,7 @@ test("submitMessage 连续失败两次时，runner 会重试两次并返回第�
         throw new Error("temporary upstream failure");
       }
       return {
-        id: "msg-submitted",
-        content: "",
-        sender: "assistant",
-        timestamp: toUtcIsoTimestamp("2026-05-07T10:00:00.000Z"),
-        error: null,
-        raw: null,
+        ...createMessage("msg-submitted", "", "2026-05-07T10:00:00.000Z", "assistant", ""),
       };
     },
     resolveExecutionResult: async () => ({
@@ -103,14 +134,7 @@ test("submitMessage 连续失败两次时，runner 会重试两次并返回第�
       finalMessage: "第二次提交成功",
       messageId: "msg-final",
       timestamp: toUtcIsoTimestamp("2026-05-07T10:00:02.000Z"),
-      rawMessage: {
-        id: "msg-final",
-        content: "第二次提交成功",
-        sender: "assistant",
-        timestamp: toUtcIsoTimestamp("2026-05-07T10:00:02.000Z"),
-        error: null,
-        raw: null,
-      },
+      rawMessage: createMessage("msg-final", "第二次提交成功", "2026-05-07T10:00:02.000Z", "assistant", ""),
     }),
       recoverExecutionResultAfterTransportError: async (
       cwd: string,
@@ -123,7 +147,7 @@ test("submitMessage 连续失败两次时，runner 会重试两次并返回第�
       assert.equal(sessionId, "session-1");
       assert.match(startedAt, /^\d{4}-\d{2}-\d{2}T/);
       assert.equal(errorMessage, "temporary upstream failure");
-      return null;
+      return createTimedOutRecoveryResult();
     },
   };
 
@@ -154,12 +178,7 @@ test("recovery 连续抛错两次时，runner 会继续重试直到第三次成�
         throw new Error("temporary upstream failure");
       }
       return {
-        id: "msg-submitted",
-        content: "",
-        sender: "assistant",
-        timestamp: toUtcIsoTimestamp("2026-05-07T10:00:00.000Z"),
-        error: null,
-        raw: null,
+        ...createMessage("msg-submitted", "", "2026-05-07T10:00:00.000Z", "assistant", ""),
       };
     },
     resolveExecutionResult: async () => ({
@@ -167,14 +186,7 @@ test("recovery 连续抛错两次时，runner 会继续重试直到第三次成�
       finalMessage: "第三次尝试成功",
       messageId: "msg-final",
       timestamp: toUtcIsoTimestamp("2026-05-07T10:00:02.000Z"),
-      rawMessage: {
-        id: "msg-final",
-        content: "第三次尝试成功",
-        sender: "assistant",
-        timestamp: toUtcIsoTimestamp("2026-05-07T10:00:02.000Z"),
-        error: null,
-        raw: null,
-      },
+      rawMessage: createMessage("msg-final", "第三次尝试成功", "2026-05-07T10:00:02.000Z", "assistant", ""),
     }),
     recoverExecutionResultAfterTransportError: async () => {
       recoverCount += 1;
@@ -206,14 +218,7 @@ test("resolveExecutionResult 连续返回两次 error 结果时，runner 会重�
   const client = {
     submitMessage: async () => {
       submitCount += 1;
-      return {
-        id: `msg-submitted-${submitCount}`,
-        content: "",
-        sender: "assistant",
-        timestamp: toUtcIsoTimestamp("2026-05-07T10:00:00.000Z"),
-        error: null,
-        raw: null,
-      };
+      return createMessage(`msg-submitted-${submitCount}`, "", "2026-05-07T10:00:00.000Z", "assistant", "");
     },
     resolveExecutionResult: async () => {
       resolveCount += 1;
@@ -223,14 +228,7 @@ test("resolveExecutionResult 连续返回两次 error 结果时，runner 会重�
           finalMessage: "temporary upstream failure",
           messageId: "msg-error",
           timestamp: toUtcIsoTimestamp("2026-05-07T10:00:01.000Z"),
-          rawMessage: {
-            id: "msg-error",
-            content: "",
-            sender: "assistant",
-            timestamp: toUtcIsoTimestamp("2026-05-07T10:00:01.000Z"),
-            error: "temporary upstream failure",
-            raw: null,
-          },
+          rawMessage: createMessage("msg-error", "", "2026-05-07T10:00:01.000Z", "assistant", "temporary upstream failure"),
         };
       }
       return {
@@ -238,14 +236,7 @@ test("resolveExecutionResult 连续返回两次 error 结果时，runner 会重�
         finalMessage: "重试后恢复成功",
         messageId: "msg-final",
         timestamp: toUtcIsoTimestamp("2026-05-07T10:00:03.000Z"),
-        rawMessage: {
-          id: "msg-final",
-          content: "重试后恢复成功",
-          sender: "assistant",
-          timestamp: toUtcIsoTimestamp("2026-05-07T10:00:03.000Z"),
-          error: null,
-          raw: null,
-        },
+        rawMessage: createMessage("msg-final", "重试后恢复成功", "2026-05-07T10:00:03.000Z", "assistant", ""),
       };
     },
     recoverExecutionResultAfterTransportError: async (
@@ -259,7 +250,7 @@ test("resolveExecutionResult 连续返回两次 error 结果时，runner 会重�
       assert.equal(sessionId, "session-1");
       assert.match(startedAt, /^\d{4}-\d{2}-\d{2}T/);
       assert.equal(errorMessage, "temporary upstream failure");
-      return null;
+      return createTimedOutRecoveryResult();
     },
   };
 
@@ -286,14 +277,7 @@ test("resolveExecutionResult 持续返回 error 结果时，runner 不应因固�
   const client = {
     submitMessage: async () => {
       submitCount += 1;
-      return {
-        id: `msg-submitted-${submitCount}`,
-        content: "",
-        sender: "assistant",
-        timestamp: toUtcIsoTimestamp("2026-05-07T10:00:00.000Z"),
-        error: null,
-        raw: null,
-      };
+      return createMessage(`msg-submitted-${submitCount}`, "", "2026-05-07T10:00:00.000Z", "assistant", "");
     },
     resolveExecutionResult: async () => {
       if (submitCount <= 3) {
@@ -302,14 +286,7 @@ test("resolveExecutionResult 持续返回 error 结果时，runner 不应因固�
           finalMessage: "temporary upstream failure",
           messageId: `msg-error-${submitCount}`,
           timestamp: toUtcIsoTimestamp("2026-05-07T10:00:01.000Z"),
-          rawMessage: {
-            id: `msg-error-${submitCount}`,
-            content: "",
-            sender: "assistant",
-            timestamp: toUtcIsoTimestamp("2026-05-07T10:00:01.000Z"),
-            error: "temporary upstream failure",
-            raw: null,
-          },
+          rawMessage: createMessage(`msg-error-${submitCount}`, "", "2026-05-07T10:00:01.000Z", "assistant", "temporary upstream failure"),
         };
       }
       return {
@@ -317,17 +294,10 @@ test("resolveExecutionResult 持续返回 error 结果时，runner 不应因固�
         finalMessage: "第四次重试成功",
         messageId: "msg-final",
         timestamp: toUtcIsoTimestamp("2026-05-07T10:01:01.000Z"),
-        rawMessage: {
-          id: "msg-final",
-          content: "第四次重试成功",
-          sender: "assistant",
-          timestamp: toUtcIsoTimestamp("2026-05-07T10:01:01.000Z"),
-          error: null,
-          raw: null,
-        },
+        rawMessage: createMessage("msg-final", "第四次重试成功", "2026-05-07T10:01:01.000Z", "assistant", ""),
       };
     },
-    recoverExecutionResultAfterTransportError: async () => null,
+    recoverExecutionResultAfterTransportError: async () => createTimedOutRecoveryResult(),
   };
 
   const runner = new OpenCodeRunner(client as never, clock);
@@ -361,35 +331,21 @@ test("recovery 连续返回两次 error 结果时，runner 会继续重试直到
     recoverExecutionResultAfterTransportError: async () => {
       recoverCount += 1;
       if (recoverCount <= 2) {
-        return {
-          status: "error" as const,
+        return createRecoveryResult({
+          status: "error",
           finalMessage: `recovered error ${recoverCount}`,
           messageId: `msg-error-${recoverCount}`,
-          timestamp: toUtcIsoTimestamp("2026-05-07T10:00:01.000Z"),
-          rawMessage: {
-            id: `msg-error-${recoverCount}`,
-            content: "",
-            sender: "assistant",
-            timestamp: toUtcIsoTimestamp("2026-05-07T10:00:01.000Z"),
-            error: `recovered error ${recoverCount}`,
-            raw: null,
-          },
-        };
+          timestamp: "2026-05-07T10:00:01.000Z",
+          rawMessage: createMessage(`msg-error-${recoverCount}`, "", "2026-05-07T10:00:01.000Z", "assistant", `recovered error ${recoverCount}`),
+        });
       }
-      return {
-        status: "completed" as const,
+      return createRecoveryResult({
+        status: "completed",
         finalMessage: "第三次 recovery 成功",
         messageId: "msg-final",
-        timestamp: toUtcIsoTimestamp("2026-05-07T10:00:03.000Z"),
-        rawMessage: {
-          id: "msg-final",
-          content: "第三次 recovery 成功",
-          sender: "assistant",
-          timestamp: toUtcIsoTimestamp("2026-05-07T10:00:03.000Z"),
-          error: null,
-          raw: null,
-        },
-      };
+        timestamp: "2026-05-07T10:00:03.000Z",
+        rawMessage: createMessage("msg-final", "第三次 recovery 成功", "2026-05-07T10:00:03.000Z", "assistant", ""),
+      });
     },
   };
 
@@ -417,32 +373,18 @@ test("正常完成的回复不应触发重试", async () => {
   const client = {
     submitMessage: async () => {
       submitCount += 1;
-      return {
-        id: "msg-submitted",
-        content: "",
-        sender: "assistant",
-        timestamp: toUtcIsoTimestamp("2026-05-07T10:00:00.000Z"),
-        error: null,
-        raw: null,
-      };
+      return createMessage("msg-submitted", "", "2026-05-07T10:00:00.000Z", "assistant", "");
     },
     resolveExecutionResult: async () => ({
       status: "completed" as const,
       finalMessage: "分析结论：本次已正常完成",
       messageId: "msg-final",
       timestamp: toUtcIsoTimestamp("2026-05-07T10:00:02.000Z"),
-      rawMessage: {
-        id: "msg-final",
-        content: "分析结论：本次已正常完成",
-        sender: "assistant",
-        timestamp: toUtcIsoTimestamp("2026-05-07T10:00:02.000Z"),
-        error: null,
-        raw: null,
-      },
+      rawMessage: createMessage("msg-final", "分析结论：本次已正常完成", "2026-05-07T10:00:02.000Z", "assistant", ""),
     }),
     recoverExecutionResultAfterTransportError: async () => {
       recoverCount += 1;
-      return null;
+      return createTimedOutRecoveryResult();
     },
   };
 

@@ -5,15 +5,15 @@ interface ResolveOpenCodeRequestTimeoutInput {
   method: "GET" | "POST";
 }
 
-export function resolveOpenCodeRequestTimeoutMs(
+export function shouldTimeboxOpenCodeRequest(
   input: ResolveOpenCodeRequestTimeoutInput,
-): number | null {
-  if (
+): boolean {
+  return !(
     input.method === "POST"
     && /^\/session\/[^/]+\/message$/.test(input.pathname)
-  ) {
-    return null;
-  }
+  );
+}
 
+export function getOpenCodeRequestTimeoutMs(): number {
   return SESSION_CREATE_TIMEOUT_MS;
 }
