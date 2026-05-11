@@ -57,18 +57,16 @@ test("可写 Agent 仍会注入自定义 prompt，只是不追加只读权限", 
     { id: "QA", prompt: "你是 QA。", isWritable: false },
   ]);
 
-  assert.notEqual(injected, null);
-
-  const parsed = JSON.parse(injected ?? "{}") as {
-    agent?: Record<string, { prompt?: string; permission?: Record<string, string> }>;
-  };
-
-  assert.deepEqual(Object.keys(parsed.agent ?? {}), ["BA", "QA"]);
-  assert.deepEqual(parsed.agent?.["BA"], {
+  assert.deepEqual(Object.keys(injected.agent), ["BA", "QA"]);
+  assert.deepEqual(injected.agent["BA"], {
     prompt: "你是 BA。",
     mode: "primary",
   });
-  assert.deepEqual(parsed.agent?.["QA"]?.permission, {
+  const qaConfig = injected.agent["QA"];
+  if (!qaConfig || !("permission" in qaConfig)) {
+    assert.fail("QA 应带只读权限");
+  }
+  assert.deepEqual(qaConfig.permission, {
     write: "deny",
     edit: "deny",
     bash: "deny",
@@ -84,13 +82,11 @@ test("不可写 Agent 会拒绝写入与联网相关 OpenCode 工具权限", () 
     { id: "QA", prompt: "你是 QA。", isWritable: false },
   ]);
 
-  assert.notEqual(injected, null);
-
-  const parsed = JSON.parse(injected ?? "{}") as {
-    agent?: Record<string, { permission?: Record<string, unknown> }>;
-  };
-
-  assert.deepEqual(parsed.agent?.["QA"]?.permission, {
+  const qaConfig = injected.agent["QA"];
+  if (!qaConfig || !("permission" in qaConfig)) {
+    assert.fail("QA 应带只读权限");
+  }
+  assert.deepEqual(qaConfig.permission, {
     write: "deny",
     edit: "deny",
     bash: "deny",
@@ -106,12 +102,7 @@ test("单个可写 Agent 也必须注入 OpenCode agent prompt 配置", () => {
     { id: "BA", prompt: "你是 BA。", isWritable: true },
   ]);
 
-  assert.notEqual(injected, null);
-
-  const parsed = JSON.parse(injected ?? "{}") as {
-    agent?: Record<string, { prompt?: string; permission?: Record<string, string> }>;
-  };
-  assert.deepEqual(parsed.agent?.["BA"], {
+  assert.deepEqual(injected.agent["BA"], {
     prompt: "你是 BA。",
     mode: "primary",
   });

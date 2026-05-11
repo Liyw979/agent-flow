@@ -4,7 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { appendAppLog, buildTaskLogFilePath, initAppFileLogger } from "./app-log";
+import {
+  appendAppLog,
+  buildTaskLogFilePath,
+  initAppFileLogger,
+  runWithTaskLogScope,
+} from "./app-log";
 
 function createTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "agent-team-app-log-"));
@@ -14,8 +19,10 @@ test("appendAppLog writes task-scoped records into logs/tasks/<taskId>.log", () 
   const userDataPath = createTempDir();
   initAppFileLogger(userDataPath);
 
-  appendAppLog("info", "task.started", { cwd: "/workspace" }, { taskId: "task-123" });
-  appendAppLog("error", "task.failed", { reason: "boom" }, { runtimeKey: "task-123" });
+  runWithTaskLogScope("task-123", () => {
+    appendAppLog("info", "task.started", { cwd: "/workspace" });
+    appendAppLog("error", "task.failed", { reason: "boom" });
+  });
 
   const logFilePath = buildTaskLogFilePath(userDataPath, "task-123");
   const lines = fs.readFileSync(logFilePath, "utf8").trim().split("\n");
@@ -31,7 +38,9 @@ test("appendAppLog does not recreate the legacy agent-team.log file", () => {
   const userDataPath = createTempDir();
   initAppFileLogger(userDataPath);
 
-  appendAppLog("warn", "task.warning", { message: "check" }, { taskId: "task-456" });
+  runWithTaskLogScope("task-456", () => {
+    appendAppLog("warn", "task.warning", { message: "check" });
+  });
 
   assert.equal(
     fs.existsSync(path.join(userDataPath, "logs", "agent-team.log")),
@@ -48,8 +57,8 @@ test("appendAppLog ignores entries without a task-scoped log id", () => {
   initAppFileLogger(userDataPath);
 
   appendAppLog("info", "cli.run_failed", { message: "missing task scope" });
-  appendAppLog("info", "cli.run_failed", { message: "path runtime key" }, {
-    runtimeKey: "D:\\workspace",
+  runWithTaskLogScope("D:\\workspace", () => {
+    appendAppLog("info", "cli.run_failed", { message: "path cwd" });
   });
 
   const taskLogDir = path.join(userDataPath, "logs", "tasks");

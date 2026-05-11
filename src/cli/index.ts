@@ -5,7 +5,12 @@ import process from "node:process";
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import type { TaskSnapshot, WorkspaceSnapshot } from "@shared/types";
 import open from "open";
-import { appendAppLog, buildTaskLogFilePath, initAppFileLogger } from "../runtime/app-log";
+import {
+  appendAppLog,
+  buildTaskLogFilePath,
+  initAppFileLogger,
+  runWithTaskLogScope,
+} from "../runtime/app-log";
 import { Orchestrator } from "../runtime/orchestrator";
 import { resolveCliUserDataPath } from "../runtime/user-data-path";
 import { compileTeamDsl, matchesAppliedTeamDsl } from "../runtime/team-dsl";
@@ -498,15 +503,14 @@ async function run() {
 
 void run().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  appendAppLog(
-    "error",
-    "cli.run_failed",
-    {
-      cwd: process.cwd(),
-      message,
-    },
-    activeTaskDiagnosticsForCrash ? { taskId: activeTaskDiagnosticsForCrash.taskId } : undefined,
-  );
+  if (activeTaskDiagnosticsForCrash) {
+    runWithTaskLogScope(activeTaskDiagnosticsForCrash.taskId, () => {
+      appendAppLog("error", "cli.run_failed", {
+        cwd: process.cwd(),
+        message,
+      });
+    });
+  }
   if (activeTaskDiagnosticsForCrash && !didPrintTaskDiagnosticsForCrash) {
     printTaskRunDiagnostics(activeTaskDiagnosticsForCrash);
     didPrintTaskDiagnosticsForCrash = true;
