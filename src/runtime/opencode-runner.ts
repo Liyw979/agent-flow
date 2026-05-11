@@ -1,13 +1,13 @@
 import {
   OpenCodeClient,
   type OpenCodeExecutionResult,
-  type OpenCodeRuntimeTarget,
   type SubmitMessagePayload,
 } from "./opencode-client";
+import { runWithTaskLogScope } from "./app-log";
 
 interface RunAgentPayload extends SubmitMessagePayload {
-  runtimeTarget?: OpenCodeRuntimeTarget;
-  projectPath?: string;
+  cwd: string;
+  taskId: string;
   sessionId: string;
 }
 
@@ -59,39 +59,38 @@ export class OpenCodeRunner {
   ) {}
 
   async run(payload: RunAgentPayload): Promise<OpenCodeExecutionResult> {
-    const runtimeTarget = payload.runtimeTarget ?? payload.projectPath;
-    if (!runtimeTarget) {
-      throw new Error("OpenCode runner 缺少 runtimeTarget/projectPath");
-    }
+    return runWithTaskLogScope(payload.taskId, async () => {
+      const { cwd } = payload;
 
-    while (true) {
-      const startedAt = new Date().toISOString();
-      const attemptResult = await this.executeAttempt(runtimeTarget, payload);
-      if ("status" in attemptResult) {
-        return attemptResult;
-      }
+      while (true) {
+        const startedAt = new Date().toISOString();
+        const attemptResult = await this.executeAttempt(cwd, payload);
+        if ("status" in attemptResult) {
+          return attemptResult;
+        }
 
-      const recoveryAttempt = await this.recoverAttempt(
-        runtimeTarget,
-        payload.sessionId,
-        startedAt,
-        attemptResult.errorMessage,
-      );
-      if (recoveryAttempt.kind === "completed") {
-        return recoveryAttempt.result;
+        const recoveryAttempt = await this.recoverAttempt(
+          cwd,
+          payload.sessionId,
+          startedAt,
+          attemptResult.errorMessage,
+        );
+        if (recoveryAttempt.kind === "completed") {
+          return recoveryAttempt.result;
+        }
+        await this.clock.sleep(RETRYABLE_EXECUTION_INTERVAL_MS);
       }
-      await this.clock.sleep(RETRYABLE_EXECUTION_INTERVAL_MS);
-    }
+    });
   }
 
   private async executeAttempt(
-    runtimeTarget: OpenCodeRuntimeTarget | string,
+    cwd: string,
     payload: RunAgentPayload,
   ): Promise<OpenCodeExecutionResult | AttemptFailure> {
     try {
-      const submitted = await this.client.submitMessage(runtimeTarget, payload.sessionId, payload);
+      const submitted = await this.client.submitMessage(cwd, payload.sessionId, payload);
       const result = await this.client.resolveExecutionResult(
-        runtimeTarget,
+        cwd,
         payload.sessionId,
         submitted,
         payload.agent,
@@ -115,14 +114,14 @@ export class OpenCodeRunner {
   }
 
   private async recoverAttempt(
-    runtimeTarget: OpenCodeRuntimeTarget | string,
+    cwd: string,
     sessionId: string,
     startedAt: string,
     errorMessage: string,
   ): Promise<RecoveryAttempt> {
     try {
       const recovered = await this.client.recoverExecutionResultAfterTransportError(
-        runtimeTarget,
+        cwd,
         sessionId,
         startedAt,
         errorMessage,

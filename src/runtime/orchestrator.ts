@@ -62,7 +62,6 @@ import {
   type OpenCodeExecutionResult,
   type OpenCodeRuntimeActivity,
   type OpenCodeShutdownReport,
-  type OpenCodeRuntimeTarget,
 } from "./opencode-client";
 import { OpenCodeRunner } from "./opencode-runner";
 import { StoreService } from "./store";
@@ -105,8 +104,10 @@ import {
   extractDslAgentsFromTopology,
   resolveProjectAgents,
   validateProjectAgents,
+  type OpenCodeInjectedConfig,
 } from "./project-agent-source";
 import { launchTerminalCommand } from "./terminal-launcher";
+import { runWithTaskLogScope } from "./app-log";
 
 const RUNTIME_PROGRESS_SYNC_INTERVAL_MS = 200;
 
@@ -201,7 +202,6 @@ interface WorkspaceRecord {
 interface TaskRuntimeOverlay {
   taskId: string;
   cwd: string;
-  runtimeTarget: OpenCodeRuntimeTarget;
   attachBaseUrl: string;
   agentSessions: Map<string, string>;
   persistedActivityIdsByAgent: Map<string, Set<string>>;
@@ -244,7 +244,7 @@ export class Orchestrator {
   private readonly langGraphRuntimes = new Map<string, LangGraphRuntime>();
   private readonly enableEventStream: boolean;
   private readonly taskRuntimeOverlays = new Map<string, TaskRuntimeOverlay>();
-  private readonly connectedRuntimeTaskIds = new Set<string>();
+  private readonly runtimeEventCallbacks = new Map<string, (event: unknown) => void>();
   private readonly pendingRuntimeSyncTasks = new Map<
     string,
     ReturnType<typeof setTimeout>
@@ -292,8 +292,8 @@ export class Orchestrator {
     }
     this.langGraphRuntimes.clear();
     this.taskRuntimeOverlays.clear();
-    this.connectedRuntimeTaskIds.clear();
-    return this.opencodeClient.shutdown();
+    this.runtimeEventCallbacks.clear();
+    return this.opencodeClient.shutdownAll();
   }
 
   subscribe(listener: (event: AgentTeamEvent) => void): () => void {
@@ -396,7 +396,7 @@ export class Orchestrator {
     this.store.upsertTopology(normalizedCwd, normalized);
     for (const overlay of this.taskRuntimeOverlays.values()) {
       if (overlay.cwd === normalizedCwd) {
-        this.setInjectedConfigForTask({
+        await this.setInjectedConfigForTask({
           id: overlay.taskId,
           cwd: overlay.cwd,
         });
@@ -410,16 +410,22 @@ export class Orchestrator {
     const task = this.store.getTask(normalizedCwd, payload.taskId);
     await this.deleteTaskGraphRuntime(task);
     this.taskRuntimeOverlays.delete(task.id);
-    this.connectedRuntimeTaskIds.delete(task.id);
     const runtimeSyncTimer = this.pendingRuntimeSyncTasks.get(task.id);
     if (runtimeSyncTimer) {
       clearTimeout(runtimeSyncTimer);
       this.pendingRuntimeSyncTasks.delete(task.id);
     }
-    const reconnectTimer = this.pendingEventReconnects.get(task.id);
-    if (reconnectTimer) {
+    const hasRemainingOverlayOnCwd = [...this.taskRuntimeOverlays.values()]
+      .some((overlay) => path.resolve(overlay.cwd) === normalizedCwd);
+    const runtimeEventCallback = this.runtimeEventCallbacks.get(normalizedCwd);
+    if (!hasRemainingOverlayOnCwd && runtimeEventCallback) {
+      this.opencodeClient.disconnectEvents(normalizedCwd, runtimeEventCallback);
+      this.runtimeEventCallbacks.delete(normalizedCwd);
+    }
+    const reconnectTimer = this.pendingEventReconnects.get(normalizedCwd);
+    if (!hasRemainingOverlayOnCwd && reconnectTimer) {
       clearTimeout(reconnectTimer);
-      this.pendingEventReconnects.delete(task.id);
+      this.pendingEventReconnects.delete(normalizedCwd);
     }
     this.store.deleteTask(normalizedCwd, task.id);
     return this.hydrateWorkspace(normalizedCwd);
@@ -524,7 +530,6 @@ export class Orchestrator {
       task,
       this.store.listTaskAgents(normalizedCwd, task.id),
     );
-    const runtimeTarget = this.getTaskRuntimeTarget(task);
     return Promise.all(
       overlayAgents.map(async (agent) => {
         const baseSnapshot: AgentRuntimeSnapshot = {
@@ -545,10 +550,11 @@ export class Orchestrator {
         }
 
         try {
-          const runtime = await this.opencodeClient.getSessionRuntime(
-            runtimeTarget,
-            agent.opencodeSessionId,
-          );
+          const runtime = await runWithTaskLogScope(task.id, () =>
+            this.opencodeClient.getSessionRuntime(
+              task.cwd,
+              agent.opencodeSessionId,
+            ));
           return {
             ...baseSnapshot,
             messageCount: runtime.messageCount,
@@ -1115,15 +1121,6 @@ export class Orchestrator {
     return "invalid";
   }
 
-  private getTaskRuntimeTarget(
-    task: Pick<TaskRecord, "id" | "cwd">,
-  ): OpenCodeRuntimeTarget {
-    return {
-      runtimeKey: task.id,
-      projectPath: task.cwd,
-    };
-  }
-
   private ensureTaskRuntimeOverlay(
     task: Pick<TaskRecord, "id" | "cwd">,
   ): TaskRuntimeOverlay {
@@ -1136,7 +1133,6 @@ export class Orchestrator {
     const created: TaskRuntimeOverlay = {
       taskId: task.id,
       cwd: task.cwd,
-      runtimeTarget: this.getTaskRuntimeTarget(task),
       attachBaseUrl: "",
       agentSessions: new Map(),
       persistedActivityIdsByAgent: new Map(),
@@ -1167,17 +1163,14 @@ export class Orchestrator {
     if (existingSessionId) {
       return existingSessionId;
     }
-
-    this.setInjectedConfigForTask(task);
-    if (!overlay.attachBaseUrl) {
-      overlay.attachBaseUrl = await this.opencodeClient.getAttachBaseUrl(
-        overlay.runtimeTarget,
+    const sessionId = await runWithTaskLogScope(task.id, async () => {
+      await this.setInjectedConfigForTask(task);
+      overlay.attachBaseUrl = await this.opencodeClient.getAttachBaseUrl(task.cwd);
+      return this.opencodeClient.createSession(
+        task.cwd,
+        `${task.title}:${agent.id}`,
       );
-    }
-    const sessionId = await this.opencodeClient.createSession(
-      overlay.runtimeTarget,
-      `${task.title}:${agent.id}`,
-    );
+    });
     overlay.agentSessions.set(agent.id, sessionId);
     return sessionId;
   }
@@ -1251,7 +1244,7 @@ export class Orchestrator {
   }
 
   private async launchAgentTerminal(
-    projectPath: string,
+    cwd: string,
     opencodeSessionId: string,
     sessionAttachBaseUrl: string,
   ) {
@@ -1263,7 +1256,7 @@ export class Orchestrator {
       opencodeSessionId,
     );
     await this.terminalLauncher({
-      cwd: projectPath,
+      cwd,
       command: attachCommand,
     });
   }
@@ -1276,11 +1269,11 @@ export class Orchestrator {
     return (firstLine ?? "未命名任务").slice(0, 80);
   }
 
-  private setInjectedConfigForTask(task: Pick<TaskRecord, "id" | "cwd">) {
-    this.opencodeClient.setInjectedConfigContent(
-      this.getTaskRuntimeTarget(task),
-      buildInjectedConfigFromAgents(this.listWorkspaceAgents(task.cwd)),
+  private async setInjectedConfigForTask(task: Pick<TaskRecord, "id" | "cwd">) {
+    const injectedConfig: OpenCodeInjectedConfig = buildInjectedConfigFromAgents(
+      this.listWorkspaceAgents(task.cwd),
     );
+    await this.opencodeClient.setInjectedConfigContent(task.cwd, injectedConfig);
   }
 
   private findAgent(
@@ -1978,7 +1971,7 @@ export class Orchestrator {
     concurrentBatchSize: number,
     forwardedAgentMessage: string,
   ): Promise<GraphAgentResult> {
-    this.setInjectedConfigForTask(task);
+    await this.setInjectedConfigForTask(task);
     this.store.updateTaskAgentRun(task.cwd, task.id, runtimeAgentId, "running");
     this.updateTaskStatusIfActive(task.cwd, task.id, "running");
     const currentAgent = this.store
@@ -2055,7 +2048,8 @@ export class Orchestrator {
         executableAgentId,
       });
       const responsePromise = this.opencodeRunner.run({
-        runtimeTarget: this.getTaskRuntimeTarget(currentTask),
+        cwd: currentTask.cwd,
+        taskId: task.id,
         sessionId: agentSessionId,
         content: dispatchedContent,
         agent: executableAgentId,
@@ -2499,40 +2493,46 @@ export class Orchestrator {
     this.pendingRuntimeSyncTasks.set(taskId, timer);
   }
 
-  private scheduleEventStreamReconnect(taskId: string) {
-    const overlay = this.taskRuntimeOverlays.get(taskId);
+  private scheduleEventStreamReconnect(cwd: string) {
+    const normalizedCwd = path.resolve(cwd);
+    const overlay = [...this.taskRuntimeOverlays.values()].find((item) => path.resolve(item.cwd) === normalizedCwd);
     if (!overlay) {
       return;
     }
 
     if (
       !shouldScheduleEventStreamReconnect({
-        hasProjectRecord: this.hasWorkspaceRecord(overlay.cwd),
+        hasProjectRecord: this.hasWorkspaceRecord(normalizedCwd),
         isDisposing: this.isDisposing,
       })
     ) {
       return;
     }
-    if (this.pendingEventReconnects.has(overlay.taskId)) {
+    if (this.pendingEventReconnects.has(normalizedCwd)) {
       return;
     }
 
     const timer = setTimeout(() => {
-      this.pendingEventReconnects.delete(overlay.taskId);
+      this.pendingEventReconnects.delete(normalizedCwd);
+      const reconnectOverlay = [...this.taskRuntimeOverlays.values()]
+        .find((item) => path.resolve(item.cwd) === normalizedCwd);
+      if (!reconnectOverlay) {
+        return;
+      }
       if (
         !shouldScheduleEventStreamReconnect({
-          hasProjectRecord: this.hasWorkspaceRecord(overlay.cwd),
+          hasProjectRecord: this.hasWorkspaceRecord(normalizedCwd),
           isDisposing: this.isDisposing,
         })
       ) {
         return;
       }
       void this.ensureTaskRuntimeEventStream({
-        id: overlay.taskId,
-        cwd: overlay.cwd,
+        id: reconnectOverlay.taskId,
+        cwd: reconnectOverlay.cwd,
       });
     }, 1000);
-    this.pendingEventReconnects.set(overlay.taskId, timer);
+    this.pendingEventReconnects.set(normalizedCwd, timer);
   }
 
   private getTaskAgentRunCount(
@@ -2619,10 +2619,11 @@ export class Orchestrator {
         if (!targetAgentIds.has(agentId)) {
           continue;
         }
-      const runtime = await this.opencodeClient.getSessionRuntime(
-        overlay.runtimeTarget,
-        sessionId,
-      );
+      const runtime = await runWithTaskLogScope(overlay.taskId, () =>
+        this.opencodeClient.getSessionRuntime(
+          overlay.cwd,
+          sessionId,
+        ));
 
       const persistedActivityIds = this.getPersistedActivityIdsForAgent(
         input.taskId,
@@ -2756,22 +2757,32 @@ export class Orchestrator {
     if (!overlay) {
       return;
     }
-    if (this.connectedRuntimeTaskIds.has(task.id)) {
+    const normalizedCwd = path.resolve(overlay.cwd);
+    if (this.runtimeEventCallbacks.has(normalizedCwd)) {
       return;
     }
 
-    this.connectedRuntimeTaskIds.add(task.id);
+    const onEvent = (event: unknown) => {
+      const sessionId = this.extractSessionIdFromOpenCodeEvent(event);
+      if (!sessionId) {
+        return;
+      }
+      const runtimeOverlay = [...this.taskRuntimeOverlays.values()].find((item) =>
+        path.resolve(item.cwd) === normalizedCwd
+        && [...item.agentSessions.values()].some((currentSessionId) => currentSessionId === sessionId)
+      );
+      if (!runtimeOverlay) {
+        return;
+      }
+      this.scheduleRuntimeSync(runtimeOverlay.taskId);
+    };
+    this.runtimeEventCallbacks.set(normalizedCwd, onEvent);
     void this.opencodeClient
-      .connectEvents(overlay.runtimeTarget, (event) => {
-        if (!this.extractSessionIdFromOpenCodeEvent(event)) {
-          return;
-        }
-        this.scheduleRuntimeSync(overlay.taskId);
-      })
+      .connectEvents(normalizedCwd, onEvent)
       .catch(() => undefined)
       .finally(() => {
-        this.connectedRuntimeTaskIds.delete(task.id);
-        this.scheduleEventStreamReconnect(task.id);
+        this.runtimeEventCallbacks.delete(normalizedCwd);
+        this.scheduleEventStreamReconnect(normalizedCwd);
       });
   }
 }

@@ -25,6 +25,21 @@ type OpenCodePermissionValue =
 
 type OpenCodePermissionConfig = Record<string, OpenCodePermissionValue>;
 
+export type OpenCodeInjectedAgentConfig =
+  | {
+      mode: "primary";
+      prompt: string;
+    }
+  | {
+      mode: "primary";
+      prompt: string;
+      permission: OpenCodePermissionConfig;
+    };
+
+export interface OpenCodeInjectedConfig {
+  agent: Record<string, OpenCodeInjectedAgentConfig>;
+}
+
 function buildReadonlyAgentPermissionConfig(): OpenCodePermissionConfig {
   return {
     write: "deny",
@@ -71,31 +86,28 @@ export function extractDslAgentsFromTopology(
   }));
 }
 
-export function buildInjectedConfigFromAgents(agents: AgentRecord[]): string | null {
+export function buildInjectedConfigFromAgents(agents: AgentRecord[]): OpenCodeInjectedConfig {
   const injectedAgents = Object.fromEntries(
     agents.flatMap((agent) => {
       if (agent.id.trim().toLowerCase() === "build") {
         return [];
       }
+      const config: OpenCodeInjectedAgentConfig = agent.isWritable === true
+        ? {
+            mode: "primary",
+            prompt: agent.prompt,
+          }
+        : {
+            mode: "primary",
+            prompt: agent.prompt,
+            permission: buildReadonlyAgentPermissionConfig(),
+          };
       return [[
         toOpenCodeAgentId(agent.id),
-        agent.isWritable === true
-          ? {
-              mode: "primary",
-              prompt: agent.prompt,
-            }
-          : {
-              mode: "primary",
-              prompt: agent.prompt,
-              permission: buildReadonlyAgentPermissionConfig(),
-            },
-      ]];
+        config,
+      ] as const];
     }),
   );
 
-  if (Object.keys(injectedAgents).length === 0) {
-    return null;
-  }
-
-  return JSON.stringify({ agent: injectedAgents });
+  return { agent: injectedAgents };
 }

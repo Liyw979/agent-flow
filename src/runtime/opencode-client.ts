@@ -11,6 +11,7 @@ import { appendAppLog } from "./app-log";
 import { extractOpenCodeServeBaseUrl } from "./opencode-serve-launch";
 import { resolveOpenCodeRequestTimeoutMs } from "./opencode-request-timeout";
 import { resolveWindowsCmdPath } from "./windows-shell";
+import type { OpenCodeInjectedConfig } from "./project-agent-source";
 import { toUtcIsoTimestamp, type UtcIsoTimestamp } from "@shared/types";
 
 interface ServeHandle {
@@ -69,6 +70,7 @@ export interface OpenCodeSessionRuntime {
 
 const MAX_RUNTIME_MESSAGES = 100;
 const SERVE_BASE_URL_TIMEOUT_MS = 10_000;
+const CONFIG_UPDATE_TIMEOUT_MS = 12_000;
 const TRANSPORT_ERROR_RECOVERY_TIMEOUT_MS = 180_000;
 const RETRYABLE_CLIENT_INTERVAL_MS = 60_000;
 interface SessionWaiter {
@@ -78,12 +80,12 @@ interface SessionWaiter {
   reject: (error: Error) => void;
 }
 
-interface ProjectServerState {
-  runtimeKey: string;
-  projectPath: string;
+interface WorkspaceServerState {
+  cwd: string;
   serverHandle: Promise<ServeHandle> | null;
   eventPump: Promise<void> | null;
-  injectedConfigContent: string | null;
+  injectedConfigContent: OpenCodeInjectedConfig;
+  eventSubscribers: Set<(event: OpenCodeEvent) => void>;
 }
 
 interface RelatedTransportReplySnapshot {
@@ -130,63 +132,42 @@ type ConfiguredDecisionMode =
 class RetryableSubmitMessageError extends Error {}
 
 class RetryableExecutionResultError extends Error {}
-
-export interface OpenCodeRuntimeTarget {
-  runtimeKey: string;
-  projectPath: string;
-}
-
-type OpenCodeRuntimeTargetInput = string | OpenCodeRuntimeTarget;
-
 export interface OpenCodeShutdownReport {
   killedPids: number[];
 }
 
 export class OpenCodeClient {
-  readonly servers = new Map<string, ProjectServerState>();
+  readonly servers = new Map<string, WorkspaceServerState>();
   readonly host = "127.0.0.1";
   readonly sessionIdleAt = new Map<string, number>();
   readonly sessionErrors = new Map<string, string>();
   readonly sessionWaiters = new Map<string, SessionWaiter[]>();
+  readonly sessionCwdBySessionId = new Map<string, string>();
 
   constructor() {}
 
-  protected normalizeTarget(target: OpenCodeRuntimeTargetInput): OpenCodeRuntimeTarget {
-    if (typeof target === "string") {
-      const projectPath = path.resolve(target);
-      return {
-        runtimeKey: projectPath,
-        projectPath,
-      };
-    }
-
-    return {
-      runtimeKey: target.runtimeKey.trim(),
-      projectPath: path.resolve(target.projectPath),
-    };
-  }
-
-  protected getProjectServerState(target: OpenCodeRuntimeTargetInput): ProjectServerState {
-    const normalized = this.normalizeTarget(target);
-    const key = normalized.runtimeKey;
+  protected getWorkspaceServerState(cwd: string): WorkspaceServerState {
+    const key = path.resolve(cwd);
     const existing = this.servers.get(key);
     if (existing) {
       return existing;
     }
 
-    const created: ProjectServerState = {
-      runtimeKey: key,
-      projectPath: normalized.projectPath,
+    const created: WorkspaceServerState = {
+      cwd: key,
       serverHandle: null,
       eventPump: null,
-      injectedConfigContent: null,
+      injectedConfigContent: {
+        agent: {},
+      },
+      eventSubscribers: new Set(),
     };
     this.servers.set(key, created);
     return created;
   }
 
-  async ensureServer(target: OpenCodeRuntimeTargetInput): Promise<ServeHandle> {
-    const state = this.getProjectServerState(target);
+  async ensureServer(cwd: string): Promise<ServeHandle> {
+    const state = this.getWorkspaceServerState(cwd);
     if (state.serverHandle) {
       const cached = await state.serverHandle;
       if (this.canReuseCachedServerHandle(cached)) {
@@ -197,7 +178,7 @@ export class OpenCodeClient {
       state.eventPump = null;
     }
 
-    state.serverHandle = this.resolveServerHandle(state).catch((error) => {
+    state.serverHandle = this.startServer(state.cwd).catch((error) => {
       if (state.serverHandle) {
         state.serverHandle = null;
       }
@@ -210,76 +191,101 @@ export class OpenCodeClient {
     return Number.isInteger(cached.port) && cached.port > 0;
   }
 
-  protected async resolveServerHandle(state: ProjectServerState): Promise<ServeHandle> {
-    return this.startServer({
-      runtimeKey: state.runtimeKey,
-      projectPath: state.projectPath,
+  async setInjectedConfigContent(cwd: string, config: OpenCodeInjectedConfig): Promise<void> {
+    const state = this.getWorkspaceServerState(cwd);
+    const baseServerHandle = state.serverHandle ?? this.ensureServer(cwd);
+    const update = baseServerHandle.then(async (server) => {
+      if (JSON.stringify(config) === JSON.stringify(state.injectedConfigContent)) {
+        return server;
+      }
+      const response = await this.fetchWithTimeout(
+        `${this.buildBaseUrl(server.port)}/global/config`,
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ config }),
+        },
+        CONFIG_UPDATE_TIMEOUT_MS,
+      );
+      if (!response.ok) {
+        throw new Error(`OpenCode 配置更新失败: ${response.status}`);
+      }
+      state.injectedConfigContent = config;
+      return server;
     });
+    state.serverHandle = update.catch(() => baseServerHandle);
+    await update;
   }
 
-  setInjectedConfigContent(target: OpenCodeRuntimeTargetInput, content: string | null) {
-    const state = this.getProjectServerState(target);
-    const normalized = content?.trim();
-    const nextContent = normalized ? normalized : null;
-    if (nextContent === state.injectedConfigContent) {
-      return;
-    }
-    state.injectedConfigContent = nextContent;
-  }
-
-  async createSession(target: OpenCodeRuntimeTargetInput, title: string): Promise<string> {
-    const normalized = this.normalizeTarget(target);
+  async createSession(
+    cwd: string,
+    title: string,
+  ): Promise<string> {
+    const normalized = path.resolve(cwd);
     const response = await this.request("/session", {
       method: "POST",
-      target: normalized,
+      cwd: normalized,
       body: JSON.stringify({ title }),
     });
 
     if (!response.ok) {
       appendAppLog("error", "opencode.create_session_failed", {
-        projectPath: normalized.projectPath,
+        cwd: normalized,
         title,
         status: response.status,
         statusText: response.statusText,
-      }, {
-        runtimeKey: normalized.runtimeKey,
       });
       throw new Error(`OpenCode 创建 session 失败: ${response.status}`);
     }
 
     const data = (await this.readJsonResponse(response)) as { id?: string } | null;
     if (typeof data?.id === "string" && data.id.trim()) {
+      this.sessionCwdBySessionId.set(data.id, normalized);
       return data.id;
     }
 
     appendAppLog("error", "opencode.create_session_invalid_response", {
-      projectPath: normalized.projectPath,
+      cwd: normalized,
       title,
       status: response.status,
-    }, {
-      runtimeKey: normalized.runtimeKey,
     });
     throw new Error("OpenCode 创建 session 响应缺少有效的 session id");
   }
 
-  async connectEvents(target: OpenCodeRuntimeTargetInput, onEvent: (event: OpenCodeEvent) => void): Promise<void> {
-    const normalized = this.normalizeTarget(target);
-    const state = this.getProjectServerState(normalized);
+  async connectEvents(cwd: string, onEvent: (event: OpenCodeEvent) => void): Promise<void> {
+    const normalized = path.resolve(cwd);
+    const state = this.getWorkspaceServerState(normalized);
+    state.eventSubscribers.add(onEvent);
     const server = await this.ensureServer(normalized);
     if (state.eventPump) {
-      return;
+      return state.eventPump;
     }
 
-    state.eventPump = this.startEventPump(onEvent, server, state.runtimeKey);
+    state.eventPump = this.startEventPump((event) => {
+      for (const subscriber of state.eventSubscribers) {
+        subscriber(event);
+      }
+    }, server, state.cwd).finally(() => {
+      if (state.eventPump) {
+        state.eventPump = null;
+      }
+    });
     await state.eventPump;
   }
 
+  disconnectEvents(cwd: string, onEvent: (event: OpenCodeEvent) => void): void {
+    const state = this.servers.get(path.resolve(cwd));
+    state?.eventSubscribers.delete(onEvent);
+  }
+
   async submitMessage(
-    target: OpenCodeRuntimeTargetInput,
+    cwd: string,
     sessionId: string,
     payload: SubmitMessagePayload,
   ): Promise<OpenCodeNormalizedMessage> {
-    const normalized = this.normalizeTarget(target);
+    const normalized = path.resolve(cwd);
     const opencodeAgent = toOpenCodeAgentId(payload.agent);
     let immediateRetryUsed = false;
     while (true) {
@@ -291,7 +297,7 @@ export class OpenCodeClient {
 
         const response = await this.request(`/session/${sessionId}/message`, {
           method: "POST",
-          target: normalized,
+          cwd: normalized,
           body: JSON.stringify(body),
         }).catch((error) => {
           throw new RetryableSubmitMessageError(String(error));
@@ -304,12 +310,10 @@ export class OpenCodeClient {
         const raw = await this.readJsonResponse(response);
         if (!raw || typeof raw !== "object") {
           appendAppLog("error", "opencode.submit_message_invalid_response", {
-            projectPath: normalized.projectPath,
+            cwd: normalized,
             sessionId,
             agent: opencodeAgent,
             status: response.status,
-          }, {
-            runtimeKey: normalized.runtimeKey,
           });
           throw new RetryableSubmitMessageError("OpenCode 提交消息响应缺少有效的消息实体");
         }
@@ -317,12 +321,10 @@ export class OpenCodeClient {
         const info = this.asRecord(envelope["info"] ?? raw);
         if (typeof info["id"] !== "string" && typeof envelope["id"] !== "string") {
           appendAppLog("error", "opencode.submit_message_invalid_response", {
-            projectPath: normalized.projectPath,
+            cwd: normalized,
             sessionId,
             agent: opencodeAgent,
             status: response.status,
-          }, {
-            runtimeKey: normalized.runtimeKey,
           });
           throw new RetryableSubmitMessageError("OpenCode 提交消息响应缺少有效的消息实体");
         }
@@ -340,12 +342,12 @@ export class OpenCodeClient {
   }
 
   async resolveExecutionResult(
-    target: OpenCodeRuntimeTargetInput,
+    cwd: string,
     sessionId: string,
     submitted: OpenCodeNormalizedMessage,
     agentId: string,
   ): Promise<OpenCodeExecutionResult> {
-    const normalized = this.normalizeTarget(target);
+    const normalized = path.resolve(cwd);
     const decisionMode = this.resolveConfiguredDecisionMode(normalized, agentId);
     let currentSubmitted = submitted;
     let immediateRetryUsed = false;
@@ -430,36 +432,32 @@ export class OpenCodeClient {
   }
 
   async recoverExecutionResultAfterTransportError(
-    target: OpenCodeRuntimeTargetInput,
+    cwd: string,
     sessionId: string,
     startedAt: string,
     errorMessage: string,
     timeoutMs = TRANSPORT_ERROR_RECOVERY_TIMEOUT_MS,
   ): Promise<OpenCodeExecutionResult | null> {
-    const normalized = this.normalizeTarget(target);
+    const normalized = path.resolve(cwd);
     const startedAtMs = Date.parse(startedAt);
     const lowerBound = Number.isFinite(startedAtMs) ? startedAtMs - 2_000 : Date.now() - 2_000;
     const deadline = Date.now() + timeoutMs;
     appendAppLog("info", "opencode.transport_recovery_started", {
-      projectPath: normalized.projectPath,
+      cwd: normalized,
       sessionId,
       startedAt,
       errorMessage,
       timeoutMs,
-    }, {
-      runtimeKey: normalized.runtimeKey,
     });
 
     while (Date.now() < deadline) {
       const inspection = await this.inspectTransportRecovery(normalized, sessionId, lowerBound);
       if (inspection.kind === "recovered") {
         appendAppLog("info", "opencode.transport_recovery_succeeded", {
-          projectPath: normalized.projectPath,
+          cwd: normalized,
           sessionId,
           recoveredMessageId: inspection.result.messageId,
           recoveredAt: inspection.result.timestamp,
-        }, {
-          runtimeKey: normalized.runtimeKey,
         });
         return inspection.result;
       }
@@ -469,34 +467,30 @@ export class OpenCodeClient {
     const finalInspection = await this.inspectTransportRecovery(normalized, sessionId, lowerBound);
     if (finalInspection.kind === "recovered") {
       appendAppLog("info", "opencode.transport_recovery_succeeded", {
-        projectPath: normalized.projectPath,
+        cwd: normalized,
         sessionId,
         recoveredMessageId: finalInspection.result.messageId,
         recoveredAt: finalInspection.result.timestamp,
-      }, {
-        runtimeKey: normalized.runtimeKey,
       });
       return finalInspection.result;
     }
 
     appendAppLog("error", "opencode.transport_recovery_timed_out", {
-      projectPath: normalized.projectPath,
+      cwd: normalized,
       sessionId,
       startedAt,
       errorMessage,
       timeoutMs,
       ...this.buildTransportRecoveryTimeoutDetails(finalInspection),
-    }, {
-      runtimeKey: normalized.runtimeKey,
     });
     return null;
   }
 
   async getSessionRuntime(
-    target: OpenCodeRuntimeTargetInput,
+    cwd: string,
     sessionId: string,
   ): Promise<OpenCodeSessionRuntime> {
-    const list = await this.listSessionMessages(target, sessionId, MAX_RUNTIME_MESSAGES);
+    const list = await this.listSessionMessages(cwd, sessionId, MAX_RUNTIME_MESSAGES);
     if (list.length === 0) {
       return {
         sessionId,
@@ -510,77 +504,46 @@ export class OpenCodeClient {
     return this.buildRuntimeSnapshot(sessionId, list);
   }
 
-  async shutdown(runtimeKey?: string): Promise<OpenCodeShutdownReport> {
-    if (runtimeKey) {
-      const state = this.servers.get(runtimeKey);
-      if (!state?.serverHandle) {
-        return {
-          killedPids: [],
-        };
-      }
-
-      let report: OpenCodeShutdownReport = {
+  async shutdown(cwd: string): Promise<OpenCodeShutdownReport> {
+    const normalizedCwd = path.resolve(cwd);
+    const state = this.servers.get(normalizedCwd);
+    if (!state?.serverHandle) {
+      this.clearSessionStateForCwd(normalizedCwd);
+      state?.eventSubscribers.clear();
+      return {
         killedPids: [],
       };
-      let server: ServeHandle | null = null;
-      try {
-        server = await state.serverHandle;
-        report = await this.terminateServeHandle(server);
-      } catch {
-        // ignore shutdown errors
-      } finally {
-        state.serverHandle = null;
-        state.eventPump = null;
-      }
-      return report;
     }
 
-    const reports: OpenCodeShutdownReport[] = [];
-    for (const state of this.servers.values()) {
-      let server: ServeHandle | null = null;
-      try {
-        if (!state.serverHandle) {
-          continue;
-        }
-        server = await state.serverHandle;
-        reports.push(await this.terminateServeHandle(server));
-      } catch {
-        // ignore shutdown errors
-      } finally {
-        state.serverHandle = null;
-        state.eventPump = null;
-      }
+    let report: OpenCodeShutdownReport = {
+      killedPids: [],
+    };
+    let server: ServeHandle | null = null;
+    try {
+      server = await state.serverHandle;
+      report = await this.terminateServeHandle(server);
+    } catch {
+      // ignore shutdown errors
+    } finally {
+      state.serverHandle = null;
+      state.eventPump = null;
+      state.eventSubscribers.clear();
+      this.clearSessionStateForCwd(normalizedCwd);
     }
-    this.sessionIdleAt.clear();
-    this.sessionErrors.clear();
-    this.sessionWaiters.clear();
-    return this.mergeShutdownReports(reports);
+    return report;
   }
 
   private resolveConfiguredDecisionMode(
-    target: OpenCodeRuntimeTargetInput,
+    cwd: string,
     agentId: string,
   ): ConfiguredDecisionMode {
-    const configured = this.getProjectServerState(target).injectedConfigContent;
-    if (!configured) {
-      return {
-        kind: "plain",
-      };
-    }
-
-    const parsed = parseJson5<Record<string, unknown>>(configured);
-    const agentSection = parsed["agent"];
-    if (!agentSection || typeof agentSection !== "object" || Array.isArray(agentSection)) {
-      throw new Error("OpenCode injected config 缺少 agent 配置");
-    }
-
-    const rawAgent = (agentSection as Record<string, unknown>)[toOpenCodeAgentId(agentId)];
+    const configured = this.getWorkspaceServerState(cwd).injectedConfigContent;
+    const rawAgent = configured.agent[toOpenCodeAgentId(agentId)];
     if (!rawAgent || typeof rawAgent !== "object" || Array.isArray(rawAgent)) {
       return {
         kind: "plain",
       };
     }
-
     const prompt = (rawAgent as Record<string, unknown>)["prompt"];
     if (typeof prompt !== "string" || !prompt.trim()) {
       return {
@@ -602,8 +565,17 @@ export class OpenCodeClient {
     };
   }
 
-  async deleteProject(projectPath: string): Promise<void> {
-    const key = this.normalizeTarget(projectPath).runtimeKey;
+  async shutdownAll(): Promise<OpenCodeShutdownReport> {
+    const reports = await Promise.all(
+      [...this.servers.keys()].map((cwd) => this.shutdown(cwd)),
+    );
+    return {
+      killedPids: [...new Set(reports.flatMap((report) => report.killedPids))],
+    };
+  }
+
+  async deleteProject(cwd: string): Promise<void> {
+    const key = path.resolve(cwd);
     await this.shutdown(key);
     const state = this.servers.get(key);
     if (!state) {
@@ -611,6 +583,18 @@ export class OpenCodeClient {
     }
 
     this.servers.delete(key);
+  }
+
+  private clearSessionStateForCwd(cwd: string) {
+    for (const [sessionId, sessionCwd] of this.sessionCwdBySessionId.entries()) {
+      if (sessionCwd !== cwd) {
+        continue;
+      }
+      this.sessionIdleAt.delete(sessionId);
+      this.sessionErrors.delete(sessionId);
+      this.sessionWaiters.delete(sessionId);
+      this.sessionCwdBySessionId.delete(sessionId);
+    }
   }
 
   private async terminateServeHandle(server: ServeHandle): Promise<OpenCodeShutdownReport> {
@@ -758,8 +742,8 @@ export class OpenCodeClient {
     });
   }
 
-  protected async startServer(target: OpenCodeRuntimeTarget): Promise<ServeHandle> {
-    const state = this.getProjectServerState(target);
+  protected async startServer(cwd: string): Promise<ServeHandle> {
+    const state = this.getWorkspaceServerState(cwd);
 
     const serverEnv = { ...process.env };
     // Isolate the embedded runtime from parent OpenCode config injection.
@@ -770,13 +754,8 @@ export class OpenCodeClient {
     delete serverEnv["OPENCODE_CLIENT"];
     serverEnv["OPENCODE_CLIENT"] = "agent-team-orchestrator";
     serverEnv["OPENCODE_DISABLE_PROJECT_CONFIG"] = "true";
-    if (state.injectedConfigContent) {
-      serverEnv["OPENCODE_CONFIG_CONTENT"] = state.injectedConfigContent;
-    }
     appendAppLog("info", "opencode.serve_starting", {
-      projectPath: state.projectPath,
-    }, {
-      runtimeKey: state.runtimeKey,
+      cwd: state.cwd,
     });
     const launchArgs = ["serve"];
     const spawnSpec = process.platform === "win32"
@@ -786,7 +765,7 @@ export class OpenCodeClient {
             "/d",
             "/s",
             "/c",
-            `cd /d ${state.projectPath} && opencode ${launchArgs.join(" ")}`,
+            `cd /d ${state.cwd} && opencode ${launchArgs.join(" ")}`,
           ],
         }
       : {
@@ -819,14 +798,12 @@ export class OpenCodeClient {
     const baseUrl = await this.waitForServeBaseUrl(childProcess, stdoutChunks, stderrChunks).catch(async (error) => {
       await this.killChildProcessTree(childProcess).catch(() => undefined);
       appendAppLog("error", "opencode.serve_start_failed", {
-        projectPath: state.projectPath,
+        cwd: state.cwd,
         command: spawnSpec.command,
         args: spawnSpec.args,
         message: error instanceof Error ? error.message : String(error),
         stdout: this.truncateLogPayload(stdoutChunks.join("")),
         stderr: this.truncateLogPayload(stderrChunks.join("")),
-      }, {
-        runtimeKey: state.runtimeKey,
       });
       throw error;
     });
@@ -838,7 +815,7 @@ export class OpenCodeClient {
           : `OpenCode serve 健康检查失败: ${baseUrl}/global/health 未在预期时间内返回成功`;
       await this.killChildProcessTree(childProcess).catch(() => undefined);
       appendAppLog("error", "opencode.serve_start_failed", {
-        projectPath: state.projectPath,
+        cwd: state.cwd,
         port,
         baseUrl,
         command: spawnSpec.command,
@@ -846,20 +823,16 @@ export class OpenCodeClient {
         message,
         stdout: this.truncateLogPayload(stdoutChunks.join("")),
         stderr: this.truncateLogPayload(stderrChunks.join("")),
-      }, {
-        runtimeKey: state.runtimeKey,
       });
       throw new Error(message);
     }
 
     appendAppLog("info", "opencode.serve_started", {
-      projectPath: state.projectPath,
+      cwd: state.cwd,
       port,
       baseUrl,
       command: spawnSpec.command,
       args: spawnSpec.args,
-    }, {
-      runtimeKey: state.runtimeKey,
     });
 
     return {
@@ -868,8 +841,8 @@ export class OpenCodeClient {
     };
   }
 
-  async getAttachBaseUrl(target: OpenCodeRuntimeTargetInput): Promise<string> {
-    const server = await this.ensureServer(target);
+  async getAttachBaseUrl(cwd: string): Promise<string> {
+    const server = await this.ensureServer(cwd);
     return this.buildBaseUrl(server.port);
   }
 
@@ -952,7 +925,7 @@ export class OpenCodeClient {
   private async startEventPump(
     onEvent: (event: OpenCodeEvent) => void,
     server: ServeHandle,
-    runtimeKey: string,
+    cwd: string,
   ): Promise<void> {
     try {
       const response = await fetch(`${this.buildBaseUrl(server.port)}/global/event`);
@@ -996,7 +969,7 @@ export class OpenCodeClient {
         }
       }
     } finally {
-      const state = this.servers.get(runtimeKey);
+      const state = this.servers.get(cwd);
       if (state) {
         state.eventPump = null;
       }
@@ -1044,19 +1017,16 @@ export class OpenCodeClient {
     pathname: string,
     options: {
       method: "GET" | "POST";
-      target?: OpenCodeRuntimeTargetInput;
-      projectPath?: string;
+      cwd: string;
       body?: string;
     },
   ): Promise<Response> {
-    const normalized = this.normalizeTarget(options.target ?? options.projectPath ?? globalThis.process.cwd());
+    const normalized = path.resolve(options.cwd);
     const headers: Record<string, string> = {};
     if (options.body) {
       headers["content-type"] = "application/json";
     }
-    if (options.target || options.projectPath) {
-      headers["x-opencode-directory"] = normalized.projectPath;
-    }
+    headers["x-opencode-directory"] = normalized;
 
     const timeoutMs = resolveOpenCodeRequestTimeoutMs({
       pathname,
@@ -1075,12 +1045,10 @@ export class OpenCodeClient {
       return await requestWithServer(server);
     } catch (error) {
       appendAppLog("error", "opencode.request_failed", {
-        projectPath: normalized.projectPath,
+        cwd: normalized,
         method: options.method,
         url,
         message: error instanceof Error ? error.message : String(error),
-      }, {
-        runtimeKey: normalized.runtimeKey,
       });
       throw error;
     }
@@ -1149,7 +1117,7 @@ export class OpenCodeClient {
   }
 
   async waitForMessageCompletion(
-    target: OpenCodeRuntimeTargetInput,
+    cwd: string,
     sessionId: string,
     messageId: string,
     fallbackTimestamp: string,
@@ -1158,7 +1126,7 @@ export class OpenCodeClient {
     const startedAt = Date.now();
     let latestNonEmptyMessage: OpenCodeNormalizedMessage | null = null;
     while (Date.now() - startedAt < timeoutMs) {
-      const message = await this.getSessionMessage(target, sessionId, messageId);
+      const message = await this.getSessionMessage(cwd, sessionId, messageId);
       if (message?.content.trim()) {
         latestNonEmptyMessage = message;
       }
@@ -1168,7 +1136,7 @@ export class OpenCodeClient {
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
 
-    return this.getSessionMessage(target, sessionId, messageId).then(
+    return this.getSessionMessage(cwd, sessionId, messageId).then(
       (message) =>
         message ??
         latestNonEmptyMessage ?? {
@@ -1183,10 +1151,10 @@ export class OpenCodeClient {
   }
 
   async getLatestAssistantMessage(
-    target: OpenCodeRuntimeTargetInput,
+    cwd: string,
     sessionId: string,
   ): Promise<OpenCodeNormalizedMessage | null> {
-    const list = await this.listSessionMessages(target, sessionId);
+    const list = await this.listSessionMessages(cwd, sessionId);
     for (let index = list.length - 1; index >= 0; index -= 1) {
       const message = this.normalizeMessageEnvelope(list[index], "assistant");
       if (message.sender === "assistant" || message.sender === "system" || message.sender === "unknown") {
@@ -1197,11 +1165,11 @@ export class OpenCodeClient {
   }
 
   private async inspectTransportRecovery(
-    target: OpenCodeRuntimeTargetInput,
+    cwd: string,
     sessionId: string,
     lowerBoundMs: number,
   ): Promise<TransportRecoveryInspection> {
-    const messages = await this.listSessionMessages(target, sessionId);
+    const messages = await this.listSessionMessages(cwd, sessionId, MAX_RUNTIME_MESSAGES);
     if (messages.length === 0) {
       return {
         kind: "empty",
@@ -1369,13 +1337,13 @@ export class OpenCodeClient {
   }
 
   async getSessionMessage(
-    target: OpenCodeRuntimeTargetInput,
+    cwd: string,
     sessionId: string,
     messageId: string,
   ): Promise<OpenCodeNormalizedMessage | null> {
     const response = await this.request(`/session/${sessionId}/message/${messageId}`, {
       method: "GET",
-      target,
+      cwd,
     });
     if (!response.ok) {
       return null;
@@ -1388,7 +1356,7 @@ export class OpenCodeClient {
   }
 
   async listSessionMessages(
-    target: OpenCodeRuntimeTargetInput,
+    cwd: string,
     sessionId: string,
     limit?: number,
   ): Promise<unknown[]> {
@@ -1397,7 +1365,7 @@ export class OpenCodeClient {
       : `/session/${sessionId}/message`;
     const response = await this.request(pathname, {
       method: "GET",
-      target,
+      cwd,
     });
     if (!response.ok) {
       return [];
@@ -2234,12 +2202,6 @@ export class OpenCodeClient {
 
   private normalizeProcessOutput(value: string | Buffer): string {
     return typeof value === "string" ? value : value.toString("utf8");
-  }
-
-  private mergeShutdownReports(reports: OpenCodeShutdownReport[]): OpenCodeShutdownReport {
-    return {
-      killedPids: [...new Set(reports.flatMap((report) => report.killedPids))],
-    };
   }
 
   private extractVisibleMessageText(parts: Array<Record<string, unknown>>): string {

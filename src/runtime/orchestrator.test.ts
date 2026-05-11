@@ -69,8 +69,8 @@ function getTestAgentPrompt(agentId: string): string {
   return prompt;
 }
 
-function parseInjectedAgents(content: string): Record<string, InjectedAgentConfig> {
-  return (JSON.parse(content) as { agent: Record<string, InjectedAgentConfig> }).agent;
+function parseInjectedAgents(content: { agent: Record<string, InjectedAgentConfig> }): Record<string, InjectedAgentConfig> {
+  return content.agent;
 }
 
 function withAgentNodeRecords(topology: Omit<TopologyRecord, "nodeRecords">): TopologyRecord {
@@ -137,6 +137,7 @@ class TestOrchestrator extends Orchestrator {
     configureDependencies: ConfigureTestOrchestratorDependencies = (defaults) => defaults,
   ) {
     super(options);
+    this.opencodeClient.setInjectedConfigContent = async () => undefined;
     const defaults: TestOrchestratorDependencies = {
       trackBackgroundTask: (promise, context) => super.trackBackgroundTask(promise, context),
       createLangGraphBatchRunners: (cwd, taskId, state, batch) =>
@@ -202,6 +203,7 @@ class BatchRunnerTestOrchestrator extends StandaloneRunTestOrchestrator {
 function stubOpenCodeSessions(orchestrator: Orchestrator) {
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   orchestrator.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
+  orchestrator.opencodeClient.setInjectedConfigContent = async () => undefined;
   orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => ({
     sessionId,
     messageCount: 0,
@@ -210,7 +212,6 @@ function stubOpenCodeSessions(orchestrator: Orchestrator) {
     activeToolNames: [],
     activities: [],
   });
-  stubOpenCodeReloadConfig(orchestrator);
 }
 
 function stubOpenCodeAttachBaseUrl(orchestrator: Orchestrator) {
@@ -223,10 +224,6 @@ function stubOpenCodeAttachBaseUrl(orchestrator: Orchestrator) {
     activeToolNames: [],
     activities: [],
   });
-}
-
-function stubOpenCodeReloadConfig(orchestrator: Orchestrator) {
-  Reflect.set(orchestrator.opencodeClient, "reloadConfig", async () => undefined);
 }
 
 function buildCompletedExecutionResult(input: {
@@ -594,7 +591,6 @@ test("单节点任务进入 finished 时不会因为缺少 workspace cwd 而在�
   );
   stubOpenCodeAttachBaseUrl(orchestrator);
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) =>
     buildCompletedExecutionResult({
       agent,
@@ -663,7 +659,6 @@ test("任务本轮 finished 后再次 @Agent 时会回到 running 并在同一 T
   });
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     baRunCount += 1;
     if (baRunCount === 2) {
@@ -760,7 +755,6 @@ test("漏洞团队里漏洞挑战先返回触发回流的 label、漏洞论证�
   };
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     const count = nextCount(agent);
     if (agent === "线索发现" && count === 1) {
@@ -923,7 +917,6 @@ test("漏洞团队里讨论总结以 transfer + none 回到线索发现时，会
   };
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     const count = recordPrompt(agent, content);
     if (agent === "线索发现") {
@@ -1022,7 +1015,6 @@ test("漏洞团队第二轮 finding 已经派发到 漏洞挑战-2 时，UI 仍�
   };
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     const count = nextCount(agent);
 
@@ -1156,7 +1148,6 @@ test("漏洞团队 spawn runtime agent 尚未落库时，getTaskSnapshot 不会�
   );
   stubOpenCodeSessions(orchestrator);
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     if (agent === "线索发现") {
       return {
@@ -1336,14 +1327,25 @@ test("dispose 之后，迟到结束的 event stream 不会再排 reconnect 定�
 
 test("dispose 在 CLI 快速退出模式下不会等待悬挂的后台 task promise", async () => {
   const userDataPath = createTempDir();
+  const cwd = createTempDir();
   const orchestrator = new TestOrchestrator({
     userDataPath,
     enableEventStream: false,
   });
 
   let shutdownCalled = false;
-  orchestrator.opencodeClient.shutdown = async () => {
+  orchestrator.opencodeClient.servers.set(cwd, {
+    cwd,
+    serverHandle: Promise.resolve({ process: null, port: 43127 }),
+    eventPump: null,
+    injectedConfigContent: {
+      agent: {},
+    },
+    eventSubscribers: new Set(),
+  });
+  orchestrator.opencodeClient.shutdown = async (targetCwd) => {
     shutdownCalled = true;
+    assert.equal(targetCwd, cwd);
     return {
       killedPids: [43127],
     };
@@ -1364,13 +1366,33 @@ test("dispose 在 CLI 快速退出模式下不会等待悬挂的后台 task prom
 
 test("dispose 会把 OpenCode 清理报告向上返回", async () => {
   const userDataPath = createTempDir();
+  const firstCwd = createTempDir();
+  const secondCwd = createTempDir();
   const orchestrator = new TestOrchestrator({
     userDataPath,
     enableEventStream: false,
   });
 
-  orchestrator.opencodeClient.shutdown = async () => ({
-    killedPids: [43127, 5120],
+  orchestrator.opencodeClient.servers.set(firstCwd, {
+    cwd: firstCwd,
+    serverHandle: Promise.resolve({ process: null, port: 43127 }),
+    eventPump: null,
+    injectedConfigContent: {
+      agent: {},
+    },
+    eventSubscribers: new Set(),
+  });
+  orchestrator.opencodeClient.servers.set(secondCwd, {
+    cwd: secondCwd,
+    serverHandle: Promise.resolve({ process: null, port: 5120 }),
+    eventPump: null,
+    injectedConfigContent: {
+      agent: {},
+    },
+    eventSubscribers: new Set(),
+  });
+  orchestrator.opencodeClient.shutdown = async (targetCwd) => ({
+    killedPids: targetCwd === firstCwd ? [43127] : [5120],
   });
 
   const report = await orchestrator.dispose();
@@ -1411,7 +1433,7 @@ test("Build 只有在团队 DSL 中声明后才会出现在 agents", async () =>
   }
   assert.equal(withBuild.agents.some((agent) => agent.id === "Build"), true);
   assert.equal(buildAgent.isWritable, true);
-  assert.equal(buildInjectedConfigFromAgents(withBuild.agents), null);
+  assert.deepEqual(buildInjectedConfigFromAgents(withBuild.agents), { agent: {} });
 });
 
 test("applyTeamDsl 会一次性写入当前 Project 的 agents 与 topology", async () => {
@@ -1894,7 +1916,7 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
   });
 
   const injectedConfigs: InjectedConfigContent[] = [];
-  orchestrator.opencodeClient.setInjectedConfigContent = (_projectPath, content) => {
+  orchestrator.opencodeClient.setInjectedConfigContent = async (_cwd, content) => {
     injectedConfigs.push(content);
   };
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
@@ -1909,9 +1931,9 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
   await orchestrator.initializeTask({ cwd: projectA.cwd, title: "project-a" });
 
   assert.equal(injectedConfigs.length >= 2, true);
-  assert.equal(injectedConfigs.some((content) => content === null), true);
+  assert.equal(injectedConfigs.some((content) => Object.keys(content.agent).length === 0), true);
   const latestInjectedConfig = injectedConfigs.at(-1);
-  if (typeof latestInjectedConfig !== "string") {
+  if (latestInjectedConfig === undefined) {
     assert.fail("应当拿到 project-a 的注入配置");
   }
   assert.deepEqual(parseInjectedAgents(latestInjectedConfig)["BA"], {
@@ -1927,6 +1949,33 @@ test("为不同 Project 初始化 Task 时会切换 OpenCode 注入配置", asyn
       websearch: "deny",
     },
   });
+});
+
+test("同一 cwd 下多个 task 只会启动一次 OpenCode serve", async () => {
+  const userDataPath = createTempDir();
+  const cwd = createTempDir();
+  const orchestrator = new TestOrchestrator({
+    userDataPath,
+    enableEventStream: false,
+  });
+
+  let startServerCount = 0;
+  Reflect.set(orchestrator.opencodeClient, "startServer", async () => {
+    startServerCount += 1;
+    return {
+      process: null,
+      port: 43127,
+    };
+  });
+  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+
+  const workspace = await orchestrator.getWorkspaceSnapshot(cwd);
+  await addBuiltinAgents(orchestrator, workspace.cwd, ["Build"], "Build", []);
+
+  await orchestrator.initializeTask({ cwd: workspace.cwd, title: "task-a" });
+  await orchestrator.initializeTask({ cwd: workspace.cwd, title: "task-b" });
+
+  assert.equal(startServerCount, 1);
 });
 
 test("openAgentTerminal 会通过服务端终端启动器 attach 到对应 session", async () => {
@@ -2004,9 +2053,6 @@ test("未写入 Build 时当前 Project 可以没有可写 Agent", async () => {
   await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
 
   const injected = buildInjectedConfigFromAgents((await orchestrator.getWorkspaceSnapshot(project.cwd)).agents);
-  if (injected === null) {
-    assert.fail("BA 注入配置不能为空");
-  }
   assert.deepEqual(parseInjectedAgents(injected)["BA"], {
     mode: "primary",
     prompt: "你是 BA。",
@@ -2043,9 +2089,6 @@ test("Build 与其他显式可写 Agent 可以同时保持可写", async () => {
   );
 
   const injected = buildInjectedConfigFromAgents(project.agents);
-  if (injected === null) {
-    assert.fail("至少应当为 BA 生成注入配置");
-  }
   assert.deepEqual(
     parseInjectedAgents(injected),
     {
@@ -2240,7 +2283,6 @@ test("只有第一次 Agent 间传递会携带 [Initial Task]", async () => {
     });
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     recordPrompt(agent, content);
     if (agent === "BA") {
@@ -2328,7 +2370,6 @@ test("agent 声明 initialMessage 后，下游实际 prompt 会保留默认转�
     });
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     recordPrompt(agent, content);
     if (agent === "线索发现") {
@@ -2432,7 +2473,6 @@ test("initialMessage 已包含当前触发 agent 时，最终 prompt 不会重�
     });
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     recordPrompt(agent, content);
     if (agent === "A") {
@@ -2552,7 +2592,6 @@ test("同一个目标 Agent 只会在首次启动时注入 initialMessage，后�
   });
 
   stubOpenCodeAttachBaseUrl(orchestrator);
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
 
   const promptByAgent = new Map<string, string[]>();
@@ -2707,7 +2746,6 @@ test("多个 spawn 实例并存时，initialMessage 不会串组注入其他实�
   const projectPath = createTempDir();
   const compiled = compileBuiltinTopology("vulnerability.json5");
   stubOpenCodeAttachBaseUrl(orchestrator);
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   await orchestrator.applyTeamDsl({
     cwd: projectPath,
@@ -2953,7 +2991,6 @@ test("rfc-scanner 的 spawn 首轮派发到漏洞论证时，会额外注入来�
   const projectPath = createTempDir();
   const compiled = compileBuiltinTopology("rfc-scanner.json5");
   stubOpenCodeAttachBaseUrl(orchestrator);
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
   await orchestrator.applyTeamDsl({
     cwd: projectPath,
@@ -3141,7 +3178,6 @@ test("讨论总结收到嵌套来源段落时，最终可见顺序按拓扑定�
     });
   };
   stubOpenCodeAttachBaseUrl(orchestrator);
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
 
   const task = await orchestrator.submitTask({
@@ -3372,7 +3408,6 @@ test("单 decisionAgent 判定失败后会把 action_required 回流给 Build", 
     });
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     const count = recordPrompt(agent, content);
     if (agent === "BA") {
@@ -3493,7 +3528,6 @@ test("修复首个失败 decisionAgent 后，Build 下一轮不会立刻全量�
   });
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
       buildRunCount += 1;
@@ -3646,7 +3680,6 @@ test("判定 Agent 返回 action_required 后会在其余 decisionAgent 收齐�
   });
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     if (agent === "Build") {
       buildRunCount += 1;
@@ -3817,7 +3850,6 @@ test("Agent 返回 completed 但正文为空时，任务必须失败而不是写
   const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) =>
     buildCompletedExecutionResult({
       agent,
@@ -3925,7 +3957,6 @@ test("agent 运行中时会先把过程消息追加到 task messages", async () 
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
-  stubOpenCodeReloadConfig(orchestrator);
 
   let project = await orchestrator.getWorkspaceSnapshot(projectPath);
   project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
@@ -4029,7 +4060,6 @@ test("runStandaloneAgent 会用后续同步拿到的真实参数覆盖占位 age
     runtimeRefreshDebounceMs: 1,
   });
   stubOpenCodeSessions(orchestrator);
-  stubOpenCodeReloadConfig(orchestrator);
 
   let project = await orchestrator.getWorkspaceSnapshot(projectPath);
   project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
@@ -4156,7 +4186,6 @@ test("runStandaloneAgent 在同为 complete 时会按结构化来源优先级覆
     runtimeRefreshDebounceMs: 1,
   });
   stubOpenCodeSessions(orchestrator);
-  stubOpenCodeReloadConfig(orchestrator);
 
   let project = await orchestrator.getWorkspaceSnapshot(projectPath);
   project = await addCustomAgent(orchestrator, project.cwd, "BA", "你是 BA。", "BA", false);
@@ -4613,8 +4642,6 @@ test("判定 Agent 执行中止时不会伪造成整改意见", async () => {
     topology,
   });
   const task = await orchestrator.initializeTask({ cwd: project.cwd, title: "demo" });
-
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async () =>
     buildErrorExecutionResult({
       agent: "CodeReview",
@@ -4671,7 +4698,6 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
   stubOpenCodeSessions(orchestrator);
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) =>
     buildCompletedExecutionResult({
       agent,
@@ -4771,8 +4797,6 @@ test("最大连续回流达到上限后，聊天页面会直接展示明确失�
     content: "@Build 请完成需求并通过 UnitTest",
     mentionAgentId: "Build",
   });
-
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
       buildRunCount += 1;
@@ -4873,8 +4897,6 @@ test("聊天页面会按每条 action_required 边的单独上限展示失败原
     content: "@Build 请完成需求并通过 UnitTest",
     mentionAgentId: "Build",
   });
-
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
       buildRunCount += 1;
@@ -4950,7 +4972,6 @@ test("并发判定失败时不会提前追加任务结束系统消息", async ()
   stubOpenCodeAttachBaseUrl(orchestrator);
 
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
       buildRunCount += 1;
@@ -5075,7 +5096,6 @@ test("修复批次的 dispatch 窗口里，不会被 getTaskSnapshot 提前补�
   });
   stubOpenCodeAttachBaseUrl(orchestrator);
   orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
-  stubOpenCodeReloadConfig(orchestrator);
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
       buildRunCount += 1;

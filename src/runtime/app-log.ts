@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { toUtcIsoTimestamp } from "@shared/types";
@@ -5,11 +6,7 @@ import { toUtcIsoTimestamp } from "@shared/types";
 const INVALID_LOG_FILE_SEGMENT_PATTERN = /[\\/:*?"<>|]/;
 
 let appLogRootPath: string | null = null;
-
-interface AppLogScope {
-  taskId?: string | null;
-  runtimeKey?: string | null;
-}
+const taskLogScope = new AsyncLocalStorage<string>();
 
 export function buildTaskLogFilePath(userDataPath: string, taskId: string) {
   return path.join(userDataPath, "logs", "tasks", `${taskId}.log`);
@@ -23,12 +20,10 @@ function isTaskLogId(value: string): boolean {
     && !INVALID_LOG_FILE_SEGMENT_PATTERN.test(normalized);
 }
 
-function resolveTaskLogId(scope?: AppLogScope): string | null {
-  if (typeof scope?.taskId === "string" && isTaskLogId(scope.taskId)) {
-    return scope.taskId.trim();
-  }
-  if (typeof scope?.runtimeKey === "string" && isTaskLogId(scope.runtimeKey)) {
-    return scope.runtimeKey.trim();
+function resolveTaskLogId(): string | null {
+  const currentTaskId = taskLogScope.getStore();
+  if (typeof currentTaskId === "string" && isTaskLogId(currentTaskId)) {
+    return currentTaskId.trim();
   }
   return null;
 }
@@ -40,16 +35,19 @@ export function initAppFileLogger(userDataPath: string) {
   return taskLogDir;
 }
 
+export function runWithTaskLogScope<T>(taskId: string, action: () => T): T {
+  return taskLogScope.run(taskId, action);
+}
+
 export function appendAppLog(
   level: "info" | "warn" | "error",
   event: string,
   payload: Record<string, unknown>,
-  scope?: AppLogScope,
 ) {
   if (!appLogRootPath) {
     return;
   }
-  const taskId = resolveTaskLogId(scope);
+  const taskId = resolveTaskLogId();
   if (!taskId) {
     return;
   }
