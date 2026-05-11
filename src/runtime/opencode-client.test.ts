@@ -84,39 +84,41 @@ async function withFastForwardedTimeouts<T>(
 }
 
 test("request 会跟随当前 serverHandle 的实际端口", async () => {
-  const { client, cwd } = createClient();
-  const typed = client as OpenCodeClient & {
-    runningServe: {
-      cwd: string;
-      handle: Promise<{ process: null; port: number }>;
+  await withFastForwardedTimeouts(async () => {
+    const { client, cwd } = createClient();
+    const typed = client as OpenCodeClient & {
+      runningServe: {
+        cwd: string;
+        handle: Promise<{ process: null; port: number }>;
+      };
+      request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
     };
-    request: (pathname: TestRequestPathname, options: TestRequestOptions) => TestRequestResult;
-  };
-  typed.runningServe = {
-    cwd,
-    handle: Promise.resolve({
+    typed.runningServe = {
+      cwd,
+      handle: Promise.resolve({
       process: null,
       port: 43127,
-    }),
-  };
+      }),
+    };
 
-  const originalFetch = globalThis.fetch;
-  let requestedUrl = "";
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    requestedUrl = String(input);
-    return new Response("", { status: 200 });
-  }) as typeof fetch;
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      requestedUrl = String(input);
+      return new Response("", { status: 200 });
+    }) as typeof fetch;
 
-  try {
-    await typed.request("/session", {
-      method: "GET",
-      cwd,
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+    try {
+      await typed.request("/session", {
+        method: "GET",
+        cwd,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
 
-  assert.equal(requestedUrl, "http://127.0.0.1:43127/session");
+    assert.equal(requestedUrl, "http://127.0.0.1:43127/session");
+  }, 1);
 });
 
 test("request 失败时会写入 task 级失败日志", async () => {

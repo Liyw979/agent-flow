@@ -76,7 +76,7 @@ test("startWebHost 会按 JSON5 解析 /api/tasks/submit 请求体", async () =>
     port,
     webRoot: null,
     userDataPath: "/tmp",
-    bindHosts: await resolveAvailableLoopbackBindHosts(),
+    bindHosts: [UI_LOOPBACK_IPV4_HOST],
   });
 
   try {
