@@ -5,7 +5,7 @@ import {
   LANGGRAPH_START_NODE_ID,
   normalizeActionRequiredMaxRounds,
   normalizeTopologyEdgeTrigger,
-  type SpawnRule,
+  type GroupRule,
   type TopologyEdge,
   type TopologyEdgeTrigger,
   type TopologyNodeRecord,
@@ -19,18 +19,18 @@ type TriggerConfig =
       trigger: TopologyEdgeTrigger;
       maxTriggerRounds?: number;
     };
-type DownstreamMode = TriggerConfig | "spawn";
+type DownstreamMode = TriggerConfig | "group";
 
 type DownstreamMap = Record<string, Record<string, DownstreamMode>>;
 
-interface SpawnTemplateInput {
+interface GroupTemplateInput {
   reportTo: string;
 }
 
 interface CreateTopologyInput {
   extraNodes?: string[];
   downstream: DownstreamMap;
-  spawn?: Record<string, SpawnTemplateInput>;
+  group?: Record<string, GroupTemplateInput>;
 }
 
 function pushUnique(values: string[], value: string): void {
@@ -41,7 +41,7 @@ function pushUnique(values: string[], value: string): void {
 
 function collectNodes(input: CreateTopologyInput): string[] {
   const nodes = [...(input.extraNodes ?? [])];
-  const spawn = input.spawn ?? {};
+  const groups = input.group ?? {};
 
   for (const [source, targets] of Object.entries(input.downstream)) {
     pushUnique(nodes, source);
@@ -53,7 +53,7 @@ function collectNodes(input: CreateTopologyInput): string[] {
     }
   }
 
-  for (const [target, config] of Object.entries(spawn)) {
+  for (const [target, config] of Object.entries(groups)) {
     pushUnique(nodes, target);
     if (config.reportTo) {
       pushUnique(nodes, config.reportTo);
@@ -71,7 +71,7 @@ function buildEdges(input: CreateTopologyInput): TopologyEdge[] {
       if (target === LANGGRAPH_END_NODE_ID) {
         continue;
       }
-      if (mode === "spawn") {
+      if (mode === "group") {
         edges.push({
           source,
           target,
@@ -101,81 +101,82 @@ function buildNodeRecords(
   nodes: string[],
   input: CreateTopologyInput,
 ): TopologyNodeRecord[] {
-  const spawnTargets = new Set<string>();
+  const groupTargets = new Set<string>();
 
   for (const targets of Object.values(input.downstream)) {
     for (const [target, mode] of Object.entries(targets)) {
-      if (mode === "spawn") {
-        spawnTargets.add(target);
+      if (mode === "group") {
+        groupTargets.add(target);
       }
     }
   }
-  const spawnRuleIdByNodeId = new Map<string, string>();
-  for (const nodeId of spawnTargets) {
-    spawnRuleIdByNodeId.set(nodeId, `spawn-rule:${nodeId}`);
+  const groupRuleIdByNodeId = new Map<string, string>();
+  for (const nodeId of groupTargets) {
+    groupRuleIdByNodeId.set(nodeId, `group-rule:${nodeId}`);
   }
 
   return buildTopologyNodeRecords({
     nodes,
-    spawnNodeIds: spawnTargets,
+    groupNodeIds: groupTargets,
     templateNameByNodeId: new Map(),
     initialMessageRoutingByNodeId: new Map(),
-    spawnRuleIdByNodeId,
-    spawnEnabledNodeIds: spawnTargets,
+    groupRuleIdByNodeId,
+    groupEnabledNodeIds: groupTargets,
     promptByNodeId: new Map(),
     writableNodeIds: new Set(),
   });
 }
 
-function findSpawnSource(
+function findGroupSource(
   downstream: DownstreamMap,
   targetNodeId: string,
 ): string {
   const matches: string[] = [];
 
   for (const [source, targets] of Object.entries(downstream)) {
-    if (targets[targetNodeId] === "spawn") {
+    if (targets[targetNodeId] === "group") {
       matches.push(source);
     }
   }
 
   if (matches.length !== 1) {
-    throw new Error(`测试 DSL 要求 spawn 节点 ${targetNodeId} 只能有且仅有一个上游来源。`);
+    throw new Error(`测试 DSL 要求 group 节点 ${targetNodeId} 只能有且仅有一个上游来源。`);
   }
 
   return matches[0]!;
 }
 
-function buildSpawnRules(input: CreateTopologyInput): SpawnRule[] {
-  const spawnTargets: string[] = [];
+function buildGroupRules(input: CreateTopologyInput): GroupRule[] {
+  const groupTargets: string[] = [];
 
   for (const targets of Object.values(input.downstream)) {
     for (const [target, mode] of Object.entries(targets)) {
-      if (mode === "spawn") {
-        spawnTargets.push(target);
+      if (mode === "group") {
+        groupTargets.push(target);
       }
     }
   }
 
-  return spawnTargets.map((target) => {
-    const config = input.spawn?.[target];
-    const sourceTemplateName = findSpawnSource(input.downstream, target);
+  return groupTargets.map((target) => {
+    const config = input.group?.[target];
+    const sourceTemplateName = findGroupSource(input.downstream, target);
     if (!config) {
-      throw new Error(`测试 DSL 要求 spawn 节点 ${target} 必须显式声明 reportTo。`);
+      throw new Error(`测试 DSL 要求 group 节点 ${target} 必须显式声明 reportTo。`);
     }
 
     return {
-      id: `spawn-rule:${target}`,
-      spawnNodeName: target,
+      id: `group-rule:${target}`,
+      groupNodeName: target,
       sourceTemplateName,
       entryRole: "entry",
-      spawnedAgents: [{
+      members: [{
         role: "entry",
         templateName: target,
       }],
       edges: [],
       exitWhen: "one_side_agrees",
       report: {
+        sourceRole: "entry",
         templateName: config.reportTo,
         trigger: DEFAULT_TOPOLOGY_TRIGGER,
         messageMode: "last",
@@ -188,7 +189,7 @@ function buildSpawnRules(input: CreateTopologyInput): SpawnRule[] {
 function buildLangGraphFromDownstream(input: CreateTopologyInput): TopologyLangGraphRecord | undefined {
   const incoming = Object.entries(input.downstream).flatMap(([source, targets]) => {
     const mode = targets[LANGGRAPH_END_NODE_ID];
-    if (!mode || mode === "spawn") {
+    if (!mode || mode === "group") {
       return [];
     }
     return [{
@@ -221,14 +222,14 @@ export function createTopology(
   const langgraph = buildLangGraphFromDownstream(input);
   const edges = buildEdges(input);
   const nodeRecords = buildNodeRecords(nodes, input);
-  const spawnRules = buildSpawnRules(input);
+  const groupRules = buildGroupRules(input);
 
   const topology: TopologyRecord = {
     nodes,
     edges,
     nodeRecords,
     ...(langgraph ? { langgraph } : {}),
-    ...(spawnRules.length > 0 ? { spawnRules } : {}),
+    ...(groupRules.length > 0 ? { groupRules } : {}),
   };
   return topology;
 }

@@ -1,7 +1,7 @@
 import {
   DEFAULT_TOPOLOGY_TRIGGER,
   getTopologyNodeRecords,
-  type SpawnRule,
+  type GroupRule,
   type TopologyNodeRecord,
   type TopologyRecord,
 } from "@shared/types";
@@ -9,7 +9,7 @@ import {
 const DEBATE_TURN_TRIGGER = "<respond>";
 const DEBATE_SUMMARY_TRIGGER = "<finalize>";
 
-interface DebateSpawnDraftInput {
+interface DebateGroupDraftInput {
   teamName: string;
   sourceTemplateName: string;
   proTemplateName: string;
@@ -23,8 +23,8 @@ function sanitizeRuleId(value: string): string {
   return normalized.length > 0 ? normalized : "dynamic-team";
 }
 
-function buildSpawnRuleId(teamName: string): string {
-  return `spawn-rule:${sanitizeRuleId(teamName)}`;
+function buildGroupRuleId(teamName: string): string {
+  return `group-rule:${sanitizeRuleId(teamName)}`;
 }
 
 function ensureNodeRecord(records: TopologyNodeRecord[], node: TopologyNodeRecord): TopologyNodeRecord[] {
@@ -38,13 +38,13 @@ function ensureNodeRecord(records: TopologyNodeRecord[], node: TopologyNodeRecor
 }
 
 export function getTopologyDisplayNodeIds(
-  topology: Pick<TopologyRecord, "nodes" | "nodeRecords" | "spawnRules">,
+  topology: Pick<TopologyRecord, "nodes" | "nodeRecords" | "groupRules">,
   candidateNodeIds: string[],
 ): string[] {
   const candidateNodeIdSet = new Set(candidateNodeIds);
   const nodeRecords = getTopologyNodeRecords(topology as TopologyRecord);
-  const spawnAgentTemplateNames = new Set(
-    topology.spawnRules?.flatMap((rule) => rule.spawnedAgents.map((agent) => agent.templateName)) ?? [],
+  const groupAgentTemplateNames = new Set(
+    topology.groupRules?.flatMap((rule) => rule.members.map((agent) => agent.templateName)) ?? [],
   );
   const latestRuntimeNodeIdByTemplate = new Map<string, string>();
   const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -53,7 +53,7 @@ export function getTopologyDisplayNodeIds(
     return match ? Number.parseInt(match[1] ?? "0", 10) : Number.MAX_SAFE_INTEGER;
   };
 
-  for (const templateName of spawnAgentTemplateNames) {
+  for (const templateName of groupAgentTemplateNames) {
     const runtimeNodeIds = candidateNodeIds
       .filter((nodeId) => new RegExp(`^${escapeRegExp(templateName)}-(\\d+)$`).test(nodeId))
       .sort((left, right) =>
@@ -67,7 +67,7 @@ export function getTopologyDisplayNodeIds(
   const orderedTemplateNodeIds = topology.nodes.length > 0
     ? topology.nodes
     : nodeRecords
-      .filter((node) => node.kind !== "spawn")
+      .filter((node) => node.kind !== "group")
       .map((node) => node.id);
 
   return orderedTemplateNodeIds.flatMap((nodeId) => {
@@ -82,17 +82,17 @@ export function getTopologyDisplayNodeIds(
   });
 }
 
-export function upsertDebateSpawnDraft(
+export function upsertDebateGroupDraft(
   topology: TopologyRecord,
-  input: DebateSpawnDraftInput,
+  input: DebateGroupDraftInput,
 ): TopologyRecord {
   const teamName = input.teamName.trim();
   if (!teamName) {
     throw new Error("动态团队名称不能为空。");
   }
 
-  const spawnRuleId = buildSpawnRuleId(teamName);
-  const spawnNodeId = teamName;
+  const groupRuleId = buildGroupRuleId(teamName);
+  const groupNodeId = teamName;
   let nodeRecords = getTopologyNodeRecords(topology).map((node) => ({ ...node }));
   for (const templateName of [
     input.sourceTemplateName,
@@ -111,11 +111,11 @@ export function upsertDebateSpawnDraft(
     }
   }
   nodeRecords = ensureNodeRecord(nodeRecords, {
-    id: spawnNodeId,
-    kind: "spawn",
+    id: groupNodeId,
+    kind: "group",
     templateName: input.proTemplateName,
     initialMessageRouting: { mode: "inherit" },
-    spawnRuleId,
+    groupRuleId,
   });
 
   const nodeIds = topology.nodes.length > 0 ? [...topology.nodes] : nodeRecords
@@ -133,12 +133,12 @@ export function upsertDebateSpawnDraft(
     }
   }
 
-  const spawnRule: SpawnRule = {
-    id: spawnRuleId,
-    spawnNodeName: spawnNodeId,
+  const groupRule: GroupRule = {
+    id: groupRuleId,
+    groupNodeName: groupNodeId,
     sourceTemplateName: input.sourceTemplateName,
     entryRole: "pro",
-    spawnedAgents: [
+    members: [
       { role: "pro", templateName: input.proTemplateName },
       { role: "con", templateName: input.conTemplateName },
       { role: "summary", templateName: input.summaryTemplateName },
@@ -151,6 +151,7 @@ export function upsertDebateSpawnDraft(
     ],
     exitWhen: "one_side_agrees",
     report: {
+      sourceRole: "summary",
       templateName: input.reportToTemplateName,
       trigger: DEFAULT_TOPOLOGY_TRIGGER,
       messageMode: "last",
@@ -159,21 +160,21 @@ export function upsertDebateSpawnDraft(
   };
 
   const nextEdges = topology.edges.filter(
-    (edge) => !(edge.source === input.sourceTemplateName && edge.target === spawnNodeId),
+    (edge) => !(edge.source === input.sourceTemplateName && edge.target === groupNodeId),
   ).concat({
     source: input.sourceTemplateName,
-    target: spawnNodeId,
+    target: groupNodeId,
     trigger: DEFAULT_TOPOLOGY_TRIGGER,
     messageMode: "last" as const,
   });
 
-  const nextSpawnRules = (topology.spawnRules ?? []).filter((rule) => rule.id !== spawnRuleId).concat(spawnRule);
+  const nextGroupRules = (topology.groupRules ?? []).filter((rule) => rule.id !== groupRuleId).concat(groupRule);
 
   return {
     ...topology,
     nodes: nodeIds,
     edges: nextEdges,
     nodeRecords,
-    spawnRules: nextSpawnRules,
+    groupRules: nextGroupRules,
   };
 }

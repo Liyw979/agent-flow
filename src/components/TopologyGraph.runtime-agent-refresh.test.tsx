@@ -16,15 +16,15 @@ const topology: TopologyRecord = {
   nodeRecords: [
     { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
     { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战", initialMessageRouting: { mode: "inherit" } },
-    { id: "疑点辩论", kind: "spawn", templateName: "漏洞挑战", spawnRuleId: "spawn-rule:疑点辩论", initialMessageRouting: { mode: "inherit" } },
+    { id: "疑点辩论", kind: "group", templateName: "漏洞挑战", groupRuleId: "group-rule:疑点辩论", initialMessageRouting: { mode: "inherit" } },
   ],
-  spawnRules: [
+  groupRules: [
     {
-      id: "spawn-rule:疑点辩论",
-      spawnNodeName: "疑点辩论",
+      id: "group-rule:疑点辩论",
+      groupNodeName: "疑点辩论",
       sourceTemplateName: "线索发现",
       entryRole: "challenge",
-      spawnedAgents: [
+      members: [
         { role: "challenge", templateName: "漏洞挑战" },
       ],
       edges: [],

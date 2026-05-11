@@ -372,19 +372,19 @@ export class GatingScheduler {
       return [];
     }
 
-    const spawnNodeIds = new Set(
+    const groupNodeIds = new Set(
       getTopologyNodeRecords(this.topology)
-        .filter((node) => node.kind === "spawn")
+        .filter((node) => node.kind === "group")
         .map((node) => node.id),
     );
-    const hasSpawnTarget = outgoingTargets.some((targetName) => spawnNodeIds.has(targetName));
-    if (!hasSpawnTarget) {
+    const hasGroupTarget = outgoingTargets.some((targetName) => groupNodeIds.has(targetName));
+    if (!hasGroupTarget) {
       return [...batch.targets];
     }
 
     return this.uniqueTargetNames(
       outgoingTargets.flatMap((targetName) => (
-        spawnNodeIds.has(targetName) ? batch.targets : [targetName]
+        groupNodeIds.has(targetName) ? batch.targets : [targetName]
       )).map((target) => ({ target })),
     );
   }
@@ -481,12 +481,12 @@ export class GatingScheduler {
       return false;
     }
 
-    return (this.topology.spawnRules ?? []).some((rule) => {
+    return (this.topology.groupRules ?? []).some((rule) => {
       if (rule.exitWhen !== "all_completed") {
         return false;
       }
 
-      const targetRoles = rule.spawnedAgents
+      const targetRoles = rule.members
         .filter((agent) => agent.templateName === targetTemplateName)
         .map((agent) => agent.role);
       if (targetRoles.length === 0) {
@@ -502,7 +502,7 @@ export class GatingScheduler {
         }
 
         const requiredSourceTemplateNames = this.uniqueValues(
-          requiredEdges.map((edge) => this.getSpawnedTemplateName(rule, edge.sourceRole)).filter((value): value is string => Boolean(value)),
+          requiredEdges.map((edge) => this.getGroupMemberTemplateName(rule, edge.sourceRole)).filter((value): value is string => Boolean(value)),
         );
         return requiredSourceTemplateNames.length === actualSourceTemplateNames.length
           && requiredSourceTemplateNames.every((templateName) => actualSourceTemplateNames.includes(templateName));
@@ -515,11 +515,11 @@ export class GatingScheduler {
     return nodeRecord?.templateName ?? nodeId;
   }
 
-  private getSpawnedTemplateName(
-    rule: NonNullable<TopologyRecord["spawnRules"]>[number],
+  private getGroupMemberTemplateName(
+    rule: NonNullable<TopologyRecord["groupRules"]>[number],
     role: string,
   ): string | null {
-    return rule.spawnedAgents.find((agent) => agent.role === role)?.templateName ?? null;
+    return rule.members.find((agent) => agent.role === role)?.templateName ?? null;
   }
 
   private uniqueValues(values: string[]): string[] {
@@ -539,30 +539,30 @@ export class GatingScheduler {
       return true;
     }
 
-    return this.isSpawnReportEdgeSatisfiedByRuntimeReport(edge, completedEdges);
+    return this.isGroupReportEdgeSatisfiedByRuntimeReport(edge, completedEdges);
   }
 
-  private isSpawnReportEdgeSatisfiedByRuntimeReport(edge: TopologyEdge, completedEdges: Set<string>): boolean {
-    const spawnRule = this.topology.spawnRules?.find((rule) => {
-      const spawnNodeName = rule.spawnNodeName
-        || getTopologyNodeRecords(this.topology).find((node) => node.spawnRuleId === rule.id)?.id
+  private isGroupReportEdgeSatisfiedByRuntimeReport(edge: TopologyEdge, completedEdges: Set<string>): boolean {
+    const groupRule = this.topology.groupRules?.find((rule) => {
+      const groupNodeName = rule.groupNodeName
+        || getTopologyNodeRecords(this.topology).find((node) => node.groupRuleId === rule.id)?.id
         || "";
       return (
-        spawnNodeName === edge.source
+        groupNodeName === edge.source
         && rule.report !== false
         && rule.report.templateName === edge.target
         && rule.report.trigger === edge.trigger
       );
     });
-    if (!spawnRule) {
+    if (!groupRule) {
       return false;
     }
 
-    const terminalRoles = spawnRule.spawnedAgents
+    const terminalRoles = groupRule.members
       .map((agent) => agent.role)
-      .filter((role) => !spawnRule.edges.some((candidate) => candidate.sourceRole === role));
+      .filter((role) => !groupRule.edges.some((candidate) => candidate.sourceRole === role));
     const terminalTemplateNames = new Set(
-      spawnRule.spawnedAgents
+      groupRule.members
         .filter((agent) => terminalRoles.includes(agent.role))
         .map((agent) => agent.templateName),
     );

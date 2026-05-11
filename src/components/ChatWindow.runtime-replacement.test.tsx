@@ -116,22 +116,22 @@ function createWorkspaceAndTask(): {
       { id: "线索发现", kind: "agent" as const, templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
       {
         id: "疑点辩论",
-        kind: "spawn" as const,
+        kind: "group" as const,
         templateName: "疑点辩论",
-        spawnRuleId: "spawn-rule:疑点辩论",
+        groupRuleId: "group-rule:疑点辩论",
         initialMessageRouting: { mode: "inherit" },
       },
       { id: "漏洞挑战", kind: "agent" as const, templateName: "漏洞挑战", initialMessageRouting: { mode: "inherit" } },
       { id: "漏洞论证", kind: "agent" as const, templateName: "漏洞论证", initialMessageRouting: { mode: "inherit" } },
       { id: "讨论总结", kind: "agent" as const, templateName: "讨论总结", initialMessageRouting: { mode: "inherit" } },
     ],
-    spawnRules: [
+    groupRules: [
       {
-        id: "spawn-rule:疑点辩论",
-        spawnNodeName: "疑点辩论",
+        id: "group-rule:疑点辩论",
+        groupNodeName: "疑点辩论",
         sourceTemplateName: "线索发现",
         entryRole: "漏洞挑战",
-        spawnedAgents: [
+        members: [
           { role: "漏洞挑战", templateName: "漏洞挑战" },
           { role: "漏洞论证", templateName: "漏洞论证" },
           { role: "讨论总结", templateName: "讨论总结" },
@@ -166,6 +166,7 @@ function createWorkspaceAndTask(): {
         ],
         exitWhen: "all_completed",
         report: {
+          sourceRole: "summary",
           templateName: "线索发现",
           trigger: "<default>" as const,
           messageMode: "none" as const,

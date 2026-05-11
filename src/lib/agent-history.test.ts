@@ -636,22 +636,22 @@ test("buildAgentHistoryItems 会按 runtime agent 对应模板的 trigger 集合
       { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
       {
         id: "疑点辩论",
-        kind: "spawn",
+        kind: "group",
         templateName: "疑点辩论",
-        spawnRuleId: "spawn-rule:疑点辩论",
+        groupRuleId: "group-rule:疑点辩论",
         initialMessageRouting: { mode: "inherit" },
       },
       { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战", initialMessageRouting: { mode: "inherit" } },
       { id: "漏洞论证", kind: "agent", templateName: "漏洞论证", initialMessageRouting: { mode: "inherit" } },
       { id: "讨论总结", kind: "agent", templateName: "讨论总结", initialMessageRouting: { mode: "inherit" } },
     ],
-    spawnRules: [
+    groupRules: [
       {
-        id: "spawn-rule:疑点辩论",
-        spawnNodeName: "疑点辩论",
+        id: "group-rule:疑点辩论",
+        groupNodeName: "疑点辩论",
         sourceTemplateName: "线索发现",
         entryRole: "漏洞挑战",
-        spawnedAgents: [
+        members: [
           { role: "漏洞挑战", templateName: "漏洞挑战" },
           { role: "漏洞论证", templateName: "漏洞论证" },
           { role: "讨论总结", templateName: "讨论总结" },
@@ -686,6 +686,7 @@ test("buildAgentHistoryItems 会按 runtime agent 对应模板的 trigger 集合
         ],
         exitWhen: "all_completed",
         report: {
+          sourceRole: "summary",
           templateName: "线索发现",
           trigger: "<default>",
           messageMode: "none",
@@ -767,7 +768,7 @@ test("buildAgentHistoryItems 解析 runtime agent 模板时不会误命中同前
   );
 });
 
-test("buildAgentHistoryItems 遇到归属多个 spawn rule 的模板时不会猜测 trigger 集合", () => {
+test("buildAgentHistoryItems 遇到归属多个 group rule 的模板时不会猜测 trigger 集合", () => {
   const messages: MessageRecord[] = [
     createAgentProgressMessage({
       id: "ambiguous-runtime-message",
@@ -779,7 +780,7 @@ test("buildAgentHistoryItems 遇到归属多个 spawn rule 的模板时不会猜
       detail: "<complete> 这条标签在归属歧义时不应被清理",
     }),
   ];
-  const ambiguousSpawnTopology: TopologyRecord = {
+  const ambiguousGroupTopology: TopologyRecord = {
     nodes: ["入口甲", "入口乙", "工厂甲", "工厂乙", "复核"],
     edges: [
       {
@@ -800,27 +801,27 @@ test("buildAgentHistoryItems 遇到归属多个 spawn rule 的模板时不会猜
       { id: "入口乙", kind: "agent", templateName: "入口乙", initialMessageRouting: { mode: "inherit" } },
       {
         id: "工厂甲",
-        kind: "spawn",
+        kind: "group",
         templateName: "工厂甲",
-        spawnRuleId: "spawn-rule:甲",
+        groupRuleId: "group-rule:甲",
         initialMessageRouting: { mode: "inherit" },
       },
       {
         id: "工厂乙",
-        kind: "spawn",
+        kind: "group",
         templateName: "工厂乙",
-        spawnRuleId: "spawn-rule:乙",
+        groupRuleId: "group-rule:乙",
         initialMessageRouting: { mode: "inherit" },
       },
       { id: "复核", kind: "agent", templateName: "复核", initialMessageRouting: { mode: "inherit" } },
     ],
-    spawnRules: [
+    groupRules: [
       {
-        id: "spawn-rule:甲",
-        spawnNodeName: "工厂甲",
+        id: "group-rule:甲",
+        groupNodeName: "工厂甲",
         sourceTemplateName: "入口甲",
         entryRole: "复核",
-        spawnedAgents: [{ role: "复核", templateName: "复核" }],
+        members: [{ role: "复核", templateName: "复核" }],
         edges: [
           {
             sourceRole: "复核",
@@ -831,6 +832,7 @@ test("buildAgentHistoryItems 遇到归属多个 spawn rule 的模板时不会猜
         ],
         exitWhen: "all_completed",
         report: {
+          sourceRole: "summary",
           templateName: "入口甲",
           trigger: "<default>",
           messageMode: "none",
@@ -838,11 +840,11 @@ test("buildAgentHistoryItems 遇到归属多个 spawn rule 的模板时不会猜
         },
       },
       {
-        id: "spawn-rule:乙",
-        spawnNodeName: "工厂乙",
+        id: "group-rule:乙",
+        groupNodeName: "工厂乙",
         sourceTemplateName: "入口乙",
         entryRole: "复核",
-        spawnedAgents: [{ role: "复核", templateName: "复核" }],
+        members: [{ role: "复核", templateName: "复核" }],
         edges: [
           {
             sourceRole: "复核",
@@ -853,6 +855,7 @@ test("buildAgentHistoryItems 遇到归属多个 spawn rule 的模板时不会猜
         ],
         exitWhen: "all_completed",
         report: {
+          sourceRole: "summary",
           templateName: "入口乙",
           trigger: "<default>",
           messageMode: "none",
@@ -865,7 +868,7 @@ test("buildAgentHistoryItems 遇到归属多个 spawn rule 的模板时不会猜
   const [historyItem] = buildAgentHistoryItems({
     agentId: "复核-1",
     messages,
-    topology: ambiguousSpawnTopology,
+    topology: ambiguousGroupTopology,
   });
 
   assert.equal(

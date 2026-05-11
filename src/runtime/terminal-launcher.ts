@@ -157,7 +157,7 @@ export async function launchTerminalCommand(input: TerminalLaunchInput): Promise
     const child = spawn(spec.command, spec.args, spawnOptions);
 
     child.once("error", reject);
-    child.once("spawn", () => {
+    child.once("group", () => {
       child.unref();
       resolve();
     });

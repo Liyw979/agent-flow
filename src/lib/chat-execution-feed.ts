@@ -204,7 +204,7 @@ export function buildChatFeedItems(input: {
   messages: MessageRecord[];
   topology: Pick<
     TopologyRecord,
-    "edges" | "nodes" | "nodeRecords" | "langgraph" | "spawnRules"
+    "edges" | "nodes" | "nodeRecords" | "langgraph" | "groupRules"
   >;
 }): ChatFeedItem[] {
   const orderedMessages = [...input.messages].sort((left, right) =>

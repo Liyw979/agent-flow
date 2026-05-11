@@ -2,8 +2,8 @@ import type {
   AgentStatus,
   RuntimeTopologyEdge,
   RuntimeTopologyNode,
-  SpawnActivationRecord,
-  SpawnBundleInstantiation,
+  GroupActivationRecord,
+  GroupBundleInstantiation,
   TaskStatus,
   TopologyRecord,
 } from "@shared/types";
@@ -64,10 +64,10 @@ export interface GraphTaskState {
   topology: TopologyRecord;
   runtimeNodes: RuntimeTopologyNode[];
   runtimeEdges: RuntimeTopologyEdge[];
-  spawnBundles: SpawnBundleInstantiation[];
-  spawnActivations: SpawnActivationRecord[];
+  groupBundles: GroupBundleInstantiation[];
+  groupActivations: GroupActivationRecord[];
   taskStatus: TaskStatus;
-  finishReason: string | null;
+  finishReason: string;
   agentStatusesByName: Record<string, AgentStatus>;
   agentContextByName: Record<string, string>;
   forwardedAgentMessageByName: Record<string, string>;
@@ -81,7 +81,8 @@ export interface GraphTaskState {
   pendingActionRequiredRequestsByAgent: Record<string, GraphActionRequiredRequest>;
   pendingHandoffRepairTargetsBySource: Record<string, string[]>;
   actionRequiredLoopCountByEdge: Record<string, number>;
-  spawnSequenceByRule: Record<string, number>;
+  groupSequenceByRule: Record<string, number>;
+  hasForwardedInitialTask: boolean;
 }
 
 export function createEmptyGraphTaskState(input: {
@@ -94,10 +95,10 @@ export function createEmptyGraphTaskState(input: {
     topology,
     runtimeNodes: [],
     runtimeEdges: [],
-    spawnBundles: [],
-    spawnActivations: [],
+    groupBundles: [],
+    groupActivations: [],
     taskStatus: "pending",
-    finishReason: null,
+    finishReason: "idle",
     agentStatusesByName: Object.fromEntries(topology.nodes.map((name) => [name, "idle"])),
     agentContextByName: {},
     forwardedAgentMessageByName: {},
@@ -111,7 +112,8 @@ export function createEmptyGraphTaskState(input: {
     pendingActionRequiredRequestsByAgent: {},
     pendingHandoffRepairTargetsBySource: {},
     actionRequiredLoopCountByEdge: {},
-    spawnSequenceByRule: {},
+    groupSequenceByRule: {},
+    hasForwardedInitialTask: false,
   };
 }
 
@@ -138,11 +140,11 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
         }
       : {}),
     nodeRecords: getTopologyNodeRecords(state.topology).map((node) => ({ ...node })),
-    ...(state.topology.spawnRules
+    ...(state.topology.groupRules
       ? {
-          spawnRules: state.topology.spawnRules.map((rule) => ({
+          groupRules: state.topology.groupRules.map((rule) => ({
             ...rule,
-            spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
+            members: rule.members.map((agent) => ({ ...agent })),
             edges: rule.edges.map((edge) => ({ ...edge })),
           })),
         }
@@ -154,13 +156,13 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
     topology,
     runtimeNodes: state.runtimeNodes.map((node) => ({ ...node })),
     runtimeEdges: state.runtimeEdges.map((edge) => ({ ...edge })),
-    spawnBundles: state.spawnBundles.map((bundle) => ({
+    groupBundles: state.groupBundles.map((bundle) => ({
       ...bundle,
       item: { ...bundle.item },
       nodes: bundle.nodes.map((node) => ({ ...node })),
       edges: bundle.edges.map((edge) => ({ ...edge })),
     })),
-    spawnActivations: state.spawnActivations.map((activation) => ({
+    groupActivations: state.groupActivations.map((activation) => ({
       ...activation,
       bundleGroupIds: [...activation.bundleGroupIds],
       completedBundleGroupIds: [...activation.completedBundleGroupIds],
@@ -216,7 +218,8 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
       ]),
     ),
     actionRequiredLoopCountByEdge: { ...state.actionRequiredLoopCountByEdge },
-    spawnSequenceByRule: { ...state.spawnSequenceByRule },
+    groupSequenceByRule: { ...state.groupSequenceByRule },
+    hasForwardedInitialTask: state.hasForwardedInitialTask,
   };
 }
 

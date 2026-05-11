@@ -14,11 +14,11 @@ test("用户派发决策使用 agentId 字段表达来源和目标", () => {
       edges: [],
       nodeRecords: buildTopologyNodeRecords({
         nodes: ["Build"],
-        spawnNodeIds: new Set(),
+        groupNodeIds: new Set(),
         templateNameByNodeId: new Map(),
         initialMessageRoutingByNodeId: new Map(),
-        spawnRuleIdByNodeId: new Map(),
-        spawnEnabledNodeIds: new Set(),
+        groupRuleIdByNodeId: new Map(),
+        groupEnabledNodeIds: new Set(),
         promptByNodeId: new Map(),
         writableNodeIds: new Set(),
       }),
@@ -46,4 +46,56 @@ test("用户派发决策使用 agentId 字段表达来源和目标", () => {
       },
     ],
   });
+});
+
+test("用户直接命中 group 时不会把 group 节点伪造成来源 agent", () => {
+  const state = createEmptyGraphTaskState({
+    taskId: "task-group-user-dispatch",
+    topology: {
+      nodes: ["讨论", "执行"],
+      edges: [],
+      nodeRecords: [
+        {
+          id: "讨论",
+          kind: "group",
+          templateName: "讨论",
+          groupRuleId: "group-rule:讨论",
+          initialMessageRouting: { mode: "inherit" },
+        },
+        {
+          id: "执行",
+          kind: "agent",
+          templateName: "执行",
+          initialMessageRouting: { mode: "inherit" },
+        },
+      ],
+      groupRules: [
+        {
+          id: "group-rule:讨论",
+          groupNodeName: "讨论",
+          entryRole: "entry",
+          members: [{ role: "entry", templateName: "执行" }],
+          edges: [],
+          exitWhen: "one_side_agrees",
+          report: false,
+        },
+      ],
+    },
+  });
+
+  const decision = createUserDispatchDecision(state, {
+    targetAgentId: "讨论",
+    content: "请开始",
+  });
+
+  assert.equal(decision.type, "execute_batch");
+  assert.equal(decision.batch.sourceAgentId, null);
+  assert.deepEqual(decision.batch.jobs, [
+    {
+      agentId: "执行-1",
+      sourceContent: "请开始",
+      displayContent: "请开始",
+      kind: "raw",
+    },
+  ]);
 });
