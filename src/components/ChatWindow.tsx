@@ -728,10 +728,19 @@ export function ChatWindow({
     setSubmitError(null);
 
     try {
-      await navigator.clipboard.writeText(formatChatTranscript(messages, {
-        logFilePath: taskLogFilePath,
-        taskUrl,
-      }));
+      await navigator.clipboard.writeText(
+        formatChatTranscript(
+          messages.filter((message) =>
+            message.sender === "user" ||
+            message.sender === "system" ||
+            message.kinds.includes("agent-final")
+          ),
+          {
+            logFilePath: taskLogFilePath,
+            taskUrl,
+          },
+        ),
+      );
       setCopySuccess(true);
 
       if (copyResetTimerRef.current !== null) {

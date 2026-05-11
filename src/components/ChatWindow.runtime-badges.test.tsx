@@ -315,6 +315,15 @@ test("ChatWindow 只根据消息流展示运行中面板与最终消息", async 
       },
     ],
   };
+  let copiedTranscript = "";
+  Object.defineProperty(domContext.dom.window.navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: async (value: string) => {
+        copiedTranscript = value;
+      },
+    },
+  });
 
   try {
     await act(async () => {
@@ -335,6 +344,24 @@ test("ChatWindow 只根据消息流展示运行中面板与最终消息", async 
     assert.equal(container.querySelectorAll('[aria-label="运行中"]').length, 1);
     assert.match(text, /Build 正在继续处理/);
     assert.match(text, /QA 校验失败/);
+
+    const copyButton = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "复制对话记录",
+    );
+    if (!copyButton) {
+      assert.fail("缺少复制对话记录按钮");
+    }
+
+    await act(async () => {
+      copyButton.dispatchEvent(new domContext.dom.window.MouseEvent("click", {
+        bubbles: true,
+      }));
+    });
+
+    assert.match(copiedTranscript, /@Build @QA 请处理本轮问题/);
+    assert.match(copiedTranscript, /发现第 1 个可疑点：这里需要进入对抗讨论。/);
+    assert.match(copiedTranscript, /QA 校验失败/);
+    assert.doesNotMatch(copiedTranscript, /Build 正在继续处理/);
   } finally {
     await act(async () => {
       root.unmount();
