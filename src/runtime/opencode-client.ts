@@ -359,7 +359,7 @@ export class OpenCodeClient {
           sessionId,
           {
             agent: agentId,
-            content: `需要返回：${allowedDecisionTriggers.join(" / ")}`,
+            content: `回复需要包含：${allowedDecisionTriggers.join(" / ")}`,
           },
         );
       } catch (error) {
