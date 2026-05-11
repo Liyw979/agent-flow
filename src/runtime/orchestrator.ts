@@ -100,6 +100,7 @@ import type { CompiledTeamDsl } from "./team-dsl";
 import { shouldScheduleEventStreamReconnect } from "./event-stream-lifecycle";
 import { isExecutionDecisionAgent } from "./decision-agent-context";
 import { resolveTaskAgentIdsToPrewarm } from "./task-session-prewarm";
+import { appendAppLog } from "./app-log";
 import {
   buildInjectedConfigFromAgents,
   extractDslAgentsFromTopology,
@@ -1146,6 +1147,36 @@ export class Orchestrator {
     return created;
   }
 
+  private listTaskAgentSessionEntries(
+    task: Pick<TaskRecord, "id" | "cwd">,
+    agentSessions: ReadonlyMap<string, string>,
+  ) {
+    return this.store.listTaskAgents(task.cwd, task.id).map((agent) => {
+      const sessionId = agentSessions.get(agent.id);
+      return {
+        agentId: agent.id,
+        sessionId: sessionId === undefined ? "" : sessionId,
+      };
+    });
+  }
+
+  private appendTaskAgentSessionsLog(
+    task: Pick<TaskRecord, "id" | "cwd">,
+    reason: "initialized" | "session-created",
+    agentSessions: ReadonlyMap<string, string>,
+  ) {
+    appendAppLog(
+      "info",
+      "task.opencode_sessions_snapshot",
+      {
+        cwd: task.cwd,
+        reason,
+        agentSessions: this.listTaskAgentSessionEntries(task, agentSessions),
+      },
+      { taskId: task.id },
+    );
+  }
+
   private overlayTaskAgents(
     task: TaskRecord,
     agents: TaskAgentRecord[],
@@ -1179,6 +1210,7 @@ export class Orchestrator {
       `${task.title}:${agent.id}`,
     );
     overlay.agentSessions.set(agent.id, sessionId);
+    this.appendTaskAgentSessionsLog(task, "session-created", overlay.agentSessions);
     return sessionId;
   }
 
@@ -1188,7 +1220,7 @@ export class Orchestrator {
 
   private async ensureTaskAgentSessions(
     task: TaskRecord,
-  ): Promise<Map<string, string>> {
+  ): Promise<void> {
     const topology = this.store.getTopology(task.cwd);
     const prewarmAgentIds = new Set(
       resolveTaskAgentIdsToPrewarm(
@@ -1196,16 +1228,14 @@ export class Orchestrator {
         this.store.listTaskAgents(task.cwd, task.id),
       ),
     );
-    const sessions = await Promise.all(
+    await Promise.all(
       this.store
         .listTaskAgents(task.cwd, task.id)
         .filter((agent) => prewarmAgentIds.has(agent.id))
         .map(
-          async (agent) =>
-            [agent.id, await this.ensureAgentSession(task, agent)] as const,
+          async (agent) => this.ensureAgentSession(task, agent),
         ),
     );
-    return new Map(sessions);
   }
 
   private async ensureTaskInitialized(
@@ -1219,6 +1249,8 @@ export class Orchestrator {
 
     const refreshedTask = this.store.getTask(task.cwd, task.id);
     if (!refreshedTask.initializedAt) {
+      const overlay = this.ensureTaskRuntimeOverlay(currentTask);
+      this.appendTaskAgentSessionsLog(currentTask, "initialized", overlay.agentSessions);
       this.store.updateTaskInitialized(
         task.cwd,
         task.id,

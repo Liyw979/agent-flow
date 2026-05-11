@@ -26,6 +26,7 @@ import { compileTeamDsl, type TeamDslDefinition } from "./team-dsl";
 import { isOpenCodeServeCommand } from "../../test-support/runtime/opencode-process-cleanup";
 import { buildInjectedConfigFromAgents } from "./project-agent-source";
 import { mergeTaskChatMessages } from "../lib/chat-messages";
+import { buildTaskLogFilePath, initAppFileLogger } from "./app-log";
 
 const TEST_AGENT_PROMPTS: Record<string, string> = {
   Build: "",
@@ -544,6 +545,7 @@ test("task init 会补齐 OpenCode 运行态", async () => {
 
 test("漏洞团队任务初始化时不会为仅作为 spawn 模板存在的静态 agent 预建 session", async () => {
   const userDataPath = createTempDir();
+  initAppFileLogger(userDataPath);
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
     userDataPath,
@@ -571,6 +573,45 @@ test("漏洞团队任务初始化时不会为仅作为 spawn 模板存在的静�
   assert.equal(vulnerabilityArguer.opencodeSessionId, "");
   assert.equal(vulnerabilityChallenger.opencodeSessionId, "");
   assert.equal(summaryAgent.opencodeSessionId, "");
+
+  await orchestrator.openAgentTerminal({
+    cwd: projectPath,
+    taskId: task.task.id,
+    agentId: "线索发现",
+  });
+
+  const records = fs
+    .readFileSync(buildTaskLogFilePath(userDataPath, task.task.id), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as {
+      event: string;
+      reason: string;
+      agentSessions: Array<{ agentId: string; sessionId: string }>;
+    });
+  const createdSnapshots = records.filter((record) => record.reason === "session-created");
+  const initializedSnapshots = records.filter((record) => record.reason === "initialized");
+  const snapshot = records.filter((record) => record.event === "task.opencode_sessions_snapshot").at(-1);
+  const expectedAgentSessions = task.agents.map((agent) => ({
+    agentId: agent.id,
+    sessionId: agent.opencodeSessionId,
+  }));
+
+  assert.equal(createdSnapshots.length > 0, true);
+  assert.equal(initializedSnapshots.length, 1);
+  assert.equal(
+    createdSnapshots.some(
+      (record) =>
+        JSON.stringify(record.agentSessions) === JSON.stringify(expectedAgentSessions),
+    ),
+    true,
+  );
+  assert.equal(snapshot?.event, "task.opencode_sessions_snapshot");
+  assert.equal(snapshot?.reason, "initialized");
+  assert.deepEqual(
+    snapshot?.agentSessions,
+    expectedAgentSessions,
+  );
 });
 
 test("单节点任务进入 finished 时不会因为缺少 workspace cwd 而在后台崩溃", async () => {
