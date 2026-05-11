@@ -544,6 +544,7 @@ test("漏洞团队任务初始化时不会为仅作为 spawn 模板存在的静�
   const orchestrator = new TestOrchestrator({
     userDataPath,
     enableEventStream: false,
+    terminalLauncher: async () => {},
   });
   stubOpenCodeSessions(orchestrator);
 
