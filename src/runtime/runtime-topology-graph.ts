@@ -16,7 +16,7 @@ export function buildEffectiveTopology(state: GraphTaskState): TopologyRecord {
       }
       return {
         id: node.templateName,
-        kind: node.kind === "spawn" ? "spawn" : "agent",
+        kind: node.kind === "group" ? "group" : "agent",
         templateName: node.templateName,
         initialMessageRouting: { mode: "inherit" as const },
       };
@@ -24,7 +24,7 @@ export function buildEffectiveTopology(state: GraphTaskState): TopologyRecord {
     id: node.id,
     kind: node.kind,
     templateName: node.templateName,
-    ...(node.spawnRuleId ? { spawnRuleId: node.spawnRuleId } : {}),
+    ...((node.kind === "group" && "groupRuleId" in node) ? { groupRuleId: node.groupRuleId } : {}),
   }));
 
   return {
@@ -49,18 +49,18 @@ export function ensureRuntimeAgentStatuses(state: GraphTaskState): void {
   }
 }
 
-export function isSpawnNode(state: GraphTaskState, nodeId: string): boolean {
+export function isGroupNode(state: GraphTaskState, nodeId: string): boolean {
   const nodeRecords = getTopologyNodeRecords(buildEffectiveTopology(state));
-  return nodeRecords.some((node) => node.id === nodeId && node.kind === "spawn");
+  return nodeRecords.some((node) => node.id === nodeId && node.kind === "group");
 }
 
-export function getSpawnRuleIdForNode(state: GraphTaskState, nodeId: string): string | null {
+export function getGroupRuleIdForNode(state: GraphTaskState, nodeId: string): string | null {
   const nodeRecords = getTopologyNodeRecords(buildEffectiveTopology(state));
-  return nodeRecords.find((node) => node.id === nodeId && node.kind === "spawn")?.spawnRuleId ?? null;
+  return nodeRecords.find((node) => node.id === nodeId && node.kind === "group")?.groupRuleId ?? null;
 }
 
-export function getSpawnRuleEntryRuntimeNodeIds(state: GraphTaskState, groupId: string, spawnRuleId: string): string[] {
-  const rule = state.topology.spawnRules?.find((candidate) => candidate.id === spawnRuleId);
+export function getGroupRuleEntryRuntimeNodeIds(state: GraphTaskState, groupId: string, groupRuleId: string): string[] {
+  const rule = state.topology.groupRules?.find((candidate) => candidate.id === groupRuleId);
   if (!rule) {
     return [];
   }
@@ -73,12 +73,12 @@ export function getRuntimeTemplateName(state: GraphTaskState, runtimeAgentId: st
   return state.runtimeNodes.find((node) => node.id === runtimeAgentId)?.templateName ?? null;
 }
 
-export function getNextSpawnSequence(state: GraphTaskState, spawnRuleId: string): number {
-  const next = (state.spawnSequenceByRule[spawnRuleId] ?? 0) + 1;
-  state.spawnSequenceByRule[spawnRuleId] = next;
+export function getNextGroupSequence(state: GraphTaskState, groupRuleId: string): number {
+  const next = (state.groupSequenceByRule[groupRuleId] ?? 0) + 1;
+  state.groupSequenceByRule[groupRuleId] = next;
   return next;
 }
 
-export function buildSpawnItemId(spawnRuleId: string, sequence: number): string {
-  return `${spawnRuleId}-${String(sequence).padStart(4, "0")}`;
+export function buildGroupItemId(groupRuleId: string, sequence: number): string {
+  return `${groupRuleId}-${String(sequence).padStart(4, "0")}`;
 }

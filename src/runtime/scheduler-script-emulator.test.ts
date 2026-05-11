@@ -72,11 +72,11 @@ function withAgentNodeRecords(topology: Omit<TopologyRecord, "nodeRecords">): To
     ...topology,
     nodeRecords: buildTopologyNodeRecords({
       nodes: topology.nodes,
-      spawnNodeIds: new Set(),
+      groupNodeIds: new Set(),
       templateNameByNodeId: new Map(),
       initialMessageRoutingByNodeId: new Map(),
-      spawnRuleIdByNodeId: new Map(),
-      spawnEnabledNodeIds: new Set(),
+      groupRuleIdByNodeId: new Map(),
+      groupEnabledNodeIds: new Set(),
       promptByNodeId: new Map(),
       writableNodeIds: new Set(),
     }),
@@ -706,7 +706,7 @@ test("scheduler script emulator 纯函数不允许 execute_batch 在脚本可见
     nodes: ["线索发现", "疑点辩论", "漏洞挑战"],
     nodeRecords: [
       { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
-      { id: "疑点辩论", kind: "spawn", templateName: "疑点辩论", spawnRuleId: "spawn-rule:疑点辩论", initialMessageRouting: { mode: "inherit" } },
+      { id: "疑点辩论", kind: "group", templateName: "疑点辩论", groupRuleId: "group-rule:疑点辩论", initialMessageRouting: { mode: "inherit" } },
       { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战", initialMessageRouting: { mode: "inherit" } },
     ],
     edges: [
@@ -737,11 +737,11 @@ test("scheduler script emulator 纯函数不允许 execute_batch 在脚本可见
       role: "漏洞挑战",
     },
   ];
-  state.spawnActivations = [
+  state.groupActivations = [
     {
       id: "activation-old",
-      spawnNodeName: "疑点辩论",
-      spawnRuleId: "spawn-rule:疑点辩论",
+      groupNodeName: "疑点辩论",
+      groupRuleId: "group-rule:疑点辩论",
       sourceContent: "旧 finding",
       bundleGroupIds: ["group-old"],
       completedBundleGroupIds: ["group-old"],
@@ -749,8 +749,8 @@ test("scheduler script emulator 纯函数不允许 execute_batch 在脚本可见
     },
     {
       id: "activation-new",
-      spawnNodeName: "疑点辩论",
-      spawnRuleId: "spawn-rule:疑点辩论",
+      groupNodeName: "疑点辩论",
+      groupRuleId: "group-rule:疑点辩论",
       sourceContent: "新 finding",
       bundleGroupIds: ["group-new"],
       completedBundleGroupIds: [],

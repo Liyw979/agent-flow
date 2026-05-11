@@ -1415,17 +1415,17 @@ function getStrictHiddenDecisionTargets(
 ): string[] {
   return decision.batch.jobs
     .map((job) => job.agentId)
-    .filter((agentId) => isCompletedSpawnRuntimeTarget(state, agentId));
+    .filter((agentId) => isCompletedGroupRuntimeTarget(state, agentId));
 }
 
 function isImplicitScriptHiddenTarget(
   state: ReturnType<typeof createGraphTaskState>,
   agentId: string,
 ): boolean {
-  return agentId === LANGGRAPH_END_NODE_ID || isCompletedSpawnRuntimeTarget(state, agentId);
+  return agentId === LANGGRAPH_END_NODE_ID || isCompletedGroupRuntimeTarget(state, agentId);
 }
 
-function isCompletedSpawnRuntimeTarget(
+function isCompletedGroupRuntimeTarget(
   state: ReturnType<typeof createGraphTaskState>,
   agentId: string,
 ): boolean {
@@ -1433,7 +1433,7 @@ function isCompletedSpawnRuntimeTarget(
   if (!runtimeNode?.groupId) {
     return false;
   }
-  return state.spawnActivations.some((activation) =>
+  return state.groupActivations.some((activation) =>
     activation.dispatched
     && activation.completedBundleGroupIds.includes(runtimeNode.groupId ?? ""),
   );

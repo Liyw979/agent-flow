@@ -24,7 +24,7 @@ import {
   createTopologyLangGraphRecord,
   getTopologyEdgeId,
   getTopologyNodeRecords,
-  normalizeSpawnRule,
+  normalizeGroupRule,
   normalizeTopologyEdgeTrigger,
   resolveTriggerRoutingKindForSource,
   type DeleteTaskPayload,
@@ -35,7 +35,7 @@ import {
   type OpenAgentTerminalPayload,
   resolvePrimaryTopologyStartTarget,
   resolveTopologyAgentOrder,
-  type SpawnRule,
+  type GroupRule,
   type SubmitTaskPayload,
   type TaskAgentRecord,
   type TaskRecord,
@@ -110,34 +110,34 @@ import { runWithTaskLogScope } from "./app-log";
 
 const RUNTIME_PROGRESS_SYNC_INTERVAL_MS = 200;
 
-type SpawnRuleInputBase = Omit<SpawnRule, "report">;
+type GroupRuleInputBase = Omit<GroupRule, "report">;
 
-type SpawnRuleInput =
-  | (SpawnRuleInputBase & {
-      report: SpawnRule["report"];
+type GroupRuleInput =
+  | (GroupRuleInputBase & {
+      report: GroupRule["report"];
     })
-  | (SpawnRuleInputBase & {
+  | (GroupRuleInputBase & {
       reportToTemplateName: string;
     })
-  | (SpawnRuleInputBase & {
+  | (GroupRuleInputBase & {
       reportToTemplateName: string;
       reportToTrigger: string;
       reportToMessageMode: "none" | "last";
       reportToMaxTriggerRounds: number | false;
     })
-  | SpawnRuleInputBase;
+  | GroupRuleInputBase;
 
-type TopologyInputRecord = Omit<TopologyRecord, "spawnRules"> & {
-  spawnRules?: SpawnRuleInput[];
+type TopologyInputRecord = Omit<TopologyRecord, "groupRules"> & {
+  groupRules?: GroupRuleInput[];
 };
 
 type UpdateTopologyInputPayload = {
   topology: TopologyInputRecord;
 };
 
-function coerceSpawnRuleInput(
-  rule: SpawnRuleInput,
-): SpawnRule {
+function coerceGroupRuleInput(
+  rule: GroupRuleInput,
+): GroupRule {
   if ("report" in rule) {
     return rule;
   }
@@ -149,13 +149,14 @@ function coerceSpawnRuleInput(
   }
   if (!("reportToTrigger" in rule)) {
     throw new Error(
-      `spawn rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`,
+      `group rule ${rule.id} 存在 report target 时，必须显式声明 reportToTrigger。`,
     );
   }
   return {
     ...rule,
     report: {
       templateName: rule.reportToTemplateName,
+      sourceRole: rule.members.at(-1)?.role ?? rule.entryRole,
       trigger: rule.reportToTrigger,
       messageMode: rule.reportToMessageMode,
       maxTriggerRounds: rule.reportToMaxTriggerRounds,
@@ -1416,12 +1417,12 @@ export class Orchestrator {
       throw new Error("拓扑缺少 nodeRecords，无法继续运行。");
     }
     const rawNodeRecords: TopologyNodeRecord[] = topology.nodeRecords;
-    const spawnNodeIds = new Set(
+    const groupNodeIds = new Set(
       rawNodeRecords
-        .filter((node) => node.kind === "spawn" && node.id)
+        .filter((node) => node.kind === "group" && node.id)
         .map((node) => node.id),
     );
-    const validTopologyNames = new Set([...validNames, ...spawnNodeIds]);
+    const validTopologyNames = new Set([...validNames, ...groupNodeIds]);
     const seenEdges = new Set<string>();
     const normalizedEdges = topology.edges
       .map((edge) => {
@@ -1473,15 +1474,15 @@ export class Orchestrator {
     );
     const nodes = [
       ...orderedAgentNodes,
-      ...topology.nodes.filter((item) => spawnNodeIds.has(item)),
-      ...spawnNodeIds,
+      ...topology.nodes.filter((item) => groupNodeIds.has(item)),
+      ...groupNodeIds,
     ].filter((value, index, list) => list.indexOf(value) === index);
     const normalizedNodeRecords = rawNodeRecords
       .filter(
         (node) =>
           node.id &&
           node.templateName &&
-          (node.kind === "spawn" || validNames.has(node.templateName)),
+          (node.kind === "group" || validNames.has(node.templateName)),
       )
       .map((node) => {
         const prompt =
@@ -1500,30 +1501,30 @@ export class Orchestrator {
           kind: node.kind,
           templateName: node.templateName,
           initialMessageRouting: node.initialMessageRouting,
-          ...(node.spawnRuleId ? { spawnRuleId: node.spawnRuleId } : {}),
-          ...(node.spawnEnabled === true ? { spawnEnabled: true } : {}),
+          ...(node.groupRuleId ? { groupRuleId: node.groupRuleId } : {}),
+          ...(node.groupEnabled === true ? { groupEnabled: true } : {}),
           ...(typeof prompt === "string" ? { prompt } : {}),
           ...(writable ? { writable: true } : {}),
         };
       });
-    const normalizedSpawnRules = topology.spawnRules?.map((rule) => {
-      const spawnNodeName =
-        rule.spawnNodeName ||
-        normalizedNodeRecords.find((node) => node.spawnRuleId === rule.id)?.id ||
+    const normalizedGroupRules = topology.groupRules?.map((rule) => {
+      const groupNodeName =
+        rule.groupNodeName ||
+        normalizedNodeRecords.find((node) => node.groupRuleId === rule.id)?.id ||
         rule.id;
-      return normalizeSpawnRule(
-        coerceSpawnRuleInput(rule),
-        spawnNodeName,
+      return normalizeGroupRule(
+        coerceGroupRuleInput(rule),
+        groupNodeName,
       );
     });
-    const spawnRules: SpawnRule[] | undefined = normalizedSpawnRules?.filter((rule) =>
+    const groupRules: GroupRule[] | undefined = normalizedGroupRules?.filter((rule) =>
       rule.id
-      && rule.spawnNodeName
+      && rule.groupNodeName
       && rule.entryRole
-      && validTopologyNames.has(rule.spawnNodeName)
+      && validTopologyNames.has(rule.groupNodeName)
       && (!rule.sourceTemplateName || validNames.has(rule.sourceTemplateName))
       && (rule.report === false || validNames.has(rule.report.templateName))
-      && rule.spawnedAgents.every(
+      && rule.members.every(
         (agent) => agent.role && validNames.has(agent.templateName),
       ),
     );
@@ -1549,9 +1550,9 @@ export class Orchestrator {
     });
     const nodeRecords = buildTopologyNodeRecords({
       nodes,
-      spawnNodeIds: new Set(
+      groupNodeIds: new Set(
         normalizedNodeRecords
-          .filter((node) => node.kind === "spawn")
+          .filter((node) => node.kind === "group")
           .map((node) => node.id),
       ),
       templateNameByNodeId: new Map(
@@ -1560,14 +1561,14 @@ export class Orchestrator {
       initialMessageRoutingByNodeId: new Map(
         normalizedNodeRecords.map((node) => [node.id, node.initialMessageRouting]),
       ),
-      spawnRuleIdByNodeId: new Map(
+      groupRuleIdByNodeId: new Map(
         normalizedNodeRecords
-          .filter((node) => typeof node.spawnRuleId === "string")
-          .map((node) => [node.id, node.spawnRuleId as string]),
+          .filter((node) => typeof node.groupRuleId === "string")
+          .map((node) => [node.id, node.groupRuleId as string]),
       ),
-      spawnEnabledNodeIds: new Set(
+      groupEnabledNodeIds: new Set(
         normalizedNodeRecords
-          .filter((node) => node.spawnEnabled === true)
+          .filter((node) => node.groupEnabled === true)
           .map((node) => node.id),
       ),
       promptByNodeId: new Map(
@@ -1587,7 +1588,7 @@ export class Orchestrator {
       edges,
       langgraph,
       nodeRecords,
-      ...(spawnRules ? { spawnRules } : {}),
+      ...(groupRules ? { groupRules } : {}),
     } satisfies TopologyRecord;
   }
 

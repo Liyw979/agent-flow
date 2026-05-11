@@ -5,7 +5,7 @@ import {
   buildTopologyNodeRecords,
   collectTopologyTriggerShapes,
   createDefaultTopology,
-  getSpawnRules,
+  getGroupRules,
   getActionRequiredEdgeLoopLimit,
   isDecisionAgentInTopology,
   normalizeActionRequiredMaxRounds,
@@ -20,11 +20,11 @@ function withAgentNodeRecords(topology: Omit<TopologyRecord, "nodeRecords">): To
     ...topology,
     nodeRecords: buildTopologyNodeRecords({
       nodes: topology.nodes,
-      spawnNodeIds: new Set(),
+      groupNodeIds: new Set(),
       templateNameByNodeId: new Map(),
       initialMessageRoutingByNodeId: new Map(),
-      spawnRuleIdByNodeId: new Map(),
-      spawnEnabledNodeIds: new Set(),
+      groupRuleIdByNodeId: new Map(),
+      groupEnabledNodeIds: new Set(),
       promptByNodeId: new Map(),
       writableNodeIds: new Set(),
     }),
@@ -255,7 +255,7 @@ test("非法 maxTriggerRounds 必须直接报错，不能偷偷修正", () => {
   assert.equal(normalizeActionRequiredMaxRounds(4), 4);
 });
 
-test("getSpawnRules 保留显式声明的 messageMode，不再依赖默认补值", () => {
+test("getGroupRules 保留显式声明的 messageMode，不再依赖默认补值", () => {
   const topology: TopologyRecord = {
     nodes: ["线索发现", "疑点辩论"],
     edges: [],
@@ -268,20 +268,20 @@ test("getSpawnRules 保留显式声明的 messageMode，不再依赖默认补值
       },
       {
         id: "疑点辩论",
-        kind: "spawn",
+        kind: "group",
         templateName: "疑点辩论",
-        spawnEnabled: true,
-        spawnRuleId: "spawn-rule:疑点辩论",
+        groupEnabled: true,
+        groupRuleId: "group-rule:疑点辩论",
         initialMessageRouting: { mode: "inherit" },
       },
     ],
-    spawnRules: [
+    groupRules: [
       {
         id: "疑点辩论",
-        spawnNodeName: "疑点辩论",
+        groupNodeName: "疑点辩论",
         sourceTemplateName: "线索发现",
         entryRole: "pro",
-        spawnedAgents: [
+        members: [
           { role: "pro", templateName: "漏洞论证" },
           { role: "con", templateName: "漏洞挑战" },
         ],
@@ -299,7 +299,7 @@ test("getSpawnRules 保留显式声明的 messageMode，不再依赖默认补值
     ],
   };
 
-  assert.deepEqual(getSpawnRules(topology)[0]?.edges, [
+  assert.deepEqual(getGroupRules(topology)[0]?.edges, [
     {
       sourceRole: "pro",
       targetRole: "con",

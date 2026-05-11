@@ -2,13 +2,13 @@ import {
   DEFAULT_TOPOLOGY_TRIGGER,
   getTopologyNodeRecords,
   normalizeTopologyEdgeTrigger,
-  type SpawnRule,
+  type GroupRule,
   type TopologyEdge,
   type TopologyRecord,
 } from "@shared/types";
 
 type DownstreamMode =
-  | "spawn"
+  | "group"
   | typeof DEFAULT_TOPOLOGY_TRIGGER
   | TopologyEdge["trigger"];
 
@@ -34,7 +34,7 @@ function buildReachableTargets(topology: TopologyRecord, startNodeId: string): s
   return ordered;
 }
 
-function buildSpawnRuleFromReachable(topology: TopologyRecord, sourceNodeId: string, targetNodeId: string): SpawnRule {
+function buildGroupRuleFromReachable(topology: TopologyRecord, sourceNodeId: string, targetNodeId: string): GroupRule {
   const reachable = buildReachableTargets(topology, targetNodeId);
   const nodeRecords = getTopologyNodeRecords(topology);
   const targetTemplates = reachable.map((nodeId) => {
@@ -47,11 +47,11 @@ function buildSpawnRuleFromReachable(topology: TopologyRecord, sourceNodeId: str
   const reportTarget = targetTemplates.at(-1)?.templateName ?? targetNodeId;
 
   return {
-    id: `spawn-rule:${targetNodeId}`,
-    spawnNodeName: targetNodeId,
+    id: `group-rule:${targetNodeId}`,
+    groupNodeName: targetNodeId,
     sourceTemplateName: sourceNodeId,
     entryRole: "entry",
-    spawnedAgents: targetTemplates.map((item, index) => ({
+    members: targetTemplates.map((item, index) => ({
       role: index === 0 ? "entry" : item.nodeId,
       templateName: item.templateName,
     })),
@@ -63,6 +63,7 @@ function buildSpawnRuleFromReachable(topology: TopologyRecord, sourceNodeId: str
     })),
     exitWhen: "one_side_agrees",
     report: {
+      sourceRole: "summary",
       templateName: reportTarget,
       trigger: DEFAULT_TOPOLOGY_TRIGGER,
       messageMode: "last",
@@ -85,30 +86,30 @@ function clearEdgesForPair(
   );
 }
 
-function setSpawnNodeState(
+function setGroupNodeState(
   topology: TopologyRecord,
   targetNodeId: string,
   enabled: boolean,
-): Pick<TopologyRecord, "nodeRecords" | "spawnRules"> {
+): Pick<TopologyRecord, "nodeRecords" | "groupRules"> {
   const nodeRecords = getTopologyNodeRecords(topology);
-  const spawnRuleId = `spawn-rule:${targetNodeId}`;
+  const groupRuleId = `group-rule:${targetNodeId}`;
   const nextNodeRecords = nodeRecords.map((node) =>
     node.id === targetNodeId
       ? (() => {
-          const { spawnRuleId: _spawnRuleId, spawnEnabled: _spawnEnabled, ...rest } = node;
+          const { groupRuleId: _groupRuleId, groupEnabled: _groupEnabled, ...rest } = node;
           return {
             ...rest,
-            kind: enabled ? ("spawn" as const) : ("agent" as const),
-            ...(enabled ? { spawnEnabled: true, spawnRuleId } : { spawnEnabled: false }),
+            kind: enabled ? ("group" as const) : ("agent" as const),
+            ...(enabled ? { groupEnabled: true, groupRuleId } : { groupEnabled: false }),
           };
         })()
       : node,
   );
-  const nextSpawnRules = (topology.spawnRules ?? []).filter((rule) => rule.id !== spawnRuleId);
+  const nextGroupRules = (topology.groupRules ?? []).filter((rule) => rule.id !== groupRuleId);
 
   return {
     nodeRecords: nextNodeRecords,
-    spawnRules: nextSpawnRules,
+    groupRules: nextGroupRules,
   };
 }
 
@@ -118,8 +119,8 @@ export function getDownstreamMode(input: {
   targetNodeId: string;
 }): DownstreamMode | null {
   const targetNode = getTopologyNodeRecords(input.topology).find((node) => node.id === input.targetNodeId);
-  if (targetNode?.spawnEnabled) {
-    return "spawn";
+  if (targetNode?.groupEnabled) {
+    return "group";
   }
 
   const trigger = input.topology.edges.find(
@@ -135,7 +136,7 @@ export function getDownstreamMode(input: {
   return null;
 }
 
-export function setSpawnEnabledForDownstream(input: {
+export function setGroupEnabledForDownstream(input: {
   topology: TopologyRecord;
   sourceNodeId: string;
   targetNodeId: string;
@@ -151,17 +152,17 @@ export function setSpawnEnabledForDownstream(input: {
         })
         .map((edge) => ({ ...edge }))
     : input.topology.edges.map((edge) => ({ ...edge }));
-  const spawnState = setSpawnNodeState(input.topology, input.targetNodeId, input.enabled);
-  const nextSpawnRules = input.enabled
-    ? (spawnState.spawnRules ?? []).concat(
-        buildSpawnRuleFromReachable(input.topology, input.sourceNodeId, input.targetNodeId),
+  const groupState = setGroupNodeState(input.topology, input.targetNodeId, input.enabled);
+  const nextGroupRules = input.enabled
+    ? (groupState.groupRules ?? []).concat(
+        buildGroupRuleFromReachable(input.topology, input.sourceNodeId, input.targetNodeId),
       )
-    : spawnState.spawnRules ?? [];
+    : groupState.groupRules ?? [];
 
   return {
     ...input.topology,
-    nodeRecords: spawnState.nodeRecords,
-    spawnRules: nextSpawnRules,
+    nodeRecords: groupState.nodeRecords,
+    groupRules: nextGroupRules,
     edges: nextEdges,
   };
 }
@@ -172,8 +173,8 @@ export function setDownstreamMode(input: {
   targetNodeId: string;
   mode: DownstreamMode | null;
 }): TopologyRecord {
-  if (input.mode === "spawn") {
-    return setSpawnEnabledForDownstream({
+  if (input.mode === "group") {
+    return setGroupEnabledForDownstream({
       topology: input.topology,
       sourceNodeId: input.sourceNodeId,
       targetNodeId: input.targetNodeId,
@@ -186,7 +187,7 @@ export function setDownstreamMode(input: {
     input.sourceNodeId,
     input.targetNodeId,
   );
-  const spawnState = setSpawnNodeState(input.topology, input.targetNodeId, false);
+  const groupState = setGroupNodeState(input.topology, input.targetNodeId, false);
   const nextEdges =
     input.mode === null
       ? clearedEdges
@@ -199,8 +200,8 @@ export function setDownstreamMode(input: {
 
   return {
     ...input.topology,
-    nodeRecords: spawnState.nodeRecords,
-    spawnRules: spawnState.spawnRules ?? [],
+    nodeRecords: groupState.nodeRecords,
+    groupRules: groupState.groupRules ?? [],
     edges: nextEdges,
   };
 }

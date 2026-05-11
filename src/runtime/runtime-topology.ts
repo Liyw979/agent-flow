@@ -2,10 +2,10 @@ import {
   getTopologyNodeRecords,
   isActionRequiredTopologyTrigger,
   type RuntimeTopologyEdge,
-  type SpawnBundleRuntimeNode,
-  type SpawnBundleInstantiation,
-  type SpawnItemPayload,
-  type SpawnRule,
+  type GroupBundleRuntimeNode,
+  type GroupBundleInstantiation,
+  type GroupItemPayload,
+  type GroupRule,
   type TopologyRecord,
 } from "@shared/types";
 
@@ -28,45 +28,62 @@ function buildRuntimeNodeId(templateName: string, itemId: string, explicitIndex?
   return `${templateName}-${resolveRuntimeNodeIndex(itemId, explicitIndex)}`;
 }
 
-function resolveSpawnRuleTerminalRoles(rule: SpawnRule): string[] {
-  const outgoingRoles = new Set(rule.edges.map((edge) => edge.sourceRole));
-  return rule.spawnedAgents
-    .map((agent) => agent.role)
-    .filter((role) => !outgoingRoles.has(role));
-}
-
-export function instantiateSpawnBundle(input: {
+export function instantiateGroupBundle(input: {
   topology: TopologyRecord;
-  spawnRuleId: string;
+  groupRuleId: string;
   activationId: string;
-  item: SpawnItemPayload;
+  item: GroupItemPayload;
   instanceIndex?: number;
-}): SpawnBundleInstantiation {
-  const rule = input.topology.spawnRules?.find((candidate) => candidate.id === input.spawnRuleId);
+  sourceRuntimeNodeId?: string;
+  sourceRuntimeTemplateName?: string;
+  reportRuntimeNodeId?: string;
+}): GroupBundleInstantiation {
+  const rule = input.topology.groupRules?.find((candidate) => candidate.id === input.groupRuleId);
   if (!rule) {
-    throw new Error(`spawn rule 不存在：${input.spawnRuleId}`);
+    throw new Error(`group rule 不存在：${input.groupRuleId}`);
   }
 
   const topologyNodes = getTopologyNodeRecords(input.topology);
-  const effectiveSpawnNodeName = rule.spawnNodeName
-    || topologyNodes.find((node) => node.spawnRuleId === rule.id)?.id
+  const effectiveGroupNodeName = rule.groupNodeName
+    || topologyNodes.find((node) => node.groupRuleId === rule.id)?.id
     || "";
-  const spawnNode = topologyNodes.find((node) =>
-    node.id === effectiveSpawnNodeName || node.templateName === effectiveSpawnNodeName,
+  const groupNode = (
+    input.sourceRuntimeNodeId
+      ? topologyNodes.find((node) =>
+        node.kind === "group"
+        && node.groupRuleId === rule.id
+        && input.topology.edges.some((edge) =>
+          edge.source === input.sourceRuntimeNodeId
+          && edge.target === node.id,
+        ))
+      : undefined
+  ) ?? topologyNodes.find((node) =>
+    node.id === effectiveGroupNodeName || node.templateName === effectiveGroupNodeName,
   );
-  if (!spawnNode) {
-    throw new Error(`spawn rule 缺少 spawn 节点：${effectiveSpawnNodeName || rule.id}`);
+  if (!groupNode) {
+    throw new Error(`group rule 缺少 group 节点：${effectiveGroupNodeName || rule.id}`);
   }
-  const sourceLookupName = rule.sourceTemplateName ?? spawnNode.id;
-  const sourceNode = topologyNodes.find((node) =>
-    node.id === sourceLookupName || node.templateName === sourceLookupName,
+  const sourceLookupName = input.sourceRuntimeNodeId ?? rule.sourceTemplateName ?? groupNode.id;
+  const sourceNode = (
+    input.sourceRuntimeNodeId
+      ? topologyNodes.find((node) => node.id === input.sourceRuntimeNodeId)
+      : undefined
+  ) ?? topologyNodes.find((node) =>
+    node.id === sourceLookupName
+    || node.templateName === sourceLookupName
+    || (
+      input.sourceRuntimeTemplateName
+      && node.id === input.sourceRuntimeTemplateName
+      && node.templateName === input.sourceRuntimeTemplateName
+    ),
   );
   if (!sourceNode) {
-    throw new Error(`spawn rule 缺少 source template：${sourceLookupName}`);
+    throw new Error(`group rule 缺少 source template：${sourceLookupName}`);
   }
 
   const groupId = `${sanitizeInstanceSegment(rule.id)}:${sanitizeInstanceSegment(input.item.id)}`;
-  const nodes: SpawnBundleRuntimeNode[] = rule.spawnedAgents.map((agent) => {
+  const effectiveSourceNodeId = input.sourceRuntimeNodeId ?? sourceNode.id;
+  const nodes: GroupBundleRuntimeNode[] = rule.members.map((agent) => {
     const templateNode = topologyNodes.find(
       (node) => node.id === agent.templateName || node.templateName === agent.templateName,
     );
@@ -74,18 +91,18 @@ export function instantiateSpawnBundle(input: {
       id: buildRuntimeNodeId(agent.templateName, input.item.id, input.instanceIndex),
       templateName: agent.templateName,
       displayName: buildRuntimeNodeId(agent.templateName, input.item.id, input.instanceIndex),
-      sourceNodeId: sourceNode.id,
+      sourceNodeId: effectiveSourceNodeId,
       groupId,
       role: agent.role,
     };
-    if (templateNode?.kind === "spawn") {
-      if (!templateNode.spawnRuleId) {
-        throw new Error(`spawn template 缺少 spawnRuleId：${agent.templateName}`);
+    if (templateNode?.kind === "group") {
+      if (!templateNode.groupRuleId) {
+        throw new Error(`group template 缺少 groupRuleId：${agent.templateName}`);
       }
       return {
         ...sharedNode,
-        kind: "spawn",
-        spawnRuleId: templateNode.spawnRuleId,
+        kind: "group",
+        groupRuleId: templateNode.groupRuleId,
       };
     }
     return {
@@ -98,7 +115,7 @@ export function instantiateSpawnBundle(input: {
     const sourceNodeInstance = nodes.find((node) => node.role === edge.sourceRole);
     const targetNodeInstance = nodes.find((node) => node.role === edge.targetRole);
     if (!sourceNodeInstance || !targetNodeInstance) {
-      throw new Error(`spawn rule ${rule.id} 的 role 连线不完整：${edge.sourceRole} -> ${edge.targetRole}`);
+      throw new Error(`group rule ${rule.id} 的 role 连线不完整：${edge.sourceRole} -> ${edge.targetRole}`);
     }
     return {
       source: sourceNodeInstance.id,
@@ -111,45 +128,55 @@ export function instantiateSpawnBundle(input: {
     };
   });
 
-  const sourceToSpawnEdge = input.topology.edges.find((edge) =>
+  const sourceToGroupEdge = input.topology.edges.find((edge) =>
     edge.source === sourceNode.id
-    && edge.target === spawnNode.id,
+    && edge.target === groupNode.id,
+  ) ?? (
+    input.sourceRuntimeTemplateName
+      ? input.topology.edges.find((edge) =>
+        edge.source === input.sourceRuntimeTemplateName
+        && edge.target === groupNode.id)
+      : undefined
   );
   const entryNode = nodes.find((node) => node.role === rule.entryRole);
-  if (sourceToSpawnEdge && entryNode) {
+  if (sourceToGroupEdge && entryNode) {
     edges.unshift({
-      source: sourceNode.id,
+      source: effectiveSourceNodeId,
       target: entryNode.id,
-      trigger: sourceToSpawnEdge.trigger,
-      messageMode: sourceToSpawnEdge.messageMode,
-      ...(isActionRequiredTopologyTrigger(sourceToSpawnEdge.trigger, sourceToSpawnEdge.maxTriggerRounds)
-        && typeof sourceToSpawnEdge.maxTriggerRounds === "number"
-        ? { maxTriggerRounds: sourceToSpawnEdge.maxTriggerRounds }
+      trigger: sourceToGroupEdge.trigger,
+      messageMode: sourceToGroupEdge.messageMode,
+      ...(isActionRequiredTopologyTrigger(sourceToGroupEdge.trigger, sourceToGroupEdge.maxTriggerRounds)
+        && typeof sourceToGroupEdge.maxTriggerRounds === "number"
+        ? { maxTriggerRounds: sourceToGroupEdge.maxTriggerRounds }
         : {}),
     });
   }
 
   const reportNode = rule.report !== false
-    ? topologyNodes.find(
+    ? (
+      (input.reportRuntimeNodeId
+        ? topologyNodes.find((node) => node.id === input.reportRuntimeNodeId)
+        : undefined)
+      ?? topologyNodes.find(
         (node) => node.templateName === rule.report.templateName || node.id === rule.report.templateName,
       )
+    )
     : null;
   if (rule.report !== false && !reportNode) {
-    throw new Error(`spawn rule 缺少 report target template：${rule.report.templateName}`);
+    throw new Error(`group rule 缺少 report target template：${rule.report.templateName}`);
   }
 
-  const terminalRoles = resolveSpawnRuleTerminalRoles(rule);
-  const reportSourceNode = terminalRoles.length === 1
-    ? nodes.find((node) => node.role === terminalRoles[0])
+  const reportSourceNode = rule.report !== false
+    ? nodes.find((node) => node.role === rule.report.sourceRole)
     : undefined;
-  const spawnToReportEdge = reportNode
+  const groupToReportEdge = reportNode
     ? input.topology.edges.find((edge) =>
-      edge.source === spawnNode.id
+      edge.source === groupNode.id
       && edge.target === reportNode.id)
     : undefined;
   if (reportSourceNode && reportNode && rule.report !== false) {
-    const reportTrigger = spawnToReportEdge?.trigger ?? rule.report.trigger;
-    const reportMaxTriggerRounds = spawnToReportEdge?.maxTriggerRounds
+    const reportTrigger = groupToReportEdge?.trigger ?? rule.report.trigger;
+    const reportMaxTriggerRounds = groupToReportEdge?.maxTriggerRounds
       ?? (rule.report.maxTriggerRounds === false
         ? undefined
         : rule.report.maxTriggerRounds);
@@ -158,7 +185,7 @@ export function instantiateSpawnBundle(input: {
       target: reportNode.id,
       trigger: reportTrigger,
       messageMode:
-        spawnToReportEdge?.messageMode
+        groupToReportEdge?.messageMode
         ?? rule.report.messageMode,
       ...(isActionRequiredTopologyTrigger(reportTrigger, reportMaxTriggerRounds)
         && typeof reportMaxTriggerRounds === "number"
@@ -170,58 +197,64 @@ export function instantiateSpawnBundle(input: {
   return {
     groupId,
     activationId: input.activationId,
-    spawnNodeName: effectiveSpawnNodeName,
+    groupNodeName: effectiveGroupNodeName,
     item: input.item,
     nodes,
     edges,
   };
 }
 
-export function instantiateSpawnBundles(input: {
+export function instantiateGroupBundles(input: {
   topology: TopologyRecord;
-  spawnRuleId: string;
+  groupRuleId: string;
   activationId: string;
-  items: SpawnItemPayload[];
-}): SpawnBundleInstantiation[] {
+  items: GroupItemPayload[];
+  sourceRuntimeNodeId?: string;
+  sourceRuntimeTemplateName?: string;
+  reportRuntimeNodeId?: string;
+}): GroupBundleInstantiation[] {
   const useExplicitIndex = input.items.length > 1;
   return input.items.map((item, index) =>
-    instantiateSpawnBundle({
+    instantiateGroupBundle({
       topology: input.topology,
-      spawnRuleId: input.spawnRuleId,
+      groupRuleId: input.groupRuleId,
       activationId: input.activationId,
       item,
+      ...(input.sourceRuntimeNodeId ? { sourceRuntimeNodeId: input.sourceRuntimeNodeId } : {}),
+      ...(input.sourceRuntimeTemplateName ? { sourceRuntimeTemplateName: input.sourceRuntimeTemplateName } : {}),
+      ...(input.reportRuntimeNodeId ? { reportRuntimeNodeId: input.reportRuntimeNodeId } : {}),
       ...(useExplicitIndex ? { instanceIndex: index + 1 } : {}),
     }),
   );
 }
 
-export function validateSpawnRule(topology: TopologyRecord, rule: SpawnRule): void {
+export function validateGroupRule(topology: TopologyRecord, rule: GroupRule): void {
   const topologyNodes = getTopologyNodeRecords(topology);
   const knownTemplateNames = new Set(topologyNodes.map((node) => node.templateName));
   const knownNodeIds = new Set(topologyNodes.map((node) => node.id));
-  const effectiveSpawnNodeName = rule.spawnNodeName
-    || topologyNodes.find((node) => node.spawnRuleId === rule.id)?.id
+  const effectiveGroupNodeName = rule.groupNodeName
+    || topologyNodes.find((node) => node.groupRuleId === rule.id)?.id
     || "";
-  if (!knownNodeIds.has(effectiveSpawnNodeName) && !knownTemplateNames.has(effectiveSpawnNodeName)) {
-    throw new Error(`spawn rule 对应的 spawn 节点不存在：${effectiveSpawnNodeName || rule.id}`);
+  if (!knownNodeIds.has(effectiveGroupNodeName) && !knownTemplateNames.has(effectiveGroupNodeName)) {
+    throw new Error(`group rule 对应的 group 节点不存在：${effectiveGroupNodeName || rule.id}`);
   }
   if (
     rule.report !== false
     && !knownTemplateNames.has(rule.report.templateName)
     && !knownNodeIds.has(rule.report.templateName)
   ) {
-    throw new Error(`spawn rule report target 不存在：${rule.report.templateName}`);
+    throw new Error(`group rule report target 不存在：${rule.report.templateName}`);
   }
-  const knownRoles = new Set(rule.spawnedAgents.map((agent) => agent.role));
+  const knownRoles = new Set(rule.members.map((agent) => agent.role));
   if (!knownRoles.has(rule.entryRole)) {
-    throw new Error(`spawn rule entry role 不存在：${rule.entryRole}`);
+    throw new Error(`group rule entry role 不存在：${rule.entryRole}`);
   }
-  if (rule.report !== false && resolveSpawnRuleTerminalRoles(rule).length !== 1) {
-    throw new Error(`spawn rule ${rule.id} 存在 report target 时，子图必须有且仅有一个终局 role。`);
+  if (rule.report !== false && !knownRoles.has(rule.report.sourceRole)) {
+    throw new Error(`group rule report source role 不存在：${rule.report.sourceRole}`);
   }
   for (const edge of rule.edges) {
     if (!knownRoles.has(edge.sourceRole) || !knownRoles.has(edge.targetRole)) {
-      throw new Error(`spawn rule 含有未知 role 连线：${edge.sourceRole} -> ${edge.targetRole}`);
+      throw new Error(`group rule 含有未知 role 连线：${edge.sourceRole} -> ${edge.targetRole}`);
     }
   }
 }

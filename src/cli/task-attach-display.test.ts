@@ -21,7 +21,7 @@ test("renderTaskAttachCommands 在 CLI 里只展示底层 opencode attach 命令
   assert.doesNotMatch(output, /task attach/);
 });
 
-test("collectNewTaskAttachCommandEntries 会找出 spawn 后新出现的 attach 命令", () => {
+test("collectNewTaskAttachCommandEntries 会找出 group 后新出现的 attach 命令", () => {
   const previous = [
     {
       agentId: "线索发现",

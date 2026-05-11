@@ -3,7 +3,7 @@ import {
   DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
   getActionRequiredEdgeLoopLimit,
   getTopologyNodeRecords,
-  getSpawnRules,
+  getGroupRules,
   isActionRequiredTopologyTrigger,
   isDefaultTopologyTrigger,
   normalizeTopologyEdgeTrigger,
@@ -30,14 +30,15 @@ import {
 } from "./gating-state";
 import { buildEffectiveTopology, ensureRuntimeAgentStatuses } from "./runtime-topology-graph";
 import {
-  buildSpawnItemId,
-  getNextSpawnSequence,
-  getSpawnRuleEntryRuntimeNodeIds,
-  getSpawnRuleIdForNode,
-  isSpawnNode,
+  buildGroupItemId,
+  getNextGroupSequence,
+  getGroupRuleEntryRuntimeNodeIds,
+  getGroupRuleIdForNode,
+  getRuntimeTemplateName,
+  isGroupNode,
 } from "./runtime-topology-graph";
 import { compileTopology } from "./topology-compiler";
-import { spawnRuntimeAgentsForItems } from "./gating-spawn";
+import { materializeRuntimeGroupAgentsForItems } from "./gating-group";
 
 interface GraphRawDispatchJob {
   agentId: string;
@@ -165,9 +166,9 @@ export function createUserDispatchDecision(
     content: string;
   },
 ): GraphRoutingDecision {
-  if (isSpawnNode(state, input.targetAgentId)) {
+  if (isGroupNode(state, input.targetAgentId)) {
     try {
-      const entryTargets = materializeSpawnNodeTargets(state, input.targetAgentId, input.content);
+      const entryTargets = materializeGroupNodeTargets(state, input.targetAgentId, input.content);
       if (entryTargets.length === 0) {
         return {
           type: "failed",
@@ -178,16 +179,15 @@ export function createUserDispatchDecision(
         type: "execute_batch",
         batch: {
           routingKind: "default",
-          sourceAgentId: input.targetAgentId,
+          sourceAgentId: null,
           sourceContent: input.content,
           displayContent: input.content,
           triggerTargets: [...entryTargets],
           jobs: entryTargets.map((agentId) => ({
             agentId,
-            sourceAgentId: input.targetAgentId,
             sourceContent: input.content,
             displayContent: input.content,
-            kind: "transfer" as const,
+            kind: "raw" as const,
           })),
         },
       };
@@ -247,7 +247,7 @@ export function applyAgentResultToGraphState(
   nextState.agentContextByName[result.agentId] = result.agentContextContent;
   nextState.forwardedAgentMessageByName[result.agentId] = result.forwardedAgentMessage;
   nextState.taskStatus = "running";
-  nextState.finishReason = null;
+  nextState.finishReason = "running";
 
   if (result.status === "failed") {
     nextState.taskStatus = "failed";
@@ -327,7 +327,7 @@ export function applyAgentResultToGraphState(
       )
     : triggerHandoffDownstream(nextState, result.agentId, result.agentContextContent);
   if (primaryDecision.type === "execute_batch") {
-    markCompletedSpawnActivationAsDispatchedIfReady(nextState, result.agentId);
+    markCompletedGroupActivationAsDispatchedIfReady(nextState, result.agentId);
     return { state: nextState, decision: primaryDecision };
   }
 
@@ -343,17 +343,17 @@ export function applyAgentResultToGraphState(
     batchContinuation,
   );
   if (followUpDecision.type === "execute_batch") {
-    markCompletedSpawnActivationAsDispatchedIfReady(nextState, result.agentId);
+    markCompletedGroupActivationAsDispatchedIfReady(nextState, result.agentId);
     return { state: nextState, decision: followUpDecision };
   }
 
-  const spawnFollowUpDecision = resumeCompletedSpawnActivations(nextState, result.agentId);
-  if (spawnFollowUpDecision.type === "execute_batch") {
-    return { state: nextState, decision: spawnFollowUpDecision };
+  const groupFollowUpDecision = resumeCompletedGroupActivations(nextState, result.agentId);
+  if (groupFollowUpDecision.type === "execute_batch") {
+    return { state: nextState, decision: groupFollowUpDecision };
   }
-  if (spawnFollowUpDecision.type === "failed") {
+  if (groupFollowUpDecision.type === "failed") {
     nextState.taskStatus = "failed";
-    return { state: nextState, decision: spawnFollowUpDecision };
+    return { state: nextState, decision: groupFollowUpDecision };
   }
 
   if (shouldFinishGraphTask(nextState)) {
@@ -518,13 +518,13 @@ function resolveRequiredActionRequiredDisplayContent(
   return content;
 }
 
-function resolveRequiredActionRequiredSpawnSourceContent(
+function resolveRequiredActionRequiredGroupSourceContent(
   decisionAgentId: string,
   request: Pick<GraphActionRequiredRequest, "agentContextContent">,
 ): string {
   const content = request.agentContextContent.trim();
   if (!content) {
-    throw new Error(`${decisionAgentId} 的 action_required 结果缺少可供 spawn 展开的 finding 正文`);
+    throw new Error(`${decisionAgentId} 的 action_required 结果缺少可供 group 展开的 finding 正文`);
   }
   return content;
 }
@@ -552,15 +552,15 @@ function triggerActionRequiredRequestDownstream(
   const dispatchTargets: string[] = [];
   try {
     for (const targetName of targets) {
-      if (isSpawnNode(state, targetName)) {
-        const spawnSourceContent = resolveRequiredActionRequiredSpawnSourceContent(sourceAgentId, request);
-        const runtimeTargets = materializeSpawnNodeTargets(state, targetName, spawnSourceContent);
+      if (isGroupNode(state, targetName)) {
+        const groupSourceContent = resolveRequiredActionRequiredGroupSourceContent(sourceAgentId, request);
+        const runtimeTargets = materializeGroupNodeTargets(state, targetName, groupSourceContent, sourceAgentId);
         dispatchTargets.push(...runtimeTargets);
         jobs.push(...runtimeTargets.map((runtimeTarget) => ({
           agentId: runtimeTarget,
           sourceAgentId,
           sourceMessageId: request.sourceMessageId,
-          sourceContent: spawnSourceContent,
+          sourceContent: groupSourceContent,
           displayContent,
           kind: "action_required_request" as const,
         })));
@@ -579,7 +579,7 @@ function triggerActionRequiredRequestDownstream(
   } catch (error) {
     return {
       type: "failed",
-      errorMessage: error instanceof Error ? error.message : `${sourceAgentId} 下游 spawn 展开失败`,
+      errorMessage: error instanceof Error ? error.message : `${sourceAgentId} 下游 group 展开失败`,
     };
   }
   registerPendingRepairTargetsForDecision(state, sourceAgentId, dispatchTargets);
@@ -626,11 +626,11 @@ function triggerHandoffDownstream(
   }
   let nextPlan: GatingDispatchPlan | null;
   try {
-    nextPlan = materializeSpawnTargetsInPlan(state, plan, sourceContent);
+    nextPlan = materializeGroupTargetsInPlan(state, plan, sourceContent);
   } catch (error) {
     return {
       type: "failed",
-      errorMessage: error instanceof Error ? error.message : `${sourceAgentId} 下游 spawn 展开失败`,
+      errorMessage: error instanceof Error ? error.message : `${sourceAgentId} 下游 group 展开失败`,
     };
   }
   if (nextPlan) {
@@ -661,11 +661,11 @@ function triggerLabeledDownstream(
   applySchedulerRuntimeToGraphState(state, runtime);
   let nextPlan: GatingDispatchPlan | null;
   try {
-    nextPlan = materializeSpawnTargetsInPlan(state, plan, sourceContent);
+    nextPlan = materializeGroupTargetsInPlan(state, plan, sourceContent);
   } catch (error) {
     return {
       type: "failed",
-      errorMessage: error instanceof Error ? error.message : `${sourceAgentId} 下游 spawn 展开失败`,
+      errorMessage: error instanceof Error ? error.message : `${sourceAgentId} 下游 group 展开失败`,
     };
   }
   if (nextPlan) {
@@ -756,7 +756,7 @@ function createExecuteBatchDecision(input: {
   };
 }
 
-function materializeSpawnTargetsInPlan(
+function materializeGroupTargetsInPlan(
   state: GraphTaskState,
   plan: GatingDispatchPlan | null,
   sourceContent: string,
@@ -775,7 +775,7 @@ function materializeSpawnTargetsInPlan(
   let changed = false;
 
   for (const targetName of jobTargets) {
-    if (!isSpawnNode(state, targetName)) {
+    if (!isGroupNode(state, targetName)) {
       if (plan.readyTargets.includes(targetName)) {
         nextReadyTargets.push(targetName);
       } else {
@@ -784,8 +784,8 @@ function materializeSpawnTargetsInPlan(
       continue;
     }
 
-    const spawnRuleId = getSpawnRuleIdForNode(state, targetName);
-    if (!spawnRuleId) {
+    const groupRuleId = getGroupRuleIdForNode(state, targetName);
+    if (!groupRuleId) {
       if (plan.readyTargets.includes(targetName)) {
         nextReadyTargets.push(targetName);
       } else {
@@ -795,7 +795,7 @@ function materializeSpawnTargetsInPlan(
     }
 
     changed = true;
-    const entryTargets = materializeSpawnNodeTargets(state, targetName, sourceContent);
+    const entryTargets = materializeGroupNodeTargets(state, targetName, sourceContent, plan.sourceAgentId);
     replaceHandoffBatchTarget(state, plan.sourceAgentId, targetName, entryTargets);
     for (const entryTarget of entryTargets) {
       if (plan.readyTargets.includes(targetName)) {
@@ -849,73 +849,95 @@ function uniqueTargetNames(targets: string[]): string[] {
   return [...new Set(targets)];
 }
 
-function buildSpawnActivationId(spawnRuleId: string, sequence: number): string {
-  return `activation:${buildSpawnItemId(spawnRuleId, sequence)}`;
+function buildGroupActivationId(groupRuleId: string, sequence: number): string {
+  return `activation:${buildGroupItemId(groupRuleId, sequence)}`;
 }
 
-function buildSpawnActivationItemId(
-  spawnRuleId: string,
+function buildGroupActivationItemId(
+  groupRuleId: string,
   sequence: number,
   index: number,
   total: number,
 ): string {
-  const base = buildSpawnItemId(spawnRuleId, sequence);
+  const base = buildGroupItemId(groupRuleId, sequence);
   return total <= 1 ? base : `${base}-${index + 1}`;
 }
 
-function buildSpawnItemTitle(sourceContent: string): string {
+function buildGroupItemTitle(sourceContent: string): string {
   const firstLine = sourceContent
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find(Boolean);
   if (!firstLine) {
-    throw new Error("spawn 上游输出缺少可展开的 finding 正文");
+    throw new Error("group 上游输出缺少可展开的 finding 正文");
   }
   return firstLine;
 }
 
-function materializeSpawnNodeTargets(
+function materializeGroupNodeTargets(
   state: GraphTaskState,
   targetName: string,
   sourceContent: string,
+  sourceAgentId?: string,
 ): string[] {
-  const spawnRuleId = getSpawnRuleIdForNode(state, targetName);
-  if (!spawnRuleId) {
-    throw new Error(`${targetName} 缺少 spawnRuleId`);
+  const groupRuleId = getGroupRuleIdForNode(state, targetName);
+  if (!groupRuleId) {
+    throw new Error(`${targetName} 缺少 groupRuleId`);
   }
-  if (!getSpawnRules(state.topology).some((candidate) => candidate.id === spawnRuleId)) {
-    throw new Error(`spawn rule 不存在：${spawnRuleId}`);
+  if (!getGroupRules(state.topology).some((candidate) => candidate.id === groupRuleId)) {
+    throw new Error(`group rule 不存在：${groupRuleId}`);
+  }
+  const groupRule = getGroupRules(state.topology).find((candidate) => candidate.id === groupRuleId);
+  if (!groupRule) {
+    throw new Error(`group rule 不存在：${groupRuleId}`);
   }
 
-  const sequence = getNextSpawnSequence(state, spawnRuleId);
-  const activationId = buildSpawnActivationId(spawnRuleId, sequence);
+  const sequence = getNextGroupSequence(state, groupRuleId);
+  const activationId = buildGroupActivationId(groupRuleId, sequence);
   const items = [
     {
-      id: buildSpawnItemId(spawnRuleId, sequence),
-      title: buildSpawnItemTitle(sourceContent),
+      id: buildGroupItemId(groupRuleId, sequence),
+      title: buildGroupItemTitle(sourceContent),
     },
   ].map((item, index, itemsList) => ({
     ...item,
-    id: buildSpawnActivationItemId(spawnRuleId, sequence, index, itemsList.length),
+    id: buildGroupActivationItemId(groupRuleId, sequence, index, itemsList.length),
   }));
+  const sourceRuntimeTemplateName = sourceAgentId
+    ? getRuntimeTemplateName(state, sourceAgentId) ?? sourceAgentId
+    : "";
+  const reportRuntimeNodeId = (
+    sourceAgentId
+    && groupRule.report !== false
+    && groupRule.report.templateName === sourceRuntimeTemplateName
+  )
+    ? sourceAgentId
+    : undefined;
 
-  const bundles = spawnRuntimeAgentsForItems({
+  const bundles = materializeRuntimeGroupAgentsForItems({
     state,
-    spawnRuleId,
+    groupRuleId,
     activationId,
     items,
+    ...(sourceAgentId
+      ? {
+          sourceRuntimeNodeId: sourceAgentId,
+          sourceRuntimeTemplateName,
+          ...(reportRuntimeNodeId ? { reportRuntimeNodeId } : {}),
+        }
+      : {}),
   });
-  state.spawnActivations.push({
+  state.groupActivations.push({
     id: activationId,
-    spawnNodeName: targetName,
-    spawnRuleId,
+    groupNodeName: targetName,
+    groupRuleId,
     sourceContent,
     bundleGroupIds: bundles.map((bundle) => bundle.groupId),
     completedBundleGroupIds: [],
     dispatched: false,
   });
 
-  return bundles.flatMap((bundle) => getSpawnRuleEntryRuntimeNodeIds(state, bundle.groupId, spawnRuleId));
+  return bundles.flatMap((bundle) => getGroupRuleEntryRuntimeNodeIds(state, bundle.groupId, groupRuleId));
 }
 
 function getActionRequiredTargetsForSource(
@@ -925,7 +947,7 @@ function getActionRequiredTargetsForSource(
   const topology = buildEffectiveTopology(state);
   const targets = compileTopology(topology).actionRequiredTargetsBySource[sourceAgentId] ?? [];
   return targets.filter((targetName) =>
-    !isRuntimeNodeFromDispatchedSpawnActivation(state, targetName)
+    !isRuntimeNodeFromDispatchedGroupActivation(state, targetName)
   );
 }
 
@@ -935,7 +957,7 @@ function getActionRequiredTargetsForTrigger(
   trigger: string,
 ): string[] {
   return getTriggeredTargetsForSource(state, sourceAgentId, trigger).filter((targetName) =>
-    !isRuntimeNodeFromDispatchedSpawnActivation(state, targetName)
+    !isRuntimeNodeFromDispatchedGroupActivation(state, targetName)
   );
 }
 
@@ -1081,7 +1103,7 @@ function registerPendingRepairTargetsForDecision(
   }
 }
 
-function isRuntimeNodeFromDispatchedSpawnActivation(
+function isRuntimeNodeFromDispatchedGroupActivation(
   state: GraphTaskState,
   targetName: string,
 ): boolean {
@@ -1090,7 +1112,7 @@ function isRuntimeNodeFromDispatchedSpawnActivation(
     return false;
   }
 
-  return state.spawnActivations.some((activation) =>
+  return state.groupActivations.some((activation) =>
     activation.dispatched
     && activation.bundleGroupIds.includes(runtimeNode.groupId ?? "")
   );
@@ -1181,12 +1203,12 @@ function resolvePendingAllCompletedDebateTargets(
       continue;
     }
 
-    for (const rule of topology.spawnRules ?? []) {
+    for (const rule of topology.groupRules ?? []) {
       if (rule.exitWhen !== "all_completed") {
         continue;
       }
 
-      const matchingSummaryRoles = rule.spawnedAgents
+      const matchingSummaryRoles = rule.members
         .filter((agent) => agent.templateName === summaryTemplateName)
         .map((agent) => agent.role);
       if (matchingSummaryRoles.length === 0) {
@@ -1197,7 +1219,7 @@ function resolvePendingAllCompletedDebateTargets(
         const requiredSourceTemplateNames = uniqueStringValues(
           rule.edges
             .filter((ruleEdge) => ruleEdge.trigger === edge.trigger && ruleEdge.targetRole === summaryRole)
-            .map((ruleEdge) => getSpawnRuleTemplateNameForRole(rule, ruleEdge.sourceRole))
+            .map((ruleEdge) => getGroupRuleTemplateNameForRole(rule, ruleEdge.sourceRole))
             .filter((value): value is string => Boolean(value)),
         );
         if (
@@ -1227,11 +1249,11 @@ function getTemplateNameForNode(topology: TopologyRecord, nodeId: string): strin
   return getTopologyNodeRecords(topology).find((node) => node.id === nodeId)?.templateName ?? nodeId;
 }
 
-function getSpawnRuleTemplateNameForRole(
-  rule: NonNullable<TopologyRecord["spawnRules"]>[number],
+function getGroupRuleTemplateNameForRole(
+  rule: NonNullable<TopologyRecord["groupRules"]>[number],
   role: string,
 ): string | null {
-  return rule.spawnedAgents.find((agent) => agent.role === role)?.templateName ?? null;
+  return rule.members.find((agent) => agent.role === role)?.templateName ?? null;
 }
 
 function uniqueStringValues(values: string[]): string[] {
@@ -1242,79 +1264,79 @@ function getAgentStatusById(state: GraphTaskState, agentId: string): AgentStatus
   return state.agentStatusesByName[agentId];
 }
 
-function resumeCompletedSpawnActivations(
+function resumeCompletedGroupActivations(
   state: GraphTaskState,
   completedAgentId: string,
 ): GraphRoutingDecision {
-  const bundle = state.spawnBundles.find((candidate) =>
+  const bundle = state.groupBundles.find((candidate) =>
     candidate.nodes.some((node) => node.id === completedAgentId),
   );
   if (!bundle) {
     return {
       type: "finished",
-      finishReason: "no_completed_spawn_activation",
+      finishReason: "no_completed_group_activation",
     };
   }
 
-  if (!isSpawnBundleReady(state, bundle)) {
+  if (!isGroupBundleReady(state, bundle)) {
     return {
       type: "finished",
-      finishReason: "spawn_bundle_pending",
+      finishReason: "group_bundle_pending",
     };
   }
 
-  const activation = state.spawnActivations.find((candidate) => candidate.id === bundle.activationId);
+  const activation = state.groupActivations.find((candidate) => candidate.id === bundle.activationId);
   if (!activation) {
     return {
       type: "finished",
-      finishReason: "spawn_activation_missing",
+      finishReason: "group_activation_missing",
     };
   }
 
-  const aggregatedContent = finalizeSpawnActivationIfReady(state, activation.id, bundle.groupId);
+  const aggregatedContent = finalizeGroupActivationIfReady(state, activation.id, bundle.groupId);
   if (!aggregatedContent) {
     return {
       type: "finished",
-      finishReason: "spawn_activation_pending",
+      finishReason: "group_activation_pending",
     };
   }
-  return triggerHandoffDownstream(state, activation.spawnNodeName, aggregatedContent);
+  return triggerHandoffDownstream(state, activation.groupNodeName, aggregatedContent);
 }
 
-function buildSpawnActivationContent(
+function buildGroupActivationContent(
   state: GraphTaskState,
   activationId: string,
 ): string {
-  const bundles = state.spawnBundles.filter((bundle) => bundle.activationId === activationId);
+  const bundles = state.groupBundles.filter((bundle) => bundle.activationId === activationId);
   const sections = bundles.map((bundle) => {
     const terminalNodeIds = findBundleTerminalNodeIds(bundle);
     const outputs = terminalNodeIds
       .map((nodeId) => state.agentContextByName[nodeId]?.trim() ?? "")
       .filter(Boolean);
     if (outputs.length === 0) {
-      throw new Error(`spawn activation ${activationId} 的条目 ${bundle.item.title} 缺少终局输出`);
+      throw new Error(`group activation ${activationId} 的条目 ${bundle.item.title} 缺少终局输出`);
     }
     const body = outputs.join("\n\n").trim();
     return [`[Item] ${bundle.item.title}`, body].filter(Boolean).join("\n");
   }).filter(Boolean);
   if (sections.length === 0) {
-    throw new Error(`spawn activation ${activationId} 缺少可汇总的终局输出`);
+    throw new Error(`group activation ${activationId} 缺少可汇总的终局输出`);
   }
   return sections.join("\n\n").trim();
 }
 
-function markCompletedSpawnActivationAsDispatchedIfReady(
+function markCompletedGroupActivationAsDispatchedIfReady(
   state: GraphTaskState,
   completedAgentId: string,
 ): void {
-  const bundle = state.spawnBundles.find((candidate) =>
+  const bundle = state.groupBundles.find((candidate) =>
     candidate.nodes.some((node) => node.id === completedAgentId),
   );
   if (!bundle) {
     return;
   }
 
-  const activation = state.spawnActivations.find((candidate) => candidate.id === bundle.activationId);
+  const activation = state.groupActivations.find((candidate) => candidate.id === bundle.activationId);
   if (!activation) {
     return;
   }
@@ -1323,18 +1345,18 @@ function markCompletedSpawnActivationAsDispatchedIfReady(
     return;
   }
 
-  if (!isSpawnBundleReady(state, bundle)) {
+  if (!isGroupBundleReady(state, bundle)) {
     return;
   }
-  finalizeSpawnActivationIfReady(state, activation.id, bundle.groupId);
+  finalizeGroupActivationIfReady(state, activation.id, bundle.groupId);
 }
 
-function finalizeSpawnActivationIfReady(
+function finalizeGroupActivationIfReady(
   state: GraphTaskState,
   activationId: string,
   completedBundleGroupId: string,
 ): string | null {
-  const activation = state.spawnActivations.find((candidate) => candidate.id === activationId);
+  const activation = state.groupActivations.find((candidate) => candidate.id === activationId);
   if (!activation) {
     return null;
   }
@@ -1344,14 +1366,14 @@ function finalizeSpawnActivationIfReady(
   if (activation.dispatched || activation.completedBundleGroupIds.length < activation.bundleGroupIds.length) {
     return null;
   }
-  const aggregatedContent = buildSpawnActivationContent(state, activation.id);
+  const aggregatedContent = buildGroupActivationContent(state, activation.id);
   activation.dispatched = true;
-  state.agentStatusesByName[activation.spawnNodeName] = "completed";
-  state.agentContextByName[activation.spawnNodeName] = aggregatedContent;
+  state.agentStatusesByName[activation.groupNodeName] = "completed";
+  state.agentContextByName[activation.groupNodeName] = aggregatedContent;
   return aggregatedContent;
 }
 
-function findBundleTerminalNodeIds(bundle: GraphTaskState["spawnBundles"][number]): string[] {
+function findBundleTerminalNodeIds(bundle: GraphTaskState["groupBundles"][number]): string[] {
   const bundleNodeIds = new Set(bundle.nodes.map((node) => node.id));
   const outgoing = new Set(
     bundle.edges
@@ -1363,9 +1385,9 @@ function findBundleTerminalNodeIds(bundle: GraphTaskState["spawnBundles"][number
     .filter((nodeId) => !outgoing.has(nodeId));
 }
 
-function isSpawnBundleReady(
+function isGroupBundleReady(
   state: GraphTaskState,
-  bundle: GraphTaskState["spawnBundles"][number],
+  bundle: GraphTaskState["groupBundles"][number],
 ): boolean {
   if (bundle.nodes.every((node) => state.agentStatusesByName[node.id] === "completed")) {
     return true;
@@ -1573,7 +1595,7 @@ function shouldFinishGraphTask(state: GraphTaskState): boolean {
   if (Object.keys(state.activeHandoffBatchBySource).length > 0) {
     return false;
   }
-  if (state.spawnActivations.some((activation) => !activation.dispatched)) {
+  if (state.groupActivations.some((activation) => !activation.dispatched)) {
     return false;
   }
   if (state.runningAgents.length > 0 || state.queuedAgents.length > 0) {
@@ -1629,7 +1651,7 @@ function shouldFinishGraphTaskFromEndEdge(
   if (Object.keys(state.activeHandoffBatchBySource).length > 0) {
     return false;
   }
-  if (state.spawnActivations.some((activation) => !activation.dispatched)) {
+  if (state.groupActivations.some((activation) => !activation.dispatched)) {
     return false;
   }
   if (state.runningAgents.length > 0 || state.queuedAgents.length > 0) {

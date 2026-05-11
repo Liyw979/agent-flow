@@ -217,7 +217,7 @@ export class LangGraphRuntime {
         }
 
         currentState.taskStatus = "failed";
-        currentState.finishReason = null;
+        currentState.finishReason = "running";
         await this.options.host.completeTask({
           taskId: currentState.taskId,
           status: "failed",

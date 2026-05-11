@@ -46,7 +46,7 @@ function hasActionRequiredFollowUp(messages: MessageRecord[], finalMessageId: st
 }
 
 function getAgentAllowedTriggers(
-  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "spawnRules">,
+  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">,
   agentId: string,
 ): string[] {
   const sourceAgentIds = getHistorySourceAgentIds(topology, agentId);
@@ -58,23 +58,23 @@ function getAgentAllowedTriggers(
       ...(topology.langgraph?.end?.incoming ?? [])
         .filter((edge) => sourceAgentIds.includes(edge.source))
         .map((edge) => normalizeTopologyEdgeTrigger(edge.trigger)),
-      ...sourceAgentIds.flatMap((templateName) => getUniqueSpawnRuleTriggersForTemplate(topology, templateName)),
+      ...sourceAgentIds.flatMap((templateName) => getUniqueGroupRuleTriggersForTemplate(topology, templateName)),
     ],
   )];
 }
 
-function getUniqueSpawnRuleTriggersForTemplate(
-  topology: Pick<TopologyRecord, "spawnRules">,
+function getUniqueGroupRuleTriggersForTemplate(
+  topology: Pick<TopologyRecord, "groupRules">,
   templateName: string,
 ): string[] {
-  const matchedRules = (topology.spawnRules ?? []).filter((rule) =>
-    rule.spawnedAgents.some((agent) => agent.templateName === templateName),
+  const matchedRules = (topology.groupRules ?? []).filter((rule) =>
+    rule.members.some((agent) => agent.templateName === templateName),
   );
   if (matchedRules.length !== 1) {
     return [];
   }
 
-  const sourceRoles = matchedRules[0]!.spawnedAgents
+  const sourceRoles = matchedRules[0]!.members
     .filter((agent) => agent.templateName === templateName)
     .map((agent) => agent.role);
   return matchedRules[0]!.edges
@@ -110,7 +110,7 @@ function resolveRuntimeAgentTemplateName(agentId: string): string {
 }
 
 function isHistoryDecisionAgent(
-  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "spawnRules">,
+  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">,
   agentId: string,
 ): boolean {
   return getAgentAllowedTriggers(topology, agentId).some((trigger) => trigger !== "<default>");
@@ -246,7 +246,7 @@ function isTimestampWithinAgentHistoryRange(
 function buildFinalHistoryItems(input: {
   agentId: string;
   messages: MessageRecord[];
-  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "spawnRules">;
+  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">;
   range?: AgentHistoryRange;
   finalMessageId?: string;
 }) {
@@ -349,7 +349,7 @@ function buildProgressHistoryItems(input: {
 export function buildAgentHistoryItems(input: {
   agentId: string;
   messages: MessageRecord[];
-  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "spawnRules">;
+  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">;
 }) {
   const allowedTriggers = isHistoryDecisionAgent(input.topology, input.agentId)
     ? getAgentAllowedTriggers(input.topology, input.agentId)
@@ -369,7 +369,7 @@ export function buildAgentHistoryItems(input: {
 export function buildAgentExecutionHistoryItems(input: {
   agentId: string;
   messages: MessageRecord[];
-  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "spawnRules">;
+  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">;
   startedAt: UtcIsoTimestamp;
   finalMessageId?: string;
   completedAt?: UtcIsoTimestamp;

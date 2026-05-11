@@ -29,7 +29,7 @@ import {
   getTopologyNodeHeaderActionOrder,
   type TopologyAgentStatusBadgePresentation,
 } from "@/components/topology-graph-helpers";
-import { getTopologyDisplayNodeIds } from "@/components/topology-spawn-drafts";
+import { getTopologyDisplayNodeIds } from "@/components/topology-group-drafts";
 import { buildTopologyCanvasLayout } from "@/lib/topology-canvas";
 import { getTopologyCanvasViewportMeasurementKey } from "@/lib/topology-canvas-viewport-measure";
 import { getTopologyPanelBodyClassName } from "@/lib/topology-panel-layout";

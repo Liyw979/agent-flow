@@ -69,9 +69,9 @@ export interface TopologyAgentSeed {
   id: string;
 }
 
-export type TopologyNodeKind = "agent" | "spawn";
+export type TopologyNodeKind = "agent" | "group";
 
-export type SpawnedAgentRole = "pro" | "con" | "summary" | string;
+type GroupMemberRole = "pro" | "con" | "summary" | string;
 export type InitialMessageRouting =
   | {
       mode: "inherit";
@@ -90,20 +90,20 @@ function buildTopologyTrigger(name: string): TopologyTrigger {
 
 export const DEFAULT_TOPOLOGY_TRIGGER = buildTopologyTrigger("default");
 
-interface SpawnedAgentTemplate {
-  role: SpawnedAgentRole;
+interface GroupMemberTemplate {
+  role: GroupMemberRole;
   templateName: string;
 }
 
-interface SpawnRuleBase {
+interface GroupRuleBase {
   id: string;
-  spawnNodeName?: string;
+  groupNodeName?: string;
   sourceTemplateName?: string;
-  entryRole: SpawnedAgentRole;
-  spawnedAgents: SpawnedAgentTemplate[];
+  entryRole: GroupMemberRole;
+  members: GroupMemberTemplate[];
   edges: Array<{
-    sourceRole: SpawnedAgentRole;
-    targetRole: SpawnedAgentRole;
+    sourceRole: GroupMemberRole;
+    targetRole: GroupMemberRole;
     trigger: TopologyTrigger;
     messageMode: TopologyEdgeMessageMode;
     maxTriggerRounds?: number;
@@ -111,28 +111,29 @@ interface SpawnRuleBase {
   exitWhen: "one_side_agrees" | "all_completed";
 }
 
-export type SpawnRuleWithReport = SpawnRuleBase & {
+export type GroupRuleWithReport = GroupRuleBase & {
   report: {
     templateName: string;
+    sourceRole: GroupMemberRole;
     trigger: TopologyTrigger;
     messageMode: TopologyEdgeMessageMode;
     maxTriggerRounds: number | false;
   };
 };
 
-export type SpawnRuleWithoutReport = SpawnRuleBase & {
+export type GroupRuleWithoutReport = GroupRuleBase & {
   report: false;
 };
 
-export type SpawnRule = SpawnRuleWithReport | SpawnRuleWithoutReport;
+export type GroupRule = GroupRuleWithReport | GroupRuleWithoutReport;
 
 export interface TopologyNodeRecord {
   id: string;
   kind: TopologyNodeKind;
   templateName: string;
   initialMessageRouting: InitialMessageRouting;
-  spawnRuleId?: string;
-  spawnEnabled?: boolean;
+  groupRuleId?: string;
+  groupEnabled?: boolean;
   prompt?: string;
   writable?: boolean;
 }
@@ -205,37 +206,28 @@ export interface TopologyRecord {
   edges: TopologyEdge[];
   langgraph?: TopologyLangGraphRecord;
   nodeRecords: TopologyNodeRecord[];
-  spawnRules?: SpawnRule[];
+  groupRules?: GroupRule[];
 }
 
-export interface RuntimeTopologyNode {
-  id: string;
-  kind: TopologyNodeKind;
-  templateName: string;
-  displayName: string;
-  sourceNodeId: string;
-  groupId: string | null;
-  role: SpawnedAgentRole | null;
-  spawnRuleId?: string;
-}
-
-interface SpawnBundleRuntimeNodeBase {
+interface GroupBundleRuntimeNodeBase {
   id: string;
   templateName: string;
   displayName: string;
   sourceNodeId: string;
   groupId: string;
-  role: SpawnedAgentRole;
+  role: GroupMemberRole;
 }
 
-export type SpawnBundleRuntimeNode =
-  | (SpawnBundleRuntimeNodeBase & {
+export type GroupBundleRuntimeNode =
+  | (GroupBundleRuntimeNodeBase & {
       kind: "agent";
     })
-  | (SpawnBundleRuntimeNodeBase & {
-      kind: "spawn";
-      spawnRuleId: string;
+  | (GroupBundleRuntimeNodeBase & {
+      kind: "group";
+      groupRuleId: string;
     });
+
+export type RuntimeTopologyNode = GroupBundleRuntimeNode;
 
 export interface RuntimeTopologyEdge {
   source: string;
@@ -245,24 +237,24 @@ export interface RuntimeTopologyEdge {
   maxTriggerRounds?: number;
 }
 
-export interface SpawnItemPayload {
+export interface GroupItemPayload {
   id: string;
   title: string;
 }
 
-export interface SpawnBundleInstantiation {
+export interface GroupBundleInstantiation {
   groupId: string;
   activationId: string;
-  spawnNodeName: string;
-  item: SpawnItemPayload;
-  nodes: SpawnBundleRuntimeNode[];
+  groupNodeName: string;
+  item: GroupItemPayload;
+  nodes: GroupBundleRuntimeNode[];
   edges: RuntimeTopologyEdge[];
 }
 
-export interface SpawnActivationRecord {
+export interface GroupActivationRecord {
   id: string;
-  spawnNodeName: string;
-  spawnRuleId: string;
+  groupNodeName: string;
+  groupRuleId: string;
   sourceContent: string;
   bundleGroupIds: string[];
   completedBundleGroupIds: string[];
@@ -913,25 +905,25 @@ export function createDefaultTopology(
     }),
     nodeRecords: buildTopologyNodeRecords({
       nodes,
-      spawnNodeIds: new Set(),
+      groupNodeIds: new Set(),
       templateNameByNodeId: new Map(),
       initialMessageRoutingByNodeId: new Map(),
-      spawnRuleIdByNodeId: new Map(),
-      spawnEnabledNodeIds: new Set(),
+      groupRuleIdByNodeId: new Map(),
+      groupEnabledNodeIds: new Set(),
       promptByNodeId: new Map(),
       writableNodeIds: new Set(),
     }),
-    spawnRules: [],
+    groupRules: [],
   };
 }
 
 export function buildTopologyNodeRecords(input: {
   nodes: string[];
-  spawnNodeIds: ReadonlySet<string>;
+  groupNodeIds: ReadonlySet<string>;
   templateNameByNodeId: ReadonlyMap<string, string>;
   initialMessageRoutingByNodeId: ReadonlyMap<string, InitialMessageRouting>;
-  spawnRuleIdByNodeId: ReadonlyMap<string, string>;
-  spawnEnabledNodeIds: ReadonlySet<string>;
+  groupRuleIdByNodeId: ReadonlyMap<string, string>;
+  groupEnabledNodeIds: ReadonlySet<string>;
   promptByNodeId: ReadonlyMap<string, string>;
   writableNodeIds: ReadonlySet<string>;
 }): TopologyNodeRecord[] {
@@ -939,17 +931,17 @@ export function buildTopologyNodeRecords(input: {
     const templateName = input.templateNameByNodeId.get(nodeId) ?? nodeId;
     const initialMessageRouting =
       input.initialMessageRoutingByNodeId.get(nodeId) ?? { mode: "inherit" };
-    const isSpawnNode = input.spawnNodeIds.has(nodeId);
-    const spawnRuleId = input.spawnRuleIdByNodeId.get(nodeId);
+    const isGroupNode = input.groupNodeIds.has(nodeId);
+    const groupRuleId = input.groupRuleIdByNodeId.get(nodeId);
     const prompt = input.promptByNodeId.get(nodeId);
 
     return {
       id: nodeId,
-      kind: isSpawnNode ? "spawn" : "agent",
+      kind: isGroupNode ? "group" : "agent",
       templateName,
       initialMessageRouting,
-      ...(typeof spawnRuleId === "string" ? { spawnRuleId } : {}),
-      ...(input.spawnEnabledNodeIds.has(nodeId) ? { spawnEnabled: true } : {}),
+      ...(typeof groupRuleId === "string" ? { groupRuleId } : {}),
+      ...(input.groupEnabledNodeIds.has(nodeId) ? { groupEnabled: true } : {}),
       ...(typeof prompt === "string" ? { prompt } : {}),
       ...(input.writableNodeIds.has(nodeId) ? { writable: true } : {}),
     };
@@ -968,7 +960,7 @@ export function getTopologyNodeRecords(
       node.id.length === 0 ||
       typeof node.templateName !== "string" ||
       node.templateName.length === 0 ||
-      (node.kind !== "agent" && node.kind !== "spawn")
+      (node.kind !== "agent" && node.kind !== "group")
     ) {
       throw new Error("拓扑 nodeRecords 存在非法节点记录。");
     }
@@ -977,18 +969,18 @@ export function getTopologyNodeRecords(
   return topology.nodeRecords;
 }
 
-export function normalizeSpawnRule(
-  rule: SpawnRule,
-  spawnNodeNameFallback: string,
-): SpawnRule {
+export function normalizeGroupRule(
+  rule: GroupRule,
+  groupNodeNameFallback: string,
+): GroupRule {
   const normalizedBase = {
     id: rule.id,
-    spawnNodeName: rule.spawnNodeName ?? spawnNodeNameFallback ?? rule.id,
+    groupNodeName: rule.groupNodeName ?? groupNodeNameFallback ?? rule.id,
     ...(rule.sourceTemplateName
       ? { sourceTemplateName: rule.sourceTemplateName }
       : {}),
     entryRole: rule.entryRole,
-    spawnedAgents: rule.spawnedAgents.map((agent) => ({ ...agent })),
+    members: rule.members.map((agent) => ({ ...agent })),
     edges: rule.edges.map((edge) => {
       const trigger = normalizeTopologyEdgeTrigger(edge.trigger);
       return {
@@ -1005,7 +997,7 @@ export function normalizeSpawnRule(
       };
     }),
     exitWhen: rule.exitWhen,
-  } satisfies SpawnRuleBase;
+  } satisfies GroupRuleBase;
 
   if (rule.report === false) {
     return {
@@ -1015,16 +1007,20 @@ export function normalizeSpawnRule(
   }
   const { templateName, trigger, messageMode, maxTriggerRounds } = rule.report;
   if (!templateName) {
-    throw new Error(`spawn rule ${rule.id} 存在 report target 时，必须显式声明目标模板。`);
+    throw new Error(`group rule ${rule.id} 存在 report target 时，必须显式声明目标模板。`);
+  }
+  if (!rule.report.sourceRole) {
+    throw new Error(`group rule ${rule.id} 存在 report target 时，必须显式声明来源 role。`);
   }
   if (!trigger) {
-    throw new Error(`spawn rule ${rule.id} 存在 report target 时，必须显式声明 report trigger。`);
+    throw new Error(`group rule ${rule.id} 存在 report target 时，必须显式声明 report trigger。`);
   }
   const normalizedTrigger = normalizeTopologyEdgeTrigger(trigger);
   return {
     ...normalizedBase,
     report: {
       templateName,
+      sourceRole: rule.report.sourceRole,
       trigger: normalizedTrigger,
       messageMode,
       maxTriggerRounds:
@@ -1038,16 +1034,16 @@ export function normalizeSpawnRule(
   };
 }
 
-export function getSpawnRules(topology: TopologyRecord): SpawnRule[] {
-  const spawnNodeNameByRuleId = new Map(
+export function getGroupRules(topology: TopologyRecord): GroupRule[] {
+  const groupNodeNameByRuleId = new Map(
     topology.nodeRecords
-      .filter((node) => node.kind === "spawn")
-      .flatMap((node) => (node.spawnRuleId ? [[node.spawnRuleId, node.id] as const] : [])),
+      .filter((node) => node.kind === "group")
+      .flatMap((node) => (node.groupRuleId ? [[node.groupRuleId, node.id] as const] : [])),
   );
-  return (topology.spawnRules ?? []).map((rule) =>
-    normalizeSpawnRule(
+  return (topology.groupRules ?? []).map((rule) =>
+    normalizeGroupRule(
       rule,
-      spawnNodeNameByRuleId.get(rule.id) ?? rule.id,
+      groupNodeNameByRuleId.get(rule.id) ?? rule.id,
     ),
   );
 }

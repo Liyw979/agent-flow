@@ -81,11 +81,11 @@ test("formatChatTranscript 在没有消息时返回空字符串", () => {
   assert.equal(formatChatTranscript([]), "");
 });
 
-test("formatChatTranscript 会保留 spawn 实例的 senderDisplayName", () => {
+test("formatChatTranscript 会保留 group 实例的 senderDisplayName", () => {
   const transcript = formatChatTranscript(
     [
       {
-        id: "spawn-message",
+        id: "group-message",
         sender: "TaskReview-1",
         senderDisplayName: "TaskReview-1",
         timestamp: toUtcIsoTimestamp("2026-04-19T10:36:50.000Z"),

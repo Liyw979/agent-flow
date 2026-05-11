@@ -4,20 +4,23 @@ import {
   LANGGRAPH_END_NODE_ID,
   type AgentRecord,
   createTopologyLangGraphRecord,
-  isDefaultTopologyTrigger,
   isActionRequiredTopologyTrigger,
+  isDefaultTopologyTrigger,
   normalizeActionRequiredMaxRounds,
   normalizeInitialMessageAgentIds,
-  parseInitialMessageRoutingFromDslInput,
   normalizeTopologyEdgeTrigger,
+  parseInitialMessageRoutingFromDslInput,
+  type TopologyEdge,
   type TopologyEdgeMessageMode,
   type TopologyLangGraphRecord,
   type TopologyNodeRecord,
   type TopologyRecord,
-  type SpawnRule,
+  type GroupRule,
   usesOpenCodeBuiltinPrompt,
 } from "@shared/types";
 import { z } from "zod";
+
+const ROOT_SCOPE_ID = "__root__";
 
 interface TeamDslAgentRecord {
   id: string;
@@ -31,16 +34,16 @@ interface GraphDslAgentNode {
   id: string;
   system_prompt: string;
   writable: boolean;
-  initialMessage?: string | string[];
+  initialMessage?: string | string[] | undefined;
 }
 
-interface GraphDslSpawnNode {
-  type: "spawn";
+interface GraphDslGroupNode {
+  type: "group";
   id: string;
-  graph: GraphDslGraph;
+  nodes: GraphDslNode[];
 }
 
-type GraphDslNode = GraphDslAgentNode | GraphDslSpawnNode;
+type GraphDslNode = GraphDslAgentNode | GraphDslGroupNode;
 
 interface GraphDslLink {
   from: string;
@@ -70,44 +73,29 @@ export interface CompiledTeamDsl {
   topology: TopologyRecord;
 }
 
-function sortInitialMessageRoutingByAgentDefinitionOrder(
-  routing: TopologyNodeRecord["initialMessageRouting"],
-  agentDefinitionOrderById: ReadonlyMap<string, number>,
-): TopologyNodeRecord["initialMessageRouting"] {
-  if (routing.mode !== "list") {
-    return routing;
-  }
-
-  const sortedAgentIds = [...routing.agentIds].sort((left, right) => {
-    const leftOrder = agentDefinitionOrderById.get(left);
-    const rightOrder = agentDefinitionOrderById.get(right);
-    if (leftOrder === undefined || rightOrder === undefined) {
-      throw new Error(`initialMessage 顺序重排失败：${leftOrder === undefined ? left : right}`);
-    }
-    return leftOrder - rightOrder;
-  });
-  return {
-    mode: "list",
-    agentIds: sortedAgentIds,
-  };
+interface FlatAgentNode {
+  kind: "agent";
+  id: string;
+  ancestors: string[];
+  systemPrompt: string;
+  writable: boolean;
+  initialMessageRouting: TopologyNodeRecord["initialMessageRouting"];
 }
 
-function applyInitialMessageRoutingDefinitionOrder(
-  nodeRecords: Map<string, TopologyNodeRecord>,
-  agentDefinitionOrderById: ReadonlyMap<string, number>,
-): void {
-  for (const [nodeId, nodeRecord] of nodeRecords.entries()) {
-    if (nodeRecord.kind !== "agent") {
-      continue;
-    }
-    nodeRecords.set(nodeId, {
-      ...nodeRecord,
-      initialMessageRouting: sortInitialMessageRoutingByAgentDefinitionOrder(
-        nodeRecord.initialMessageRouting,
-        agentDefinitionOrderById,
-      ),
-    });
-  }
+interface FlatGroupNode {
+  kind: "group";
+  id: string;
+  ancestors: string[];
+  childIds: string[];
+}
+
+type FlatNode = FlatAgentNode | FlatGroupNode;
+
+interface FlatGraph {
+  nodesInOrder: FlatNode[];
+  agentsInOrder: FlatAgentNode[];
+  groupsInOrder: FlatGroupNode[];
+  nodeById: Record<string, FlatNode>;
 }
 
 const GraphDslLinkSchema = z.object({
@@ -128,7 +116,10 @@ const GraphDslLinkSchema = z.object({
     });
     return;
   }
-  if (!isActionRequiredTopologyTrigger(normalizedTrigger, value.maxTriggerRounds) && value.maxTriggerRounds !== undefined) {
+  if (
+    value.maxTriggerRounds !== undefined
+    && !isActionRequiredTopologyTrigger(normalizedTrigger, value.maxTriggerRounds)
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["maxTriggerRounds"],
@@ -158,24 +149,42 @@ const GraphDslAgentNodeSchema = z.object({
   }
 });
 
-const GraphDslNodeSchema = z.lazy(() =>
+const GraphDslNodeSchema: z.ZodType<GraphDslNode> = z.lazy(() =>
   z.union([
     GraphDslAgentNodeSchema,
     z.object({
-      type: z.literal("spawn"),
+      type: z.literal("group"),
       id: z.string(),
-      graph: GraphDslGraphSchema,
+      nodes: z.array(GraphDslNodeSchema),
     }).strict(),
   ]),
 );
 
-const GraphDslGraphSchema = z.lazy(() =>
-  z.object({
-    entry: z.string(),
-    nodes: z.array(GraphDslNodeSchema),
-    links: z.array(GraphDslLinkSchema),
-  }).strict(),
-) as z.ZodType<GraphDslGraph>;
+const GraphDslGraphSchema = z.object({
+  entry: z.string(),
+  nodes: z.array(GraphDslNodeSchema),
+  links: z.array(GraphDslLinkSchema),
+}).strict() as z.ZodType<GraphDslGraph>;
+
+function sortInitialMessageRoutingByAgentDefinitionOrder(
+  routing: TopologyNodeRecord["initialMessageRouting"],
+  agentDefinitionOrderById: Readonly<Record<string, number>>,
+): TopologyNodeRecord["initialMessageRouting"] {
+  if (routing.mode !== "list") {
+    return routing;
+  }
+  return {
+    mode: "list",
+    agentIds: [...routing.agentIds].sort((left, right) => {
+      const leftOrder = agentDefinitionOrderById[left];
+      const rightOrder = agentDefinitionOrderById[right];
+      if (leftOrder === undefined || rightOrder === undefined) {
+        throw new Error(`initialMessage 顺序重排失败：${leftOrder === undefined ? left : right}`);
+      }
+      return leftOrder - rightOrder;
+    }),
+  };
+}
 
 function normalizeComparableAgents(agents: Array<{
   id: string;
@@ -218,9 +227,9 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
       ? { langgraph: normalizeComparableLangGraph(topology.langgraph) }
       : {}),
     nodeRecords: [...topology.nodeRecords].sort((left, right) => left.id.localeCompare(right.id)),
-    ...(topology.spawnRules
+    ...(topology.groupRules
       ? {
-          spawnRules: [...topology.spawnRules].sort((left, right) => left.id.localeCompare(right.id)),
+          groupRules: [...topology.groupRules].sort((left, right) => left.id.localeCompare(right.id)),
         }
       : {}),
   };
@@ -250,93 +259,22 @@ export function matchesAppliedTeamDslAgents(
   currentAgents: AgentRecord[],
   compiled: CompiledTeamDsl,
 ): boolean {
-  const comparableCurrentAgents = normalizeComparableAgents(currentAgents);
-  const comparableCompiledAgents = normalizeComparableAgents(
-    compiled.agents.map((agent) => ({
-      id: agent.id,
-      prompt: agent.prompt,
-      isWritable: agent.isWritable,
-    })),
-  );
-
-  return JSON.stringify(comparableCurrentAgents) === JSON.stringify(comparableCompiledAgents);
+  return JSON.stringify(normalizeComparableAgents(currentAgents))
+    === JSON.stringify(normalizeComparableAgents(
+      compiled.agents.map((agent) => ({
+        id: agent.id,
+        prompt: agent.prompt,
+        isWritable: agent.isWritable,
+      })),
+    ));
 }
 
 export function matchesAppliedTeamDslTopology(
   currentTopology: TopologyRecord,
   compiled: CompiledTeamDsl,
 ): boolean {
-  const comparableCurrentTopology = normalizeComparableTopology(currentTopology);
-  const comparableCompiledTopology = normalizeComparableTopology(compiled.topology);
-
-  return JSON.stringify(comparableCurrentTopology) === JSON.stringify(comparableCompiledTopology);
-}
-
-function isBuiltinTemplateName(name: string): boolean {
-  return usesOpenCodeBuiltinPrompt(name);
-}
-
-function compileAgentDefinition(agent: TeamDslAgentRecord): CompiledTeamDslAgent {
-  if (!agent || typeof agent !== "object" || Array.isArray(agent)) {
-    throw new Error("DSL agent 定义必须使用对象格式，例如 { id: \"Build\" }。");
-  }
-
-  const name = agent.id.trim();
-  if (!name) {
-    throw new Error("DSL Agent 名称不能为空。");
-  }
-
-  const templateName = isBuiltinTemplateName(name) ? name : null;
-  const prompt = agent.prompt.trim();
-  if (!templateName && !prompt) {
-    throw new Error(`DSL Agent ${name} 不是内置模板，必须提供 system_prompt。`);
-  }
-
-  if (usesOpenCodeBuiltinPrompt(name) && prompt) {
-    throw new Error(`${name} 使用 OpenCode 内置 prompt，DSL 中不允许覆盖 system_prompt。`);
-  }
-
-  return {
-    id: name,
-    prompt,
-    templateName: templateName || name,
-    isWritable: agent.writable,
-  };
-}
-
-function normalizeCompiledWritableAgents(agents: CompiledTeamDslAgent[]): CompiledTeamDslAgent[] {
-  return agents.map((agent) => ({
-    ...agent,
-    isWritable: agent.isWritable === true,
-  }));
-}
-
-function assertTopologyAgentsDeclared(
-  compiledAgents: CompiledTeamDslAgent[],
-  topology: TopologyRecord,
-): void {
-  const known = new Set([
-    ...compiledAgents.map((agent) => agent.id),
-    ...topology.nodeRecords.filter((node) => node.kind === "spawn").map((node) => node.id),
-  ]);
-  const allNodes = new Set<string>([
-    ...topology.nodes,
-    ...(topology.langgraph?.start.targets ?? []),
-    ...(topology.langgraph?.end?.sources ?? []),
-    ...topology.nodeRecords.map((node) => node.id),
-    ...(topology.spawnRules?.flatMap((rule) => [
-      rule.spawnNodeName,
-      rule.sourceTemplateName,
-      ...(("report" in rule && rule.report !== false) ? [rule.report.templateName] : []),
-      ...rule.spawnedAgents.map((agent) => agent.templateName),
-    ].filter((value): value is string => typeof value === "string" && value.length > 0)) ?? []),
-  ]);
-
-  for (const nodeName of allNodes) {
-    if (!known.has(nodeName)) {
-      throw new Error(`DSL topology 引用了未声明的 Agent：${nodeName}`);
-    }
-  }
+  return JSON.stringify(normalizeComparableTopology(currentTopology))
+    === JSON.stringify(normalizeComparableTopology(compiled.topology));
 }
 
 function formatZodIssuePath(path: (string | number)[]): string {
@@ -394,7 +332,7 @@ function formatGraphDslParseError(error: z.ZodError): string {
       || issue.message === "Invalid input"
     )
   ) {
-    return `${path} 是节点判别字段，只允许 agent 或 spawn。`;
+    return `${path} 是节点判别字段，只允许 agent 或 group。`;
   }
   if (issue.code === z.ZodIssueCode.invalid_enum_value) {
     return `${path} 只允许 ${issue.options.join(" / ")}。`;
@@ -403,13 +341,10 @@ function formatGraphDslParseError(error: z.ZodError): string {
     issue.code === z.ZodIssueCode.invalid_type
     && issue.path[0] === "links"
     && issue.expected === "object"
-) {
+  ) {
     return `${formatZodIssuePath(issue.path)} 必须使用对象格式，并显式写出 from、to、trigger、message_type。`;
   }
-  if (
-    issue.code === z.ZodIssueCode.unrecognized_keys
-    && issue.path[0] === "links"
-  ) {
+  if (issue.code === z.ZodIssueCode.unrecognized_keys && issue.path[0] === "links") {
     return `${formatZodIssuePath(issue.path)} 只允许显式写出 from、to、trigger、message_type、maxTriggerRounds。`;
   }
   if (issue.code === z.ZodIssueCode.invalid_type) {
@@ -429,7 +364,99 @@ function parseGraphDsl(input: unknown): GraphDslGraph {
   return parsed.data;
 }
 
-function mapGraphDslLinkToTopologyEdge(link: GraphDslLink) {
+function createFlatGraph(graph: GraphDslGraph): FlatGraph {
+  const nodeById: Record<string, FlatNode> = {};
+  const nodesInOrder: FlatNode[] = [];
+  const agentsInOrder: FlatAgentNode[] = [];
+  const groupsInOrder: FlatGroupNode[] = [];
+
+  function visitScope(
+    nodes: GraphDslNode[],
+    ancestors: string[],
+    inheritedVisibleAgentIds: string[],
+  ): void {
+    const localAgentIds = nodes
+      .filter((node): node is GraphDslAgentNode => node.type === "agent")
+      .map((node) => node.id);
+    const visibleAgentIds = [...new Set([...inheritedVisibleAgentIds, ...localAgentIds])];
+
+    for (const node of nodes) {
+      if (nodeById[node.id]) {
+        throw new Error(`DSL 节点名必须全局唯一：${node.id}`);
+      }
+      if (node.type === "agent") {
+        const initialMessageRouting = parseInitialMessageRoutingFromDslInput(node.initialMessage);
+        if (initialMessageRouting.mode === "list") {
+          for (const agentId of initialMessageRouting.agentIds) {
+            if (!visibleAgentIds.includes(agentId)) {
+              throw new Error(`DSL Agent ${node.id} 的 initialMessage 引用了不存在的来源 Agent：${agentId}`);
+            }
+          }
+        }
+        const flatNode: FlatAgentNode = {
+          kind: "agent",
+          id: node.id,
+          ancestors,
+          systemPrompt: node.system_prompt,
+          writable: node.writable,
+          initialMessageRouting,
+        };
+        nodeById[node.id] = flatNode;
+        nodesInOrder.push(flatNode);
+        agentsInOrder.push(flatNode);
+        continue;
+      }
+
+      const flatGroup: FlatGroupNode = {
+        kind: "group",
+        id: node.id,
+        ancestors,
+        childIds: node.nodes.map((child) => child.id),
+      };
+      nodeById[node.id] = flatGroup;
+      nodesInOrder.push(flatGroup);
+      groupsInOrder.push(flatGroup);
+      visitScope(node.nodes, [...ancestors, node.id], visibleAgentIds);
+    }
+  }
+
+  visitScope(graph.nodes, [], []);
+  return {
+    nodesInOrder,
+    agentsInOrder,
+    groupsInOrder,
+    nodeById,
+  };
+}
+
+function isNodeInsideGroup(flat: FlatGraph, groupId: string, nodeId: string): boolean {
+  const node = flat.nodeById[nodeId];
+  if (!node) {
+    throw new Error(`未知节点：${nodeId}`);
+  }
+  return node.ancestors.includes(groupId);
+}
+
+function resolveRoleWithinScope(flat: FlatGraph, scopeId: string, nodeId: string): string {
+  const node = flat.nodeById[nodeId];
+  if (!node) {
+    throw new Error(`未知节点：${nodeId}`);
+  }
+  if (scopeId === ROOT_SCOPE_ID) {
+    return node.ancestors[0] ?? node.id;
+  }
+  const scopeIndex = node.ancestors.indexOf(scopeId);
+  if (scopeIndex < 0) {
+    throw new Error(`节点 ${nodeId} 不在 group ${scopeId} 内。`);
+  }
+  return node.ancestors[scopeIndex + 1] ?? node.id;
+}
+
+function resolveParentScopeId(node: FlatNode): string {
+  return node.ancestors[node.ancestors.length - 1] ?? ROOT_SCOPE_ID;
+}
+
+function mapGraphDslLinkToTopologyEdge(link: GraphDslLink): TopologyEdge {
   const trigger = normalizeTopologyEdgeTrigger(link.trigger);
   return {
     source: link.from,
@@ -437,400 +464,340 @@ function mapGraphDslLinkToTopologyEdge(link: GraphDslLink) {
     trigger,
     messageMode: link.message_type,
     ...(isActionRequiredTopologyTrigger(trigger, link.maxTriggerRounds) && typeof link.maxTriggerRounds === "number"
-      ? {
-          maxTriggerRounds: normalizeActionRequiredMaxRounds(link.maxTriggerRounds),
-        }
+      ? { maxTriggerRounds: normalizeActionRequiredMaxRounds(link.maxTriggerRounds) }
       : {}),
   };
 }
 
-function resolveSpawnReportTo(
-  graph: GraphDslGraph,
-  spawnNodeName: string,
-): {
-  target: string;
-  trigger: string;
-  messageMode: TopologyEdgeMessageMode;
-  maxTriggerRounds?: number;
-} | undefined {
-  const outgoingLinks = graph.links.filter((link) => link.from === spawnNodeName);
-  return outgoingLinks.length === 1
-    ? {
-        target: outgoingLinks[0]!.to,
-        trigger: normalizeTopologyEdgeTrigger(outgoingLinks[0]!.trigger),
-        messageMode: outgoingLinks[0]!.message_type,
-        ...(isActionRequiredTopologyTrigger(
-          normalizeTopologyEdgeTrigger(outgoingLinks[0]!.trigger),
-          outgoingLinks[0]!.maxTriggerRounds,
-        )
-          && typeof outgoingLinks[0]!.maxTriggerRounds === "number"
-          ? {
-              maxTriggerRounds: normalizeActionRequiredMaxRounds(outgoingLinks[0]!.maxTriggerRounds),
-            }
-          : {}),
-      }
-    : undefined;
-}
-
-function resolveSpawnSourceTemplateName(
-  graph: GraphDslGraph,
-  spawnNodeName: string,
-): string | undefined {
-  const incomingLinks = graph.links.filter((link) => link.to === spawnNodeName);
-  return incomingLinks.length === 1 ? incomingLinks[0]!.from : undefined;
-}
-
-function resolveGraphExternalReport(
-  graph: GraphDslGraph,
-  availableExternalTargets: ReadonlySet<string>,
-): {
-  source: string;
-  target: string;
-  trigger: string;
-  messageMode: TopologyEdgeMessageMode;
-  maxTriggerRounds?: number;
-} | undefined {
-  const localNames = new Set(graph.nodes.map((node) => node.id));
-  const externalLinks = graph.links.filter((link) =>
-    !localNames.has(link.to) && availableExternalTargets.has(link.to),
-  );
-  if (externalLinks.length === 0) {
-    return undefined;
-  }
-  if (externalLinks.length > 1) {
-    throw new Error("spawn 子图最多只能声明一条直接回到外层节点的出口。");
-  }
-  const externalLink = externalLinks[0]!;
-  return {
-    source: externalLink.from,
-    target: externalLink.to,
-    trigger: normalizeTopologyEdgeTrigger(externalLink.trigger),
-    messageMode: externalLink.message_type,
-    ...(isActionRequiredTopologyTrigger(normalizeTopologyEdgeTrigger(externalLink.trigger), externalLink.maxTriggerRounds)
-      && typeof externalLink.maxTriggerRounds === "number"
-      ? {
-          maxTriggerRounds: normalizeActionRequiredMaxRounds(externalLink.maxTriggerRounds),
-        }
-      : {}),
-  };
-}
-
-function collectGraphDslNodeDefinitions(
-  graph: GraphDslGraph,
-  context: {
-    agentDefinitions: Map<string, TeamDslAgentRecord>;
-    nodeRecords: Map<string, TopologyNodeRecord>;
-    spawnRules: Map<string, SpawnRule>;
-    isRootGraph: boolean;
-    availableExternalTargets: ReadonlySet<string>;
-    agentDefinitionOrderById: Map<string, number>;
-  },
-): void {
-  const localNames = new Set<string>();
-  for (const node of graph.nodes) {
-    if (localNames.has(node.id)) {
-      throw new Error(`同一层 graph 中存在重复节点名：${node.id}`);
-    }
-    localNames.add(node.id);
-  }
-  if (!localNames.has(graph.entry)) {
-    throw new Error(`graph.entry 指向了不存在的节点：${graph.entry}`);
-  }
-  for (const link of graph.links) {
-    const isDirectEndLink = context.isRootGraph && link.to === LANGGRAPH_END_NODE_ID;
-    const isExternalTarget = !localNames.has(link.to) && context.availableExternalTargets.has(link.to);
-    if (link.to === LANGGRAPH_END_NODE_ID && !isDirectEndLink) {
-      throw new Error(`graph.links 只有根图可以直接连接 __end__：${link.from} -> ${link.to}`);
-    }
-    if (!localNames.has(link.from) || (!localNames.has(link.to) && !isDirectEndLink && !isExternalTarget)) {
-      throw new Error(`graph.links 引用了不存在的节点：${link.from} -> ${link.to}`);
-    }
-  }
-
-  for (const node of graph.nodes) {
-    if (context.nodeRecords.has(node.id)) {
-      throw new Error(`DSL 节点名必须全局唯一：${node.id}`);
-    }
-
-    const parsedNode =
-      node.type === "agent"
-        ? {
-            type: "agent" as const,
-            id: node.id,
-            prompt: node.system_prompt,
-            writable: node.writable,
-            initialMessageRouting: parseInitialMessageRoutingFromDslInput(node.initialMessage),
-          }
-        : node;
-
-    if (parsedNode.type === "agent") {
-      context.agentDefinitionOrderById.set(parsedNode.id, context.agentDefinitionOrderById.size);
-      context.agentDefinitions.set(node.id, {
-        id: parsedNode.id,
-        prompt: parsedNode.prompt,
-        writable: parsedNode.writable,
-        initialMessageRouting: parsedNode.initialMessageRouting,
-      });
-      context.nodeRecords.set(parsedNode.id, {
-        id: parsedNode.id,
-        kind: "agent",
-        templateName: parsedNode.id,
-        initialMessageRouting: parsedNode.initialMessageRouting,
-      });
+function dedupeTopologyEdges(edges: TopologyEdge[]): TopologyEdge[] {
+  const seen = new Set<string>();
+  const deduped: TopologyEdge[] = [];
+  for (const edge of edges) {
+    const key = `${edge.source}__${edge.target}__${edge.trigger}__${edge.messageMode}__${String(edge.maxTriggerRounds)}`;
+    if (seen.has(key)) {
       continue;
     }
-
-    const spawnRuleId = `spawn-rule:${parsedNode.id}`;
-    const reportTarget = resolveSpawnReportTo(graph, parsedNode.id);
-    const sourceTemplateName = resolveSpawnSourceTemplateName(graph, parsedNode.id);
-    const childAvailableExternalTargets = new Set([
-      ...context.availableExternalTargets,
-      ...localNames,
-    ]);
-    const externalReportTarget = resolveGraphExternalReport(parsedNode.graph, childAvailableExternalTargets);
-    if (reportTarget && externalReportTarget) {
-      throw new Error(`spawn 节点 ${node.id} 不能同时在外层和子图里声明回到外层的出口。`);
-    }
-    const reportToTemplateName = externalReportTarget?.target ?? reportTarget?.target;
-    const reportToTrigger = externalReportTarget?.trigger ?? reportTarget?.trigger;
-    const reportToMessageMode = externalReportTarget?.messageMode ?? reportTarget?.messageMode;
-    const reportToMaxTriggerRounds = externalReportTarget?.maxTriggerRounds ?? reportTarget?.maxTriggerRounds;
-    if (reportToTemplateName && !reportToTrigger) {
-      throw new Error(`spawn 节点 ${parsedNode.id} 存在回到外层的目标时，必须显式声明 trigger。`);
-    }
-    context.nodeRecords.set(parsedNode.id, {
-      id: parsedNode.id,
-      kind: "spawn",
-      templateName: parsedNode.id,
-      initialMessageRouting: { mode: "inherit" },
-      spawnEnabled: true,
-      spawnRuleId,
-    });
-    collectGraphDslNodeDefinitions(parsedNode.graph, {
-      ...context,
-      isRootGraph: false,
-      availableExternalTargets: childAvailableExternalTargets,
-    });
-    const reportConfig = reportToTemplateName && reportToTrigger
-      ? ({
-          report: {
-            templateName: reportToTemplateName,
-            trigger: reportToTrigger,
-            messageMode: reportToMessageMode ?? "last",
-            maxTriggerRounds:
-              isActionRequiredTopologyTrigger(reportToTrigger, reportToMaxTriggerRounds)
-              && typeof reportToMaxTriggerRounds === "number"
-                ? reportToMaxTriggerRounds
-                : false,
-          },
-        } as const)
-      : ({ report: false as const });
-    context.spawnRules.set(spawnRuleId, {
-      id: spawnRuleId,
-      spawnNodeName: parsedNode.id,
-      ...(sourceTemplateName ? { sourceTemplateName } : {}),
-      entryRole: parsedNode.graph.entry,
-      spawnedAgents: parsedNode.graph.nodes.map((childNode) => ({
-        role: childNode.id,
-        templateName: childNode.id,
-      })),
-      edges: parsedNode.graph.links
-        .filter((link) => parsedNode.graph.nodes.some((childNode) => childNode.id === link.to))
-        .map((link) => ({
-          sourceRole: link.from,
-          targetRole: link.to,
-          trigger: normalizeTopologyEdgeTrigger(link.trigger),
-          messageMode: link.message_type,
-          ...(isActionRequiredTopologyTrigger(normalizeTopologyEdgeTrigger(link.trigger), link.maxTriggerRounds)
-            && typeof link.maxTriggerRounds === "number"
-            ? {
-                maxTriggerRounds: normalizeActionRequiredMaxRounds(link.maxTriggerRounds),
-              }
-            : {}),
-        })),
-      exitWhen: "all_completed",
-      ...reportConfig,
-    });
+    seen.add(key);
+    deduped.push(edge);
   }
+  return deduped;
 }
 
-function collectGraphDslEndLinks(graph: GraphDslGraph): GraphDslLink[] {
+function collectScopeEdges(
+  graph: GraphDslGraph,
+  flat: FlatGraph,
+  scopeId: string,
+): TopologyEdge[] {
+  return dedupeTopologyEdges(
+    graph.links.flatMap((link) => {
+      if (link.to === LANGGRAPH_END_NODE_ID) {
+        return [];
+      }
+      const sourceInScope = scopeId === ROOT_SCOPE_ID || isNodeInsideGroup(flat, scopeId, link.from);
+      const targetInScope = scopeId === ROOT_SCOPE_ID || isNodeInsideGroup(flat, scopeId, link.to);
+      if (!sourceInScope || !targetInScope) {
+        return [];
+      }
+      const sourceRole = resolveRoleWithinScope(flat, scopeId, link.from);
+      const targetRole = resolveRoleWithinScope(flat, scopeId, link.to);
+      if (
+        scopeId !== ROOT_SCOPE_ID
+        && targetRole === link.to
+        && resolveParentScopeId(flat.nodeById[link.to]!) !== scopeId
+      ) {
+        return [];
+      }
+      if (sourceRole === targetRole) {
+        return [];
+      }
+      const mapped = mapGraphDslLinkToTopologyEdge(link);
+      return [{
+        source: sourceRole,
+        target: targetRole,
+        trigger: mapped.trigger,
+        messageMode: mapped.messageMode,
+        ...(mapped.maxTriggerRounds !== undefined ? { maxTriggerRounds: mapped.maxTriggerRounds } : {}),
+      }];
+    }),
+  );
+}
+
+function collectRootEndLinks(graph: GraphDslGraph): GraphDslLink[] {
   return graph.links
     .filter((link) => link.to === LANGGRAPH_END_NODE_ID)
     .filter((value, index, list) =>
       list.findIndex((item) =>
         item.from === value.from
         && normalizeTopologyEdgeTrigger(item.trigger) === normalizeTopologyEdgeTrigger(value.trigger)
-        && item.message_type === value.message_type
+        && item.message_type === value.message_type,
       ) === index);
 }
 
-function assertGraphAgentPromptsDeclareOutgoingTriggers(graph: GraphDslGraph): void {
-  const agentPrompts = new Map(
-    graph.nodes
-      .filter((node): node is GraphDslAgentNode => node.type === "agent")
-      .map((node) => [node.id, node.system_prompt]),
-  );
-  const triggersBySource = new Map<string, Set<string>>();
+function assertLinkEndpoints(graph: GraphDslGraph, flat: FlatGraph): void {
+  const entryNode = flat.nodeById[graph.entry];
+  if (!entryNode) {
+    throw new Error(`entry 指向了不存在的节点：${graph.entry}`);
+  }
+  if (entryNode.kind !== "agent") {
+    throw new Error(`entry 必须指向可执行 agent，不能直接指向 group：${graph.entry}`);
+  }
 
+  for (const [index, link] of graph.links.entries()) {
+    const sourceNode = flat.nodeById[link.from];
+    if (!sourceNode) {
+      throw new Error(`links[${index}] 引用了不存在的节点：${link.from} -> ${link.to}`);
+    }
+    if (sourceNode.kind !== "agent") {
+      throw new Error(`links[${index}].from 必须指向 agent，不能直接指向 group：${link.from}`);
+    }
+    if (link.to === LANGGRAPH_END_NODE_ID) {
+      if (sourceNode.ancestors.length > 0) {
+        throw new Error(`group 内 agent 不能直接连接 __end__：${link.from} -> ${link.to}`);
+      }
+      continue;
+    }
+    const targetNode = flat.nodeById[link.to];
+    if (!targetNode) {
+      throw new Error(`links[${index}] 引用了不存在的节点：${link.from} -> ${link.to}`);
+    }
+    if (targetNode.kind !== "agent") {
+      throw new Error(`links[${index}].to 必须指向 agent，不能直接指向 group：${link.to}`);
+    }
+  }
+}
+
+function assertAgentPromptsDeclareOutgoingTriggers(graph: GraphDslGraph, flat: FlatGraph): void {
+  const triggerSetBySource: Record<string, Set<string>> = {};
   for (const link of graph.links) {
-    if (!agentPrompts.has(link.from)) {
+    const sourceNode = flat.nodeById[link.from];
+    if (!sourceNode || sourceNode.kind !== "agent") {
       continue;
     }
     const trigger = normalizeTopologyEdgeTrigger(link.trigger);
     if (isDefaultTopologyTrigger(trigger)) {
       continue;
     }
-    const current = triggersBySource.get(link.from) ?? new Set<string>();
-    current.add(trigger);
-    triggersBySource.set(link.from, current);
+    triggerSetBySource[link.from] ??= new Set<string>();
+    triggerSetBySource[link.from]!.add(trigger);
   }
 
-  for (const [agentId, triggers] of triggersBySource.entries()) {
-    const prompt = agentPrompts.get(agentId);
-    if (prompt === undefined) {
+  for (const sourceId of Object.keys(triggerSetBySource)) {
+    const sourceNode = flat.nodeById[sourceId];
+    if (!sourceNode || sourceNode.kind !== "agent") {
       continue;
     }
-    const missingTriggers = [...triggers].filter((trigger) => !prompt.includes(trigger));
+    const missingTriggers = [...triggerSetBySource[sourceId]!].filter((trigger) =>
+      !sourceNode.systemPrompt.includes(trigger),
+    );
     if (missingTriggers.length > 0) {
-      throw new Error(`DSL Agent ${agentId} 的 system_prompt 必须显式包含以下 trigger：${missingTriggers.join("、")}`);
-    }
-  }
-
-  for (const node of graph.nodes) {
-    if (node.type === "spawn") {
-      assertGraphAgentPromptsDeclareOutgoingTriggers(node.graph);
+      throw new Error(`DSL Agent ${sourceId} 的 system_prompt 必须显式包含以下 trigger：${missingTriggers.join("、")}`);
     }
   }
 }
 
-function assertGraphInitialMessageSourcesExist(graph: GraphDslGraph): void {
-  const localAgentIds = new Set(
-    graph.nodes
-      .filter((node): node is GraphDslAgentNode => node.type === "agent")
-      .map((node) => node.id),
-  );
-  const visibleAgentIds = new Set(localAgentIds);
-  for (const node of graph.nodes) {
-    if (node.type === "spawn") {
-      continue;
-    }
-    visibleAgentIds.add(node.id);
+function compileAgentDefinition(agent: TeamDslAgentRecord): CompiledTeamDslAgent {
+  const name = agent.id.trim();
+  if (!name) {
+    throw new Error("DSL Agent 名称不能为空。");
   }
-  for (const node of graph.nodes) {
-    if (node.type === "agent") {
-      const routing = parseInitialMessageRoutingFromDslInput(node.initialMessage);
-      if (routing.mode === "list") {
-        for (const agentId of routing.agentIds) {
-          if (!visibleAgentIds.has(agentId)) {
-            throw new Error(
-              `DSL Agent ${node.id} 的 initialMessage 引用了不存在的来源 Agent：${agentId}`,
-            );
-          }
-        }
-      }
-      continue;
-    }
-    const childVisibleAgentIds = new Set(visibleAgentIds);
-    for (const childNode of node.graph.nodes) {
-      if (childNode.type === "agent") {
-        childVisibleAgentIds.add(childNode.id);
-      }
-    }
-    assertGraphInitialMessageSourcesExistWithVisibleSources(
-      node.graph,
-      childVisibleAgentIds,
-    );
+  const prompt = agent.prompt.trim();
+  if (!usesOpenCodeBuiltinPrompt(name) && !prompt) {
+    throw new Error(`DSL Agent ${name} 不是内置模板，必须提供 system_prompt。`);
   }
+  if (usesOpenCodeBuiltinPrompt(name) && prompt) {
+    throw new Error(`${name} 使用 OpenCode 内置 prompt，DSL 中不允许覆盖 system_prompt。`);
+  }
+  return {
+    id: name,
+    prompt,
+    templateName: name,
+    isWritable: agent.writable === true,
+  };
 }
 
-function assertGraphInitialMessageSourcesExistWithVisibleSources(
+function collectGroupRule(
   graph: GraphDslGraph,
-  visibleAgentIds: ReadonlySet<string>,
-): void {
-  const localAgentIds = new Set(
-    graph.nodes
-      .filter((node): node is GraphDslAgentNode => node.type === "agent")
-      .map((node) => node.id),
+  flat: FlatGraph,
+  groupNode: FlatGroupNode,
+): GroupRule {
+  const groupId = groupNode.id;
+  const parentScopeId = resolveParentScopeId(groupNode);
+  const incomingLinks = graph.links.filter((link) =>
+    link.to !== LANGGRAPH_END_NODE_ID
+    && isNodeInsideGroup(flat, groupId, link.to)
+    && !isNodeInsideGroup(flat, groupId, link.from),
   );
-  const nextVisibleAgentIds = new Set(visibleAgentIds);
-  for (const agentId of localAgentIds) {
-    nextVisibleAgentIds.add(agentId);
+  const entryRoleCandidates = new Set(
+    incomingLinks.map((link) => resolveRoleWithinScope(flat, groupId, link.to)),
+  );
+  if (isNodeInsideGroup(flat, groupId, graph.entry)) {
+    entryRoleCandidates.add(resolveRoleWithinScope(flat, groupId, graph.entry));
   }
-  for (const node of graph.nodes) {
-    if (node.type === "agent") {
-      const routing = parseInitialMessageRoutingFromDslInput(node.initialMessage);
-      if (routing.mode === "list") {
-        for (const agentId of routing.agentIds) {
-          if (!nextVisibleAgentIds.has(agentId)) {
-            throw new Error(
-              `DSL Agent ${node.id} 的 initialMessage 引用了不存在的来源 Agent：${agentId}`,
-            );
-          }
-        }
+  if (entryRoleCandidates.size === 0) {
+    throw new Error(`group ${groupId} 缺少入口角色；请让 entry 或某条 link 指向组内 agent。`);
+  }
+  if (entryRoleCandidates.size > 1) {
+    throw new Error(`group ${groupId} 存在多个入口角色：${[...entryRoleCandidates].join("、")}`);
+  }
+  const entryRole = [...entryRoleCandidates][0]!;
+
+  const sourceTemplateCandidates = [...new Set(
+    incomingLinks.map((link) => resolveRoleWithinScope(flat, parentScopeId, link.from)),
+  )];
+  if (sourceTemplateCandidates.length > 1) {
+    throw new Error(`group ${groupId} 存在多个外部来源：${sourceTemplateCandidates.join("、")}`);
+  }
+
+  const outgoingEdges = dedupeTopologyEdges(
+    graph.links.flatMap((link) => {
+      if (
+        link.to === LANGGRAPH_END_NODE_ID
+        || !isNodeInsideGroup(flat, groupId, link.from)
+        || isNodeInsideGroup(flat, groupId, link.to)
+      ) {
+        return [];
       }
-      continue;
+      const mapped = mapGraphDslLinkToTopologyEdge(link);
+      return [{
+        source: resolveRoleWithinScope(flat, groupId, link.from),
+        target: resolveRoleWithinScope(flat, parentScopeId, link.to),
+        trigger: mapped.trigger,
+        messageMode: mapped.messageMode,
+        ...(mapped.maxTriggerRounds !== undefined ? { maxTriggerRounds: mapped.maxTriggerRounds } : {}),
+      }];
+    }),
+  );
+  if (outgoingEdges.length > 1) {
+    throw new Error(`group ${groupId} 最多只能声明一条回到外层的出口。`);
+  }
+
+  const onlyOutgoingEdge = outgoingEdges[0];
+  return {
+    id: `group-rule:${groupId}`,
+    groupNodeName: groupId,
+    ...(sourceTemplateCandidates[0] ? { sourceTemplateName: sourceTemplateCandidates[0] } : {}),
+    entryRole,
+    members: groupNode.childIds.map((childId) => ({
+      role: childId,
+      templateName: childId,
+    })),
+    edges: collectScopeEdges(graph, flat, groupId).map((edge) => ({
+      sourceRole: edge.source,
+      targetRole: edge.target,
+      trigger: edge.trigger,
+      messageMode: edge.messageMode,
+      ...(edge.maxTriggerRounds !== undefined ? { maxTriggerRounds: edge.maxTriggerRounds } : {}),
+    })),
+    exitWhen: "all_completed",
+    report: onlyOutgoingEdge
+      ? {
+          templateName: onlyOutgoingEdge.target,
+          sourceRole: onlyOutgoingEdge.source,
+          trigger: onlyOutgoingEdge.trigger,
+          messageMode: onlyOutgoingEdge.messageMode,
+          maxTriggerRounds:
+            isActionRequiredTopologyTrigger(onlyOutgoingEdge.trigger, onlyOutgoingEdge.maxTriggerRounds)
+            && typeof onlyOutgoingEdge.maxTriggerRounds === "number"
+              ? onlyOutgoingEdge.maxTriggerRounds
+              : false,
+        }
+      : false,
+  };
+}
+
+function assertTopologyAgentsDeclared(
+  compiledAgents: CompiledTeamDslAgent[],
+  topology: TopologyRecord,
+): void {
+  const known = new Set([
+    ...compiledAgents.map((agent) => agent.id),
+    ...topology.nodeRecords.filter((node) => node.kind === "group").map((node) => node.id),
+  ]);
+  const allNodes = new Set<string>([
+    ...topology.nodes,
+    ...(topology.langgraph?.start.targets ?? []),
+    ...(topology.langgraph?.end?.sources ?? []),
+    ...topology.nodeRecords.map((node) => node.id),
+    ...(topology.groupRules?.flatMap((rule) => [
+      rule.groupNodeName,
+      rule.sourceTemplateName,
+      ...((rule.report !== false) ? [rule.report.templateName] : []),
+      ...rule.members.map((agent) => agent.templateName),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0)) ?? []),
+  ]);
+  for (const nodeName of allNodes) {
+    if (!known.has(nodeName)) {
+      throw new Error(`DSL topology 引用了未声明的 Agent：${nodeName}`);
     }
-    assertGraphInitialMessageSourcesExistWithVisibleSources(
-      node.graph,
-      nextVisibleAgentIds,
-    );
   }
 }
 
-function compileGraphDsl(input: GraphDslGraph): CompiledTeamDsl {
-  assertGraphAgentPromptsDeclareOutgoingTriggers(input);
-  assertGraphInitialMessageSourcesExist(input);
-  const agentDefinitionOrderById = new Map<string, number>();
-  const agentDefinitions = new Map<string, TeamDslAgentRecord>();
-  const nodeRecords = new Map<string, TopologyNodeRecord>();
-  const spawnRules = new Map<string, SpawnRule>();
-  collectGraphDslNodeDefinitions(input, {
-    agentDefinitions,
-    nodeRecords,
-    spawnRules,
-    isRootGraph: true,
-    availableExternalTargets: new Set<string>(),
-    agentDefinitionOrderById,
-  });
-  applyInitialMessageRoutingDefinitionOrder(nodeRecords, agentDefinitionOrderById);
+function compileGraphDsl(graph: GraphDslGraph): CompiledTeamDsl {
+  const flat = createFlatGraph(graph);
+  assertLinkEndpoints(graph, flat);
+  assertAgentPromptsDeclareOutgoingTriggers(graph, flat);
 
-  const compiledAgents = normalizeCompiledWritableAgents(
-    [...agentDefinitions.values()].map((agent) => compileAgentDefinition(agent)),
+  const agentDefinitionOrderById = Object.fromEntries(
+    flat.agentsInOrder.map((agent, index) => [agent.id, index]),
+  ) as Record<string, number>;
+
+  const compiledAgents = flat.agentsInOrder.map((agent) =>
+    compileAgentDefinition({
+      id: agent.id,
+      prompt: agent.systemPrompt,
+      writable: agent.writable,
+      initialMessageRouting: agent.initialMessageRouting,
+    }),
   );
-  const compiledAgentsByName = new Map(compiledAgents.map((agent) => [agent.id, agent]));
-  const compiledNodeRecords = [...nodeRecords.values()].map((node) => {
-    if (node.kind !== "agent") {
-      return { ...node };
+  const compiledAgentById = Object.fromEntries(compiledAgents.map((agent) => [agent.id, agent])) as Record<string, CompiledTeamDslAgent>;
+
+  const nodeRecords: TopologyNodeRecord[] = flat.nodesInOrder.map((node) => {
+    if (node.kind === "group") {
+      return {
+        id: node.id,
+        kind: "group",
+        templateName: node.id,
+        initialMessageRouting: { mode: "inherit" },
+        groupEnabled: true,
+        groupRuleId: `group-rule:${node.id}`,
+      };
     }
-    const compiledAgent = compiledAgentsByName.get(node.id);
+    const compiledAgent = compiledAgentById[node.id];
+    if (!compiledAgent) {
+      throw new Error(`缺少已编译 Agent：${node.id}`);
+    }
     return {
-      ...node,
-      ...(compiledAgent?.prompt !== null && compiledAgent?.prompt !== undefined
-        ? { prompt: compiledAgent.prompt }
-        : {}),
-      ...(compiledAgent?.isWritable === true ? { writable: true } : {}),
+      id: node.id,
+      kind: "agent",
+      templateName: node.id,
+      prompt: compiledAgent.prompt,
+      initialMessageRouting: sortInitialMessageRoutingByAgentDefinitionOrder(
+        node.initialMessageRouting,
+        agentDefinitionOrderById,
+      ),
+      ...(compiledAgent.isWritable ? { writable: true } : {}),
     };
   });
-  const nonEndLinks = input.links.filter((link) => link.to !== LANGGRAPH_END_NODE_ID);
-  const topologyEdges = nonEndLinks.map((link) => mapGraphDslLinkToTopologyEdge(link));
-  const endLinks = collectGraphDslEndLinks(input);
 
+  const topologyEdges = collectScopeEdges(graph, flat, ROOT_SCOPE_ID);
+  const endLinks = collectRootEndLinks(graph);
+  const startTarget = resolveRoleWithinScope(flat, ROOT_SCOPE_ID, graph.entry);
   const topology: TopologyRecord = {
-    nodes: input.nodes.map((node) => node.id),
+    nodes: graph.nodes.map((node) => node.id),
     edges: topologyEdges,
     langgraph: createTopologyLangGraphRecord({
-      nodes: input.nodes.map((node) => node.id),
+      nodes: graph.nodes.map((node) => node.id),
       edges: topologyEdges,
-      startTargets: [input.entry],
+      startTargets: [startTarget],
       endIncoming: endLinks.map((link) => ({
         source: link.from,
         trigger: normalizeTopologyEdgeTrigger(link.trigger),
       })),
     }),
-    nodeRecords: compiledNodeRecords,
-    spawnRules: [...spawnRules.values()],
+    nodeRecords,
+    groupRules: flat.groupsInOrder.map((groupNode) => collectGroupRule(graph, flat, groupNode)),
   };
+
   assertTopologyAgentsDeclared(compiledAgents, topology);
   assertNoAmbiguousTopologyTriggerRoutes({
     edges: topology.edges,
