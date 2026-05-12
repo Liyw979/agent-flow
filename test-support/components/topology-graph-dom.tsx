@@ -4,7 +4,6 @@ import { JSDOM } from "jsdom";
 
 import type {
   TaskSnapshot,
-  WorkspaceSnapshot,
 } from "@shared/types";
 
 import { TopologyGraph } from "@/components/TopologyGraph";
@@ -32,11 +31,10 @@ type GlobalDomPatch = {
 };
 
 interface RenderTopologyGraphInput {
-  workspace: WorkspaceSnapshot;
   task: TaskSnapshot;
   openingAgentTerminalId: string;
   onToggleMaximize: () => void;
-  onOpenAgentTerminal?: (agentId: string) => void;
+  onOpenAgentTerminal: (agentId: string) => void;
 }
 
 function setupDom() {
@@ -140,11 +138,11 @@ export async function renderTopologyGraphInDom(input: RenderTopologyGraphInput) 
     await act(async () => {
       root.render(
         <TopologyGraph
-          workspace={nextInput.workspace}
           task={nextInput.task}
+          isMaximized={false}
           onToggleMaximize={nextInput.onToggleMaximize}
           openingAgentTerminalId={nextInput.openingAgentTerminalId}
-          {...(nextInput.onOpenAgentTerminal ? { onOpenAgentTerminal: nextInput.onOpenAgentTerminal } : {})}
+          onOpenAgentTerminal={nextInput.onOpenAgentTerminal}
         />,
       );
     });

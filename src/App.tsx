@@ -253,7 +253,6 @@ function App() {
         {!panelVisibility.showChatPanel && panelVisibility.showTopologyPanel && !panelVisibility.showTeamPanel ? (
           <div className="h-full min-h-0 overflow-hidden">
             <TopologyGraph
-              workspace={workspace}
               task={task}
               isMaximized={panelMode === "topology-only"}
               onToggleMaximize={() => {
@@ -295,7 +294,6 @@ function App() {
             style={{ gap: `${workspaceLayoutMetrics.panelGapPx}px` }}
           >
             <TopologyGraph
-              workspace={workspace}
               task={task}
               isMaximized={panelMode === "topology-only"}
               onToggleMaximize={() => {

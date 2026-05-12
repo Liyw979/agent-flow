@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { withOptionalValue } from "@shared/object-utils";
 import {
   resolveAgentAttachButtonState,
   resolveSessionStateFromSessionIdText,
@@ -10,6 +9,7 @@ import {
   type AgentHistoryItem,
 } from "@/lib/agent-history";
 import { AgentHistoryMarkdown } from "@/lib/agent-history-markdown";
+import { getTopologyHistoryItemButtonClassName } from "@/lib/topology-history-layout";
 import {
   PANEL_HEADER_CLASS,
   PANEL_HEADER_LEADING_CLASS,
@@ -34,16 +34,14 @@ import type {
   TaskSnapshot,
   TaskStatus,
   UtcIsoTimestamp,
-  WorkspaceSnapshot,
 } from "@shared/types";
 
 interface TopologyGraphProps {
-  workspace: WorkspaceSnapshot;
   task: TaskSnapshot;
-  isMaximized?: boolean;
-  onToggleMaximize?: () => void;
-  openingAgentTerminalId?: string;
-  onOpenAgentTerminal?: (agentId: string) => void;
+  isMaximized: boolean;
+  onToggleMaximize: () => void;
+  openingAgentTerminalId: string;
+  onOpenAgentTerminal: (agentId: string) => void;
 }
 
 const NODE_WIDTH = 248;
@@ -118,24 +116,27 @@ function TopologyAgentHistoryList(input: {
     >
       <div className="space-y-3">
         {input.historyItems.map((item) => (
-          <section
+          <article
             key={item.id}
-            className="min-w-0 select-text"
+            className={`${getTopologyHistoryItemButtonClassName()} min-w-0 flex-none border-emerald-200 bg-emerald-50 text-emerald-900`}
+            data-topology-history-item={item.id}
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-semibold">
-                {item.label}
-              </span>
-              <span className="text-[11px] opacity-70">
-                {formatHistoryTimestamp(item.timestamp)}
-              </span>
+            <div className="min-w-0 flex-1 select-text">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-semibold">
+                  {item.label}
+                </span>
+                <span className="text-[11px] opacity-70">
+                  {formatHistoryTimestamp(item.timestamp)}
+                </span>
+              </div>
+              <AgentHistoryMarkdown
+                content={item.detailSnippet}
+                className="mt-1 text-[11px] leading-[1.35] opacity-90 select-text"
+                style={{ marginTop: "0.125rem" }}
+              />
             </div>
-            <AgentHistoryMarkdown
-              content={item.detailSnippet}
-              className="mt-1 text-[11px] leading-[1.35] opacity-90 select-text"
-              style={{ marginTop: "0.125rem" }}
-            />
-          </section>
+          </article>
         ))}
       </div>
     </div>
@@ -293,11 +294,10 @@ function renderAttachButtonIcon() {
 }
 
 export function TopologyGraph({
-  workspace,
   task,
-  isMaximized = false,
+  isMaximized,
   onToggleMaximize,
-  openingAgentTerminalId = "",
+  openingAgentTerminalId,
   onOpenAgentTerminal,
 }: TopologyGraphProps) {
   const topologyPanelBodyClassName = getTopologyPanelBodyClassName();
@@ -306,46 +306,46 @@ export function TopologyGraph({
   const [canvasViewport, setCanvasViewport] = useState<{
     width: number;
     height: number;
-  } | null>(null);
+  }>({
+    width: 0,
+    height: 0,
+  });
 
-  const topology = task?.topology ?? workspace?.topology;
+  const topology = task.topology;
   const taskAgents = useMemo(
-    () => new Map(task?.agents.map((agent) => [agent.id, agent]) ?? []),
-    [task?.agents],
+    () => new Map(task.agents.map((agent) => [agent.id, agent])),
+    [task.agents],
   );
   const visibleTopologyCandidateNodeIds = useMemo(
     () =>
       Array.from(
         new Set(
-          task?.agents
+          task.agents
             .filter((agent) => agent.runCount > 0)
-            .map((agent) => agent.id) ?? [],
+            .map((agent) => agent.id),
         ),
       ),
-    [task?.agents],
+    [task.agents],
   );
 
   const orderedNodeIds = useMemo(
-    () =>
-      topology
-        ? getTopologyDisplayNodeIds(topology, visibleTopologyCandidateNodeIds)
-        : [],
+    () => getTopologyDisplayNodeIds(topology, visibleTopologyCandidateNodeIds),
     [topology, visibleTopologyCandidateNodeIds],
   );
-  const visibleNodeIds = orderedNodeIds;
+  const hasRenderableTopology = orderedNodeIds.length > 0;
   const canvasViewportMeasurementKey = useMemo(
     () =>
       getTopologyCanvasViewportMeasurementKey({
-        topologyNodeCount: topology?.nodes.length ?? 0,
-        topologyNodeRecordCount: topology ? topology.nodeRecords.length : 0,
-        hasRenderableCanvas: Boolean(topology && visibleNodeIds.length > 0),
+        topologyNodeCount: topology.nodes.length,
+        topologyNodeRecordCount: topology.nodeRecords.length,
+        hasRenderableCanvas: hasRenderableTopology,
       }),
-    [topology, visibleNodeIds.length],
+    [hasRenderableTopology, topology.nodeRecords.length, topology.nodes.length],
   );
 
   useEffect(() => {
     const element = canvasViewportRef.current;
-    if (!element) {
+    if (!element || !hasRenderableTopology) {
       return;
     }
 
@@ -355,7 +355,7 @@ export function TopologyGraph({
           width: Math.max(0, Math.floor(width)),
           height: Math.max(0, Math.floor(height)),
         };
-        if (current?.width === next.width && current?.height === next.height) {
+        if (current.width === next.width && current.height === next.height) {
           return current;
         }
         return next;
@@ -379,17 +379,17 @@ export function TopologyGraph({
     return () => {
       observer.disconnect();
     };
-  }, [canvasViewportMeasurementKey]);
+  }, [canvasViewportMeasurementKey, hasRenderableTopology]);
   const canvasLayout = useMemo(() => {
-    if (!topology || visibleNodeIds.length === 0) {
+    if (!hasRenderableTopology) {
       return null;
     }
 
     return buildTopologyCanvasLayout({
-      nodes: visibleNodeIds,
+      nodes: orderedNodeIds,
       edges: topology.edges,
-      ...withOptionalValue({}, "availableWidth", canvasViewport?.width),
-      ...withOptionalValue({}, "availableHeight", canvasViewport?.height),
+      availableWidth: canvasViewport.width,
+      availableHeight: canvasViewport.height,
       columnWidth: NODE_WIDTH,
       minNodeWidth: NODE_WIDTH,
       minNodeHeight: NODE_HEIGHT,
@@ -399,11 +399,10 @@ export function TopologyGraph({
       bottomPadding: 0,
       nodeHeight: NODE_HEIGHT,
     });
-  }, [canvasViewport?.height, canvasViewport?.width, topology, visibleNodeIds]);
+  }, [canvasViewport.height, canvasViewport.width, hasRenderableTopology, orderedNodeIds, topology.edges]);
   const finalLoopDecisionAgentName = useMemo(
-    () =>
-      task ? getTopologyLoopLimitFailedDecisionAgentName(task.messages) : null,
-    [task],
+    () => getTopologyLoopLimitFailedDecisionAgentName(task.messages),
+    [task.messages],
   );
 
   function getTaskAgent(agentId: string): TaskAgentRecord {
@@ -426,16 +425,15 @@ export function TopologyGraph({
       agentStatus,
     });
     const statusBadge = getTopologyAgentStatusBadgePresentation(
-      topology!,
+      topology,
       agentId,
       agentStatus,
       {
         finalLoopDecisionAgentName,
       },
     );
-    const showAttachButton = typeof onOpenAgentTerminal === "function";
     const headerActions = getTopologyNodeHeaderActionOrder({
-      showAttachButton,
+      showAttachButton: true,
     });
     const attachState = resolveAgentAttachButtonState({
       agentId,
@@ -456,7 +454,7 @@ export function TopologyGraph({
     };
   }
 
-  if (!workspace || !task || !topology || !canvasLayout) {
+  if (!hasRenderableTopology || !canvasLayout) {
     return (
       <section className={PANEL_SURFACE_CLASS}>
         <header className={PANEL_HEADER_CLASS}>
@@ -564,7 +562,7 @@ export function TopologyGraph({
                                 disabled={attachDisabled}
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  if (attachDisabled || !onOpenAgentTerminal) {
+                                  if (attachDisabled) {
                                     return;
                                   }
                                   onOpenAgentTerminal(node.id);
@@ -595,20 +593,16 @@ export function TopologyGraph({
                   </div>
 
                   <div className="min-h-0 flex-1 px-2 py-2">
-                    <article
-                      className="flex h-full flex-col rounded-[12px] border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-emerald-900"
-                    >
-                      {content.kind === "final-history" ? (
-                        <TopologyAgentHistoryList
-                          agentId={node.id}
-                          historyItems={content.items}
-                        />
-                      ) : (
-                        <div className="flex h-full items-center justify-center text-center text-[12px] text-foreground/56">
-                          {content.copy}
-                        </div>
-                      )}
-                    </article>
+                    {content.kind === "final-history" ? (
+                      <TopologyAgentHistoryList
+                        agentId={node.id}
+                        historyItems={content.items}
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center rounded-[12px] border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-center text-[12px] text-foreground/56">
+                        {content.copy}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
