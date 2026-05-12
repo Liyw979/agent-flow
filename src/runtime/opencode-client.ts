@@ -421,7 +421,7 @@ export class OpenCodeClient {
           sessionId,
           {
             agent: agentId,
-            content: `回复需要包含：${allowedDecisionTriggers.join(" / ")}`,
+            content: `回复需要包含 ${allowedDecisionTriggers.join(" / ")} 中的一个`,
           },
         );
       } catch (error) {
