@@ -32,7 +32,7 @@ export interface AgentHistoryItem {
     | "runtime-message";
 }
 
-export const EMPTY_AGENT_HISTORY_DETAIL = "暂无详细记录";
+const EMPTY_AGENT_HISTORY_DETAIL = "暂无详细记录";
 
 interface AgentHistoryRange {
   startedAt?: UtcIsoTimestamp;
@@ -243,17 +243,116 @@ function isTimestampWithinAgentHistoryRange(
   return true;
 }
 
-function buildFinalHistoryItems(input: {
+function mapAgentFinalHistoryItem(input: {
+  agentId: string;
+  messages: MessageRecord[];
+  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">;
+  message: AgentFinalMessageRecord;
+}) {
+  const decisionAgent = isHistoryDecisionAgent(input.topology, input.agentId);
+  const finalLoopDecisionAgentName = getLoopLimitFailedDecisionAgentName(input.messages);
+  const allowedTriggers = decisionAgent ? getAgentAllowedTriggers(input.topology, input.agentId) : [];
+
+  const status =
+    hasActionRequiredFollowUp(input.messages, input.message.id)
+      ? "action_required"
+      : decisionAgent && input.message.status === "error" && finalLoopDecisionAgentName === input.agentId
+        ? "final_failed_decision"
+        : input.message.status;
+  const presentation = getFinalItemPresentation({
+    decisionAgent,
+    status,
+  });
+  const detail = decisionAgent
+    ? normalizeDecisionDisplayContent(
+      input.message.rawResponse,
+      allowedTriggers,
+    ).replace(/\r\n?/gu, "\n").replace(/[ \t]+\n/gu, "\n").trim()
+    : normalizeHistoryDetail(input.message.content, allowedTriggers);
+
+  return {
+    id: input.message.id,
+    label: presentation.label,
+    detailSnippet: buildHistoryDetailSnippet(detail),
+    detail,
+    timestamp: input.message.timestamp,
+    sortTimestamp: `${input.message.timestamp}#z-final`,
+    tone: presentation.tone,
+  } satisfies AgentHistoryItem;
+}
+
+function buildAgentFinalHistoryItems(input: {
+  agentId: string;
+  messages: MessageRecord[];
+  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">;
+}) {
+  return input.messages
+    .filter(
+      (message): message is AgentFinalMessageRecord =>
+        message.sender === input.agentId && isAgentFinalMessageRecord(message),
+    )
+    .map((message) =>
+      mapAgentFinalHistoryItem({
+        agentId: input.agentId,
+        messages: input.messages,
+        topology: input.topology,
+        message,
+      }),
+    );
+}
+
+export function buildLatestAgentFinalHistoryItem(input: {
+  agentId: string;
+  messages: MessageRecord[];
+  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">;
+}) {
+  const latestState = buildAgentFinalHistoryItems(input).reduce<
+    | { kind: "missing" }
+    | { kind: "found"; item: AgentHistoryItem }
+    | { kind: "conflict"; timestamp: UtcIsoTimestamp }
+  >((state, item) => {
+    if (state.kind === "missing") {
+      return {
+        kind: "found",
+        item,
+      };
+    }
+    if (state.kind === "conflict") {
+      return item.timestamp.localeCompare(state.timestamp) > 0
+        ? {
+            kind: "found",
+            item,
+          }
+        : state;
+    }
+    if (item.timestamp.localeCompare(state.item.timestamp) > 0) {
+      return {
+        kind: "found",
+        item,
+      };
+    }
+    if (item.timestamp === state.item.timestamp) {
+      return {
+        kind: "conflict",
+        timestamp: item.timestamp,
+      };
+    }
+    return state;
+  }, { kind: "missing" });
+
+  if (latestState.kind === "conflict") {
+    throw new Error(`Agent ${input.agentId} 存在多条相同最终时间戳的消息，无法确定最后结果`);
+  }
+  return latestState;
+}
+
+function buildFilteredAgentFinalHistoryItems(input: {
   agentId: string;
   messages: MessageRecord[];
   topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">;
   range?: AgentHistoryRange;
   finalMessageId?: string;
 }) {
-  const decisionAgent = isHistoryDecisionAgent(input.topology, input.agentId);
-  const finalLoopDecisionAgentName = getLoopLimitFailedDecisionAgentName(input.messages);
-  const allowedTriggers = decisionAgent ? getAgentAllowedTriggers(input.topology, input.agentId) : [];
-
   return input.messages
     .filter(
       (message): message is AgentFinalMessageRecord =>
@@ -265,34 +364,14 @@ function buildFinalHistoryItems(input: {
       }
       return isTimestampWithinAgentHistoryRange(message.timestamp, input.range ?? {});
     })
-    .map((message) => {
-      const status =
-        hasActionRequiredFollowUp(input.messages, message.id)
-          ? "action_required"
-          : decisionAgent && message.status === "error" && finalLoopDecisionAgentName === input.agentId
-            ? "final_failed_decision"
-            : message.status;
-      const presentation = getFinalItemPresentation({
-        decisionAgent,
-        status,
-      });
-      const detail = decisionAgent
-        ? normalizeDecisionDisplayContent(
-          message.rawResponse,
-          allowedTriggers,
-        ).replace(/\r\n?/gu, "\n").replace(/[ \t]+\n/gu, "\n").trim()
-        : normalizeHistoryDetail(message.content, allowedTriggers);
-
-      return {
-        id: message.id,
-        label: presentation.label,
-        detailSnippet: buildHistoryDetailSnippet(detail),
-        detail,
-        timestamp: message.timestamp,
-        sortTimestamp: `${message.timestamp}#z-final`,
-        tone: presentation.tone,
-      } satisfies AgentHistoryItem;
-    });
+    .map((message) =>
+      mapAgentFinalHistoryItem({
+        agentId: input.agentId,
+        messages: input.messages,
+        topology: input.topology,
+        message,
+      }),
+    );
 }
 
 function buildProgressHistoryItems(input: {
@@ -354,7 +433,7 @@ export function buildAgentHistoryItems(input: {
   const allowedTriggers = isHistoryDecisionAgent(input.topology, input.agentId)
     ? getAgentAllowedTriggers(input.topology, input.agentId)
     : [];
-  const finalHistoryItems = buildFinalHistoryItems(input);
+  const finalHistoryItems = buildFilteredAgentFinalHistoryItems(input);
   return [
     ...finalHistoryItems,
     ...buildProgressHistoryItems({
@@ -380,7 +459,7 @@ export function buildAgentExecutionHistoryItems(input: {
   const range = withOptionalValue({
     startedAt: input.startedAt,
   }, "endedAt", input.completedAt) satisfies AgentHistoryRange;
-  const finalHistoryItems = buildFinalHistoryItems(withOptionalValue({
+  const finalHistoryItems = buildFilteredAgentFinalHistoryItems(withOptionalValue({
     agentId: input.agentId,
     messages: input.messages,
     topology: input.topology,

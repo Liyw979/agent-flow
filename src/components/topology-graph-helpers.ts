@@ -12,14 +12,12 @@ export interface TopologyAgentStatusBadgePresentation {
   effectClassName: string;
 }
 
-type TopologyNodeHeaderAction = "fullscreen" | "attach" | "status";
+type TopologyNodeHeaderAction = "attach" | "status";
 
 export function getTopologyNodeHeaderActionOrder(input: {
-  showFullscreenButton: boolean;
   showAttachButton: boolean;
 }): TopologyNodeHeaderAction[] {
   return [
-    ...(input.showFullscreenButton ? (["fullscreen"] as const) : []),
     ...(input.showAttachButton ? (["attach"] as const) : []),
     "status",
   ];
