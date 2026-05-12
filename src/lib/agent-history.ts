@@ -281,71 +281,6 @@ function mapAgentFinalHistoryItem(input: {
   } satisfies AgentHistoryItem;
 }
 
-function buildAgentFinalHistoryItems(input: {
-  agentId: string;
-  messages: MessageRecord[];
-  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">;
-}) {
-  return input.messages
-    .filter(
-      (message): message is AgentFinalMessageRecord =>
-        message.sender === input.agentId && isAgentFinalMessageRecord(message),
-    )
-    .map((message) =>
-      mapAgentFinalHistoryItem({
-        agentId: input.agentId,
-        messages: input.messages,
-        topology: input.topology,
-        message,
-      }),
-    );
-}
-
-export function buildLatestAgentFinalHistoryItem(input: {
-  agentId: string;
-  messages: MessageRecord[];
-  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">;
-}) {
-  const latestState = buildAgentFinalHistoryItems(input).reduce<
-    | { kind: "missing" }
-    | { kind: "found"; item: AgentHistoryItem }
-    | { kind: "conflict"; timestamp: UtcIsoTimestamp }
-  >((state, item) => {
-    if (state.kind === "missing") {
-      return {
-        kind: "found",
-        item,
-      };
-    }
-    if (state.kind === "conflict") {
-      return item.timestamp.localeCompare(state.timestamp) > 0
-        ? {
-            kind: "found",
-            item,
-          }
-        : state;
-    }
-    if (item.timestamp.localeCompare(state.item.timestamp) > 0) {
-      return {
-        kind: "found",
-        item,
-      };
-    }
-    if (item.timestamp === state.item.timestamp) {
-      return {
-        kind: "conflict",
-        timestamp: item.timestamp,
-      };
-    }
-    return state;
-  }, { kind: "missing" });
-
-  if (latestState.kind === "conflict") {
-    throw new Error(`Agent ${input.agentId} 存在多条相同最终时间戳的消息，无法确定最后结果`);
-  }
-  return latestState;
-}
-
 function buildFilteredAgentFinalHistoryItems(input: {
   agentId: string;
   messages: MessageRecord[];
@@ -423,6 +358,16 @@ function buildProgressHistoryItems(input: {
       })
       .map((item) => item.runtimeItem),
   );
+}
+
+export function buildAgentFinalHistoryItems(input: {
+  agentId: string;
+  messages: MessageRecord[];
+  topology: Pick<TopologyRecord, "edges" | "langgraph" | "nodeRecords" | "groupRules">;
+}) {
+  return buildFilteredAgentFinalHistoryItems(input)
+    .filter((item) => item.detail !== EMPTY_AGENT_HISTORY_DETAIL)
+    .sort((left, right) => left.sortTimestamp.localeCompare(right.sortTimestamp));
 }
 
 export function buildAgentHistoryItems(input: {

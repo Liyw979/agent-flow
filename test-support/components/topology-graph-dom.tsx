@@ -67,6 +67,19 @@ function setupDom() {
     unobserve() {}
   }
 
+  Object.defineProperty(window.HTMLDivElement.prototype, "clientWidth", {
+    configurable: true,
+    get() {
+      return 1024;
+    },
+  });
+  Object.defineProperty(window.HTMLDivElement.prototype, "clientHeight", {
+    configurable: true,
+    get() {
+      return 768;
+    },
+  });
+
   setGlobal("window", window);
   setGlobal("document", window.document);
   setGlobal("navigator", window.navigator);

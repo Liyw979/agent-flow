@@ -6,7 +6,7 @@ import {
 } from "@/lib/agent-attach-state";
 import { getAgentColorToken } from "@/lib/agent-colors";
 import {
-  buildLatestAgentFinalHistoryItem,
+  buildAgentFinalHistoryItems,
   type AgentHistoryItem,
 } from "@/lib/agent-history";
 import { AgentHistoryMarkdown } from "@/lib/agent-history-markdown";
@@ -28,7 +28,14 @@ import { getTopologyDisplayNodeIds } from "@/components/topology-group-drafts";
 import { buildTopologyCanvasLayout } from "@/lib/topology-canvas";
 import { getTopologyCanvasViewportMeasurementKey } from "@/lib/topology-canvas-viewport-measure";
 import { getTopologyPanelBodyClassName } from "@/lib/topology-panel-layout";
-import type { AgentStatus, TaskAgentRecord, TaskSnapshot, TaskStatus, UtcIsoTimestamp, WorkspaceSnapshot } from "@shared/types";
+import type {
+  AgentStatus,
+  TaskAgentRecord,
+  TaskSnapshot,
+  TaskStatus,
+  UtcIsoTimestamp,
+  WorkspaceSnapshot,
+} from "@shared/types";
 
 interface TopologyGraphProps {
   workspace: WorkspaceSnapshot;
@@ -46,8 +53,8 @@ const TOPOLOGY_SYNC_PENDING_COPY = "等待最终结果同步";
 
 type TopologyNodeContent =
   | {
-      kind: "final";
-      item: AgentHistoryItem;
+      kind: "final-history";
+      items: AgentHistoryItem[];
     }
   | {
       kind: "pending";
@@ -77,6 +84,64 @@ function formatHistoryTimestamp(timestamp: UtcIsoTimestamp) {
   });
 }
 
+function TopologyAgentHistoryList(input: {
+  agentId: string;
+  historyItems: AgentHistoryItem[];
+}) {
+  const historyViewportRef = useRef<HTMLDivElement | null>(null);
+  const historyViewportFrameIdRef = useRef(0);
+  const hasPositionedInitialHistoryRef = useRef(false);
+
+  useEffect(() => () => {
+    cancelAnimationFrame(historyViewportFrameIdRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (input.historyItems.length === 0 || hasPositionedInitialHistoryRef.current) {
+      return;
+    }
+    const viewport = historyViewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    hasPositionedInitialHistoryRef.current = true;
+    historyViewportFrameIdRef.current = requestAnimationFrame(() => {
+      viewport.scrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    });
+  }, [input.historyItems]);
+
+  return (
+    <div
+      ref={historyViewportRef}
+      className="min-h-0 flex-1 overflow-y-auto pr-1"
+      data-topology-history-viewport={input.agentId}
+    >
+      <div className="space-y-3">
+        {input.historyItems.map((item) => (
+          <section
+            key={item.id}
+            className="min-w-0 select-text"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold">
+                {item.label}
+              </span>
+              <span className="text-[11px] opacity-70">
+                {formatHistoryTimestamp(item.timestamp)}
+              </span>
+            </div>
+            <AgentHistoryMarkdown
+              content={item.detailSnippet}
+              className="mt-1 text-[11px] leading-[1.35] opacity-90 select-text"
+              style={{ marginTop: "0.125rem" }}
+            />
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function resolveTopologyNodeContent(input: {
   agentId: string;
   messages: TaskSnapshot["messages"];
@@ -84,16 +149,16 @@ function resolveTopologyNodeContent(input: {
   taskStatus: TaskStatus;
   agentStatus: AgentStatus;
 }): TopologyNodeContent {
-  const latestFinalItem = buildLatestAgentFinalHistoryItem({
+  const finalHistoryItems = buildAgentFinalHistoryItems({
     agentId: input.agentId,
     messages: input.messages,
     topology: input.topology,
   });
 
-  if (latestFinalItem.kind === "found") {
+  if (finalHistoryItems.length > 0) {
     return {
-      kind: "final",
-      item: latestFinalItem.item,
+      kind: "final-history",
+      items: finalHistoryItems,
     };
   }
 
@@ -460,7 +525,8 @@ export function TopologyGraph({
               } = buildNodePresentation(node.id);
               return (
                 <div
-                  key={node.id}
+                  key={`${task.task.id}:${node.id}`}
+                  data-topology-node-card={node.id}
                   className="absolute flex flex-col overflow-hidden rounded-[14px] text-left transition"
                   style={{
                     left: `${node.x}px`,
@@ -532,22 +598,11 @@ export function TopologyGraph({
                     <article
                       className="flex h-full flex-col rounded-[12px] border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-emerald-900"
                     >
-                      {content.kind === "final" ? (
-                        <div className="min-w-0 flex-1 select-text">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-semibold">
-                              {content.item.label}
-                            </span>
-                            <span className="text-[11px] opacity-70">
-                              {formatHistoryTimestamp(content.item.timestamp)}
-                            </span>
-                          </div>
-                          <AgentHistoryMarkdown
-                            content={content.item.detailSnippet}
-                            className="mt-1 text-[11px] leading-[1.35] opacity-90 select-text"
-                            style={{ marginTop: "0.125rem" }}
-                          />
-                        </div>
+                      {content.kind === "final-history" ? (
+                        <TopologyAgentHistoryList
+                          agentId={node.id}
+                          historyItems={content.items}
+                        />
                       ) : (
                         <div className="flex h-full items-center justify-center text-center text-[12px] text-foreground/56">
                           {content.copy}

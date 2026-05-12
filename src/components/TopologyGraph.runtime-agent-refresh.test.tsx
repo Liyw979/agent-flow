@@ -47,13 +47,14 @@ const workspace: WorkspaceSnapshot = {
 };
 
 function createTask(input: {
+  taskId: string;
   taskStatus: TaskSnapshot["task"]["status"];
   agents: TaskSnapshot["agents"];
   messages: TaskSnapshot["messages"];
 }): TaskSnapshot {
   return {
     task: {
-      id: TASK_ID,
+      id: input.taskId,
       title: "runtime refresh",
       status: input.taskStatus,
       cwd: WORKSPACE_CWD,
@@ -72,8 +73,50 @@ function findAttachButton(agentId: string) {
   return document.querySelector(`button[aria-label="打开 ${agentId} 的 attach 终端"]`);
 }
 
+function offsetTimestamp(seconds: number) {
+  return toUtcIsoTimestamp(new Date(Date.now() + seconds * 1000).toISOString());
+}
+
+function createTaskAgent(input: {
+  id: string;
+  status: TaskSnapshot["agents"][number]["status"];
+  sessionId: string;
+  attachBaseUrl: string;
+}) {
+  return {
+    id: input.id,
+    taskId: TASK_ID,
+    opencodeSessionId: input.sessionId,
+    opencodeAttachBaseUrl: input.attachBaseUrl,
+    status: input.status,
+    runCount: 1,
+  } satisfies TaskSnapshot["agents"][number];
+}
+
+function createFinalMessage(input: {
+  id: string;
+  sender: string;
+  content: string;
+  timestamp: string;
+}) {
+  return {
+    id: input.id,
+    taskId: TASK_ID,
+    sender: input.sender,
+    content: input.content,
+    timestamp: toUtcIsoTimestamp(input.timestamp),
+    kind: "agent-final" as const,
+    runCount: 1,
+    status: "completed" as const,
+    routingKind: "default" as const,
+    responseNote: "",
+    rawResponse: input.content,
+  };
+}
+
 test("TopologyGraph 会把静态模板节点刷新成最新 runtime agent，并保持 attach 可点击", async () => {
   const firstRoundTask = createTask({
+    taskId: TASK_ID,
     taskStatus: "running",
     agents: [
       {
@@ -96,6 +139,7 @@ test("TopologyGraph 会把静态模板节点刷新成最新 runtime agent，并�
     messages: [],
   });
   const secondRoundTask = createTask({
+    taskId: TASK_ID,
     taskStatus: "running",
     agents: [
       ...firstRoundTask.agents,
@@ -152,6 +196,7 @@ test("TopologyGraph 会把静态模板节点刷新成最新 runtime agent，并�
 
 test("task snapshot 尚未带上 session 时，TopologyGraph 不会启用 attach", async () => {
   const task = createTask({
+    taskId: TASK_ID,
     taskStatus: "running",
     agents: [
       {
@@ -198,6 +243,7 @@ test("task snapshot 尚未带上 session 时，TopologyGraph 不会启用 attach
 
 test("TopologyGraph 会继续展示刚完成的运行实例", async () => {
   const task = createTask({
+    taskId: TASK_ID,
     taskStatus: "running",
     agents: [
       {
@@ -250,24 +296,24 @@ test("TopologyGraph 会继续展示刚完成的运行实例", async () => {
     const attachButton = findAttachButton("漏洞挑战-1");
     assert.ok(attachButton instanceof HTMLButtonElement, "刚完成的 runtime agent 仍应保留在拓扑里");
     assert.equal(attachButton.disabled, false);
-    assert.equal(rendered.window.document.body.textContent?.includes("漏洞挑战-1 已经完成本轮回应。"), true);
+    const pageText = rendered.window.document.body.textContent || "";
+    assert.equal(pageText.includes("漏洞挑战-1 已经完成本轮回应。"), true);
   } finally {
     await rendered.cleanup();
   }
 });
 
-test("TopologyGraph 仅展示最后一条最终消息，不展示过程消息", async () => {
+test("TopologyGraph 展示最终多条历史，不展示过程消息，任务结束后仍保留最终历史", async () => {
   const task = createTask({
-    taskStatus: "running",
+    taskId: TASK_ID,
+    taskStatus: "finished",
     agents: [
-      {
+      createTaskAgent({
         id: "线索发现",
-        taskId: TASK_ID,
-        opencodeSessionId: "session-clue",
-        opencodeAttachBaseUrl: "http://localhost:4310",
-        status: "running",
-        runCount: 1,
-      },
+        attachBaseUrl: "http://localhost:4310",
+        sessionId: "session-clue",
+        status: "completed",
+      }),
     ],
     messages: [
       {
@@ -275,7 +321,7 @@ test("TopologyGraph 仅展示最后一条最终消息，不展示过程消息", 
         taskId: TASK_ID,
         sender: "线索发现",
         content: "读取工具文件",
-        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:28.000Z"),
+        timestamp: offsetTimestamp(-2),
         kind: "agent-progress",
         activityKind: "tool",
         label: "read_file",
@@ -284,32 +330,18 @@ test("TopologyGraph 仅展示最后一条最终消息，不展示过程消息", 
         sessionId: "session-clue",
         runCount: 1,
       },
-      {
+      createFinalMessage({
         id: "runtime-final-first",
-        taskId: TASK_ID,
         sender: "线索发现",
         content: "第一条最终结果消息",
-        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:29.000Z"),
-        kind: "agent-final",
-        runCount: 1,
-        status: "completed",
-        routingKind: "default",
-        responseNote: "",
-        rawResponse: "第一条最终结果消息",
-      },
-      {
+        timestamp: offsetTimestamp(-1),
+      }),
+      createFinalMessage({
         id: "runtime-final-last",
-        taskId: TASK_ID,
         sender: "线索发现",
         content: "最后一条最终结果消息",
-        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:30.000Z"),
-        kind: "agent-final",
-        runCount: 1,
-        status: "completed",
-        routingKind: "default",
-        responseNote: "",
-        rawResponse: "最后一条最终结果消息",
-      },
+        timestamp: offsetTimestamp(0),
+      }),
     ],
   });
 
@@ -326,81 +358,19 @@ test("TopologyGraph 仅展示最后一条最终消息，不展示过程消息", 
       await rendered.flushAnimationFrames();
     });
 
-    const pageText = rendered.window.document.body.textContent ?? "";
+    const pageText = rendered.window.document.body.textContent || "";
     assert.equal(pageText.includes("参数: hidden.ts"), false);
-    assert.equal(pageText.includes("第一条最终结果消息"), false);
+    assert.equal(pageText.includes("第一条最终结果消息"), true);
     assert.equal(pageText.includes("最后一条最终结果消息"), true);
+    assert.equal(pageText.includes("等待最终结果同步"), false);
   } finally {
     await rendered.cleanup();
   }
 });
 
-test("TopologyGraph 会按时间戳选择最后一条最终消息，而不是依赖消息数组顺序", async () => {
+test("TopologyGraph 运行中且尚无最终历史时展示固定提示", async () => {
   const task = createTask({
-    taskStatus: "running",
-    agents: [
-      {
-        id: "线索发现",
-        taskId: TASK_ID,
-        opencodeSessionId: "session-clue",
-        opencodeAttachBaseUrl: "http://localhost:4310",
-        status: "completed",
-        runCount: 1,
-      },
-    ],
-    messages: [
-      {
-        id: "runtime-final-latest",
-        taskId: TASK_ID,
-        sender: "线索发现",
-        content: "时间更晚的最终消息",
-        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:31.000Z"),
-        kind: "agent-final",
-        runCount: 1,
-        status: "completed",
-        routingKind: "default",
-        responseNote: "",
-        rawResponse: "时间更晚的最终消息",
-      },
-      {
-        id: "runtime-final-earlier",
-        taskId: TASK_ID,
-        sender: "线索发现",
-        content: "时间更早的最终消息",
-        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:30.000Z"),
-        kind: "agent-final",
-        runCount: 1,
-        status: "completed",
-        routingKind: "default",
-        responseNote: "",
-        rawResponse: "时间更早的最终消息",
-      },
-    ],
-  });
-
-  const rendered = await renderTopologyGraphInDom({
-    workspace,
-    task,
-    openingAgentTerminalId: "",
-    onToggleMaximize: () => {},
-    onOpenAgentTerminal: () => {},
-  });
-
-  try {
-    await act(async () => {
-      await rendered.flushAnimationFrames();
-    });
-
-    const pageText = rendered.window.document.body.textContent ?? "";
-    assert.equal(pageText.includes("时间更晚的最终消息"), true);
-    assert.equal(pageText.includes("时间更早的最终消息"), false);
-  } finally {
-    await rendered.cleanup();
-  }
-});
-
-test("TopologyGraph 运行中且尚无最终消息时展示固定提示", async () => {
-  const task = createTask({
+    taskId: TASK_ID,
     taskStatus: "running",
     agents: [
       {
@@ -443,7 +413,7 @@ test("TopologyGraph 运行中且尚无最终消息时展示固定提示", async 
       await rendered.flushAnimationFrames();
     });
 
-    const pageText = rendered.window.document.body.textContent ?? "";
+    const pageText = rendered.window.document.body.textContent || "";
     assert.equal(pageText.includes("参数: hidden.ts"), false);
     assert.equal(pageText.includes("正在执行，暂无结果"), true);
   } finally {
@@ -453,6 +423,7 @@ test("TopologyGraph 运行中且尚无最终消息时展示固定提示", async 
 
 test("TopologyGraph 会把已完成但尚未同步最终消息的运行中任务标记为等待同步", async () => {
   const task = createTask({
+    taskId: TASK_ID,
     taskStatus: "running",
     agents: [
       {
@@ -480,7 +451,7 @@ test("TopologyGraph 会把已完成但尚未同步最终消息的运行中任务
       await rendered.flushAnimationFrames();
     });
 
-    const pageText = rendered.window.document.body.textContent ?? "";
+    const pageText = rendered.window.document.body.textContent || "";
     assert.equal(pageText.includes("等待最终结果同步"), true);
   } finally {
     await rendered.cleanup();
@@ -489,6 +460,7 @@ test("TopologyGraph 会把已完成但尚未同步最终消息的运行中任务
 
 test("TopologyGraph 不再展示节点全屏与详情交互", async () => {
   const task = createTask({
+    taskId: TASK_ID,
     taskStatus: "running",
     agents: [
       {
@@ -547,12 +519,171 @@ test("TopologyGraph 不再展示节点全屏与详情交互", async () => {
   }
 });
 
+test("TopologyGraph 初始展示最终历史的最后一屏，并在后续刷新时保留卡片内滚动位置", async () => {
+  const historyMessages = Array.from({ length: 10 }, (_, index) => ({
+    id: `runtime-final-${index + 1}`,
+    taskId: TASK_ID,
+    sender: "线索发现",
+    content: `第 ${index + 1} 条最终结果消息 ${"路径/说明 ".repeat(8)}`,
+    timestamp: toUtcIsoTimestamp(`2026-04-29T10:00:${String(index).padStart(2, "0")}.000Z`),
+    kind: "agent-final" as const,
+    runCount: 1,
+    status: "completed" as const,
+    routingKind: "default" as const,
+    responseNote: "",
+    rawResponse: `第 ${index + 1} 条最终结果消息 ${"路径/说明 ".repeat(8)}`,
+  }));
+  const task = createTask({
+    taskId: TASK_ID,
+    taskStatus: "running",
+    agents: [
+      {
+        id: "线索发现",
+        taskId: TASK_ID,
+        opencodeSessionId: "session-clue",
+        opencodeAttachBaseUrl: "http://localhost:4310",
+        status: "completed",
+        runCount: 1,
+      },
+      {
+        id: "漏洞挑战",
+        taskId: TASK_ID,
+        opencodeSessionId: "session-challenge",
+        opencodeAttachBaseUrl: "http://localhost:4310",
+        status: "completed",
+        runCount: 1,
+      },
+    ],
+    messages: [
+      ...historyMessages,
+      {
+        id: "runtime-final-summary",
+        taskId: TASK_ID,
+        sender: "漏洞挑战",
+        content: "短消息。",
+        timestamp: toUtcIsoTimestamp("2026-04-29T10:00:31.000Z"),
+        kind: "agent-final",
+        runCount: 1,
+        status: "completed",
+        routingKind: "default",
+        responseNote: "",
+        rawResponse: "短消息。",
+      },
+    ],
+  });
+
+  const rendered = await renderTopologyGraphInDom({
+    workspace,
+    task,
+    openingAgentTerminalId: "",
+    onToggleMaximize: () => {},
+    onOpenAgentTerminal: () => {},
+  });
+
+  try {
+    const firstCard = rendered.window.document.querySelector('[data-topology-node-card="线索发现"]');
+    const secondCard = rendered.window.document.querySelector('[data-topology-node-card="漏洞挑战"]');
+    assert.ok(firstCard instanceof HTMLElement);
+    assert.ok(secondCard instanceof HTMLElement);
+
+    const firstViewport = rendered.window.document.querySelector('[data-topology-history-viewport="线索发现"]');
+    const secondViewport = rendered.window.document.querySelector('[data-topology-history-viewport="漏洞挑战"]');
+    assert.ok(firstViewport instanceof HTMLElement);
+    assert.ok(secondViewport instanceof HTMLElement);
+    Object.defineProperty(firstViewport, "clientHeight", { configurable: true, value: 240 });
+    Object.defineProperty(firstViewport, "scrollHeight", { configurable: true, value: 720 });
+
+    await act(async () => {
+      await rendered.flushAnimationFrames();
+    });
+
+    assert.equal(firstViewport.scrollTop, 480);
+    firstViewport.scrollTop = 120;
+
+    await rendered.render({
+      workspace,
+      task: createTask({
+        taskId: TASK_ID,
+        taskStatus: "running",
+        agents: task.agents,
+        messages: [
+          ...task.messages,
+          {
+            id: "runtime-final-11",
+            taskId: TASK_ID,
+            sender: "线索发现",
+            content: "第 11 条最终结果消息 路径/说明 路径/说明 路径/说明",
+            timestamp: toUtcIsoTimestamp("2026-04-29T10:00:32.000Z"),
+            kind: "agent-final",
+            runCount: 1,
+            status: "completed",
+            routingKind: "default",
+            responseNote: "",
+            rawResponse: "第 11 条最终结果消息 路径/说明 路径/说明 路径/说明",
+          },
+        ],
+      }),
+      openingAgentTerminalId: "",
+      onToggleMaximize: () => {},
+      onOpenAgentTerminal: () => {},
+    });
+    await act(async () => {
+      await rendered.flushAnimationFrames();
+    });
+
+    assert.equal(firstViewport.scrollTop, 120);
+
+    await rendered.render({
+      workspace,
+      task: createTask({
+        taskId: `${TASK_ID}-next`,
+        taskStatus: "running",
+        agents: task.agents.map((agent) => ({
+          ...agent,
+          taskId: `${TASK_ID}-next`,
+        })),
+        messages: task.messages.map((message) => ({
+          ...message,
+          taskId: `${TASK_ID}-next`,
+        })),
+      }),
+      openingAgentTerminalId: "",
+      onToggleMaximize: () => {},
+      onOpenAgentTerminal: () => {},
+    });
+
+    const resetViewport = rendered.window.document.querySelector('[data-topology-history-viewport="线索发现"]');
+    assert.ok(resetViewport instanceof HTMLElement);
+    Object.defineProperty(resetViewport, "clientHeight", { configurable: true, value: 240 });
+    Object.defineProperty(resetViewport, "scrollHeight", { configurable: true, value: 720 });
+
+    await act(async () => {
+      await rendered.flushAnimationFrames();
+    });
+
+    assert.equal(resetViewport.scrollTop, 480);
+    const resetFirstCard = rendered.window.document.querySelector('[data-topology-node-card="线索发现"]');
+    const resetSecondCard = rendered.window.document.querySelector('[data-topology-node-card="漏洞挑战"]');
+    assert.ok(resetFirstCard instanceof HTMLElement);
+    assert.ok(resetSecondCard instanceof HTMLElement);
+    const text = resetFirstCard.textContent || "";
+    assert.equal(text.includes("第 1 条最终结果消息"), true);
+    assert.equal(text.includes("第 10 条最终结果消息"), true);
+    assert.equal(text.includes("第 11 条最终结果消息"), false);
+    const resetSecondCardText = resetSecondCard.textContent || "";
+    assert.equal(resetSecondCardText.includes("短消息。"), true);
+  } finally {
+    await rendered.cleanup();
+  }
+});
+
 test("TopologyGraph 遇到非运行态却缺少最终消息时直接报错", async () => {
   await assert.rejects(
     () =>
       renderTopologyGraphInDom({
         workspace,
         task: createTask({
+          taskId: TASK_ID,
           taskStatus: "running",
           agents: [
             {
@@ -580,6 +711,7 @@ test("TopologyGraph 遇到任务已结束但 agent 仍缺少最终消息时直�
       renderTopologyGraphInDom({
         workspace,
         task: createTask({
+          taskId: TASK_ID,
           taskStatus: "finished",
           agents: [
             {
@@ -601,56 +733,49 @@ test("TopologyGraph 遇到任务已结束但 agent 仍缺少最终消息时直�
   );
 });
 
-test("TopologyGraph 遇到相同最终时间戳的多条消息时直接报错", async () => {
-  await assert.rejects(
-    () =>
-      renderTopologyGraphInDom({
-        workspace,
-        task: createTask({
-          taskStatus: "running",
-          agents: [
-            {
-              id: "线索发现",
-              taskId: TASK_ID,
-              opencodeSessionId: "session-clue",
-              opencodeAttachBaseUrl: "http://localhost:4310",
-              status: "completed",
-              runCount: 1,
-            },
-          ],
-          messages: [
-            {
-              id: "runtime-final-1",
-              taskId: TASK_ID,
-              sender: "线索发现",
-              content: "最终结果一",
-              timestamp: toUtcIsoTimestamp("2026-04-29T10:00:30.000Z"),
-              kind: "agent-final",
-              runCount: 1,
-              status: "completed",
-              routingKind: "default",
-              responseNote: "",
-              rawResponse: "最终结果一",
-            },
-            {
-              id: "runtime-final-2",
-              taskId: TASK_ID,
-              sender: "线索发现",
-              content: "最终结果二",
-              timestamp: toUtcIsoTimestamp("2026-04-29T10:00:30.000Z"),
-              kind: "agent-final",
-              runCount: 1,
-              status: "completed",
-              routingKind: "default",
-              responseNote: "",
-              rawResponse: "最终结果二",
-            },
-          ],
+test("TopologyGraph 遇到相同最终时间戳的多条最终消息时保留全部历史记录", async () => {
+  const rendered = await renderTopologyGraphInDom({
+    workspace,
+    task: createTask({
+      taskId: TASK_ID,
+      taskStatus: "running",
+      agents: [
+        createTaskAgent({
+          id: "线索发现",
+          attachBaseUrl: "http://localhost:4310",
+          sessionId: "session-clue",
+          status: "completed",
         }),
-        openingAgentTerminalId: "",
-        onToggleMaximize: () => {},
-        onOpenAgentTerminal: () => {},
-      }),
-    /Agent 线索发现 存在多条相同最终时间戳的消息，无法确定最后结果/u,
-  );
+      ],
+      messages: [
+        createFinalMessage({
+          id: "runtime-final-1",
+          sender: "线索发现",
+          content: "最终结果一",
+          timestamp: "2026-04-29T10:00:30.000Z",
+        }),
+        createFinalMessage({
+          id: "runtime-final-2",
+          sender: "线索发现",
+          content: "最终结果二",
+          timestamp: "2026-04-29T10:00:30.000Z",
+        }),
+      ],
+    }),
+    openingAgentTerminalId: "",
+    onToggleMaximize: () => {},
+    onOpenAgentTerminal: () => {},
+  });
+
+  try {
+    await act(async () => {
+      await rendered.flushAnimationFrames();
+    });
+
+    const pageText = rendered.window.document.body.textContent || "";
+    assert.equal(pageText.includes("最终结果一"), true);
+    assert.equal(pageText.includes("最终结果二"), true);
+  } finally {
+    await rendered.cleanup();
+  }
 });
