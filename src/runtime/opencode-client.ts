@@ -1,6 +1,5 @@
 import path from "node:path";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { parseJson5 } from "@shared/json5";
 import { parseDecision } from "./decision-parser";
 import { buildSubmitMessageBody } from "./opencode-request-body";
 import { toOpenCodeAgentId } from "./opencode-agent-id";
@@ -957,7 +956,7 @@ export class OpenCodeClient {
             }
 
             try {
-              const event = parseJson5<OpenCodeEvent>(dataLine);
+              const event = JSON.parse(dataLine) as OpenCodeEvent;
               this.handleEvent(event);
               onEvent(event);
             } catch {
@@ -1402,7 +1401,7 @@ export class OpenCodeClient {
     }
 
     try {
-      return parseJson5(trimmed);
+      return JSON.parse(trimmed) as unknown;
     } catch {
       return {};
     }
@@ -1816,7 +1815,7 @@ export class OpenCodeClient {
       ) {
         try {
           return this.extractStructuredToolCallDetail(
-            parseJson5(trimmed),
+            JSON.parse(trimmed) as unknown,
             depth + 1,
           );
         } catch {
@@ -1956,7 +1955,7 @@ export class OpenCodeClient {
       }
       if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
         try {
-          return this.extractStructuredArgsDetail(parseJson5(trimmed), depth + 1);
+          return this.extractStructuredArgsDetail(JSON.parse(trimmed) as unknown, depth + 1);
         } catch {
           return this.shortenText(trimmed, 160);
         }

@@ -318,7 +318,7 @@ test("compileTeamDsl 会把 entry 位于 group 内部的根入口折叠成 group
 });
 
 test("compileTeamDsl 支持从内置漏洞拓扑编译出 group 辩论拓扑", () => {
-  const compiled = compileTeamDsl(readBuiltinTopology("vulnerability.json5"));
+  const compiled = compileTeamDsl(readBuiltinTopology("vulnerability.yaml"));
 
   assert.deepEqual(
     compiled.agents.map((agent) => agent.id),
@@ -447,7 +447,7 @@ test("compileTeamDsl 支持在 agent 上声明 initialMessage 列表，并按定
 });
 
 test("compileTeamDsl 支持 group 内 agent 引用外层 initialMessage 来源", () => {
-  const compiled = compileTeamDsl(readBuiltinTopology("rfc-scanner.json5"));
+  const compiled = compileTeamDsl(readBuiltinTopology("rfc-scanner.yaml"));
 
   assert.deepEqual(
     compiled.topology.nodeRecords.find((node) => node.id === "漏洞论证")?.initialMessageRouting,

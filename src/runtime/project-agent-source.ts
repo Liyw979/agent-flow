@@ -16,7 +16,7 @@ export function resolveProjectAgents(input: {
 }
 
 export function validateProjectAgents(): void {
-  // 拓扑中的 writable 现在完全由 JSON 显式声明，允许多个 Agent 同时可写。
+  // 拓扑中的 writable 现在完全由 YAML 显式声明，允许多个 Agent 同时可写。
 }
 
 type OpenCodePermissionValue =

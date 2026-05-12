@@ -36,7 +36,7 @@ async function reservePort() {
   });
 }
 
-test("startWebHost 会按 JSON5 解析 /api/tasks/submit 请求体", async () => {
+test("startWebHost 会按 JSON 解析 /api/tasks/submit 请求体", async () => {
   const port = await reservePort();
   let capturedPayload: SubmitTaskPayload | null = null;
   const host = await startWebHost({
@@ -85,10 +85,10 @@ test("startWebHost 会按 JSON5 解析 /api/tasks/submit 请求体", async () =>
       headers: {
         "content-type": "application/json",
       },
-      body: `{
+      body: JSON.stringify({
         content: "请开始执行",
         newTaskId: "task-123",
-      }`,
+      }),
     });
 
     assert.equal(response.status, 200);

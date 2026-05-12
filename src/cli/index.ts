@@ -124,7 +124,7 @@ async function createCliContext(input: {
   };
 }
 
-async function ensureJson5TopologyApplied(
+async function ensureYamlTopologyApplied(
   context: CliContext,
   workspace: WorkspaceSnapshot,
   compiled: ReturnType<typeof compileTeamDsl>,
@@ -146,7 +146,7 @@ function validateTaskHeadlessCommand(
     fail("新建 Task 时必须传 --file <topology-file>。");
   }
   if (!isSupportedTopologyFile(command.file!.trim())) {
-    fail("新建 Task 时传入的 --file 必须是 .json5。");
+    fail("新建 Task 时传入的 --file 必须是 .yaml 或 .yml。");
   }
   if (!hasMessage) {
     fail("新建 Task 时必须传 --message <message>。");
@@ -163,7 +163,7 @@ function validateTaskUiCommand(
     fail("新建 Task 打开网页界面时必须传 --file <topology-file>。");
   }
   if (!isSupportedTopologyFile(command.file!.trim())) {
-    fail("新建 Task 打开网页界面时传入的 --file 必须是 .json5。");
+    fail("新建 Task 打开网页界面时传入的 --file 必须是 .yaml 或 .yml。");
   }
   if (!hasMessage) {
     fail("新建 Task 打开网页界面时必须传 --message <message>。");
@@ -312,7 +312,7 @@ async function handleTaskHeadlessCommand(
   compiledTopology: ReturnType<typeof compileTeamDsl>,
 ) {
   let workspace = await context.orchestrator.getWorkspaceSnapshot();
-  workspace = await ensureJson5TopologyApplied(context, workspace, compiledTopology);
+  workspace = await ensureYamlTopologyApplied(context, workspace, compiledTopology);
   const initialMessage = command.message!.trim();
 
   const snapshot = await context.orchestrator.submitTask({
@@ -348,7 +348,7 @@ async function handleTaskUiCommand(
   });
 
   let workspace = await context.orchestrator.getWorkspaceSnapshot();
-  workspace = await ensureJson5TopologyApplied(context, workspace, compiledTopology);
+  workspace = await ensureYamlTopologyApplied(context, workspace, compiledTopology);
   const webRoot = await ensureUiAssetsAvailable(context.userDataPath);
   const snapshot = await context.orchestrator.submitTask({
     newTaskId: diagnostics.taskId,

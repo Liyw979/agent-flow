@@ -8,7 +8,7 @@ test("parseCliCommand 解析新建 task headless", () => {
     "task",
     "headless",
     "--file",
-    "config/team-topologies/development-team.topology.json5",
+    "config/team-topologies/development-team.topology.yaml",
     "--message",
     "请开始执行",
     "--cwd",
@@ -17,7 +17,7 @@ test("parseCliCommand 解析新建 task headless", () => {
 
   assert.deepEqual(parsed, {
     kind: "task.headless",
-    file: "config/team-topologies/development-team.topology.json5",
+    file: "config/team-topologies/development-team.topology.yaml",
     message: "请开始执行",
     cwd: "/tmp/project",
     showMessage: false,
@@ -29,7 +29,7 @@ test("parseCliCommand 解析 task headless 的 --show-message", () => {
     "task",
     "headless",
     "--file",
-    "config/team-topologies/development-team.topology.json5",
+    "config/team-topologies/development-team.topology.yaml",
     "--message",
     "请开始执行",
     "--show-message",
@@ -38,7 +38,7 @@ test("parseCliCommand 解析 task headless 的 --show-message", () => {
   assert.deepEqual(parsed, {
     kind: "task.headless",
     cwd: undefined,
-    file: "config/team-topologies/development-team.topology.json5",
+    file: "config/team-topologies/development-team.topology.yaml",
     message: "请开始执行",
     showMessage: true,
   });
@@ -68,7 +68,7 @@ test("parseCliCommand 解析 task ui 新建任务", () => {
     "task",
     "ui",
     "--file",
-    "config/team-topologies/development-team.topology.json5",
+    "config/team-topologies/development-team.topology.yaml",
     "--message",
     "请开始执行",
     "--cwd",
@@ -77,7 +77,7 @@ test("parseCliCommand 解析 task ui 新建任务", () => {
 
   assert.deepEqual(parsed, {
     kind: "task.ui",
-    file: "config/team-topologies/development-team.topology.json5",
+    file: "config/team-topologies/development-team.topology.yaml",
     message: "请开始执行",
     cwd: "/tmp/project",
     showMessage: false,
@@ -89,7 +89,7 @@ test("parseCliCommand 解析 task ui 的 --show-message", () => {
     "task",
     "ui",
     "--file",
-    "config/team-topologies/development-team.topology.json5",
+    "config/team-topologies/development-team.topology.yaml",
     "--message",
     "请开始执行",
     "--show-message",
@@ -98,18 +98,18 @@ test("parseCliCommand 解析 task ui 的 --show-message", () => {
   assert.deepEqual(parsed, {
     kind: "task.ui",
     cwd: undefined,
-    file: "config/team-topologies/development-team.topology.json5",
+    file: "config/team-topologies/development-team.topology.yaml",
     message: "请开始执行",
     showMessage: true,
   });
 });
 
-test("parseCliCommand 接受 .json5 拓扑文件路径", () => {
+test("parseCliCommand 接受 .yaml 拓扑文件路径", () => {
   const parsed = parseCliCommand([
     "task",
     "headless",
     "--file",
-    "config/team-topologies/development-team.topology.json5",
+    "config/team-topologies/development-team.topology.yaml",
     "--message",
     "请开始执行",
   ]);
@@ -117,7 +117,7 @@ test("parseCliCommand 接受 .json5 拓扑文件路径", () => {
   assert.deepEqual(parsed, {
     kind: "task.headless",
     cwd: undefined,
-    file: "config/team-topologies/development-team.topology.json5",
+    file: "config/team-topologies/development-team.topology.yaml",
     message: "请开始执行",
     showMessage: false,
   });
@@ -149,14 +149,14 @@ test("parseCliCommand 允许 task ui 单独接收 --cwd", () => {
     "--cwd",
     "/tmp/project",
     "--file",
-    "config/team-topologies/development-team.topology.json5",
+    "config/team-topologies/development-team.topology.yaml",
     "--message",
     "请开始执行",
   ]);
 
   assert.deepEqual(parsed, {
     kind: "task.ui",
-    file: "config/team-topologies/development-team.topology.json5",
+    file: "config/team-topologies/development-team.topology.yaml",
     message: "请开始执行",
     cwd: "/tmp/project",
     showMessage: false,
@@ -177,7 +177,7 @@ test("旧 task run 与旧 --ui 入口都会被拒绝", () => {
     "task",
     "run",
     "--file",
-    "config/team-topologies/development-team.topology.json5",
+    "config/team-topologies/development-team.topology.yaml",
     "--message",
     "请开始执行",
   ]));

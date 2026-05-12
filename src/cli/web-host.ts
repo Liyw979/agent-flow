@@ -9,7 +9,6 @@ import type {
   SubmitTaskPayload,
   UiSnapshotPayload,
 } from "@shared/types";
-import { parseJson5 } from "@shared/json5";
 import type { Orchestrator } from "../runtime/orchestrator";
 import { buildTaskLogFilePath } from "../runtime/app-log";
 import {
@@ -53,7 +52,7 @@ async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
   if (chunks.length === 0) {
     return {};
   }
-  return parseJson5(Buffer.concat(chunks).toString("utf8"));
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
 async function buildUiSnapshotPayload(

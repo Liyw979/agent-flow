@@ -7,7 +7,7 @@ import { compileBuiltinTopology } from "../../test-support/runtime/builtin-topol
 import { resolveTaskAgentIdsToPrewarm } from "./task-session-prewarm";
 
 test("resolveTaskAgentIdsToPrewarm 不会为仅作为 group 模板存在的静态 agent 预建 session", () => {
-  const topology: TopologyRecord = compileBuiltinTopology("vulnerability.json5").topology;
+  const topology: TopologyRecord = compileBuiltinTopology("vulnerability.yaml").topology;
   const taskAgents: TaskAgentRecord[] = [
     {
       taskId: "task-1",

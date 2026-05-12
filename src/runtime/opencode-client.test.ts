@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseJson5 } from "@shared/json5";
 
 import { buildTaskLogFilePath, initAppFileLogger, runWithTaskLogScope } from "./app-log";
 import type { OpenCodeNormalizedMessage, OpenCodeSessionRuntime } from "./opencode-client";
@@ -179,7 +178,7 @@ test("request 失败时会写入 task 级失败日志", async () => {
   }
 
   const logFilePath = buildTaskLogFilePath(userDataPath, "task-request-failed");
-  const records = fs.readFileSync(logFilePath, "utf8").trim().split("\n").map((line) => parseJson5<Record<string, unknown>>(line));
+  const records = fs.readFileSync(logFilePath, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
   const latestRecord = records.at(-1) || {};
   assert.equal(latestRecord["event"], "opencode.request_failed");
   assert.equal(latestRecord["taskId"], "task-request-failed");
@@ -411,12 +410,12 @@ test("createSession logs invalid responses into the task log file", async () => 
   ));
 
   const lines = fs.readFileSync(buildTaskLogFilePath(userDataPath, taskId), "utf8").trim().split("\n");
-  const record = parseJson5<Record<string, unknown>>(lines.at(-1) || "{}");
+  const record = JSON.parse(lines.at(-1) || "{}") as Record<string, unknown>;
   assert.equal(record["event"], "opencode.create_session_invalid_response");
   assert.equal(record["taskId"], taskId);
 });
 
-test("createSession 在响应体不是合法 JSON5 时仍走 invalid response 分支并记录日志", async () => {
+test("createSession 在响应体不是合法 JSON 时仍走 invalid response 分支并记录日志", async () => {
   const userDataPath = createTempDir();
   const cwd = createTempDir();
   const taskId = "task-malformed";
@@ -433,7 +432,7 @@ test("createSession 在响应体不是合法 JSON5 时仍走 invalid response �
   ));
 
   const lines = fs.readFileSync(buildTaskLogFilePath(userDataPath, taskId), "utf8").trim().split("\n");
-  const record = parseJson5<Record<string, unknown>>(lines.at(-1) || "{}");
+  const record = JSON.parse(lines.at(-1) || "{}") as Record<string, unknown>;
   assert.equal(record["event"], "opencode.create_session_invalid_response");
   assert.equal(record["taskId"], taskId);
 });
@@ -592,7 +591,7 @@ function readTaskLogRecords(userDataPath: string, taskId: string) {
   return fs.readFileSync(buildTaskLogFilePath(userDataPath, taskId), "utf8")
     .trim()
     .split("\n")
-    .map((line) => parseJson5<Record<string, unknown>>(line));
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 function createTransportRecoveryClient(messages: unknown[]) {
@@ -1291,7 +1290,7 @@ test("buildRuntimeSnapshot 不会因为后续活动超过全局显示窗口而�
   );
 });
 
-test("buildRuntimeSnapshot 在工具参数形似 JSON5 但非法时回退为原始字符串摘要", () => {
+test("buildRuntimeSnapshot 在工具参数形似 JSON 但非法时回退为原始字符串摘要", () => {
   const { client } = createClient();
   const typed = client as OpenCodeClient & {
     buildRuntimeSnapshot: (sessionId: string, messages: unknown[]) => {
@@ -1374,7 +1373,7 @@ test("startEventPump 在单条 SSE 数据非法时保留原始载荷并继续消
   globalThis.fetch = (async () => new Response(new ReadableStream({
     start(controller) {
       controller.enqueue(new TextEncoder().encode(
-        "data: not-json\n\ndata: {type:'session.idle',properties:{sessionID:'session-1'}}\n\n",
+        "data: not-json\n\ndata: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"session-1\"}}\n\n",
       ));
       controller.close();
     },

@@ -1,6 +1,6 @@
-# 拓扑 JSON5 配置说明
+# 拓扑 YAML 配置说明
 
-当前仓库里的团队拓扑配置只支持一种 DSL，并统一按 JSON5 语法解析：
+当前仓库里的团队拓扑配置只支持一种 DSL，并统一按 YAML 语法解析：
 
 - 递归式 `entry + nodes + links`
 
@@ -10,19 +10,14 @@
 
 ## 1. 最小结构
 
-```json
-{
-  "entry": "BA",
-  "nodes": [
-    {
-      "type": "agent",
-      "id": "BA",
-      "system_prompt": "你是 BA。负责把需求整理清楚。",
-      "writable": false
-    }
-  ],
-  "links": []
-}
+```yaml
+entry: BA
+nodes:
+  - type: agent
+    id: BA
+    system_prompt: 你是 BA。负责把需求整理清楚。
+    writable: false
+links: []
 ```
 
 根级字段含义：
@@ -32,7 +27,7 @@
 - `nodes`
   当前图声明的节点数组。节点只允许 `agent` 或 `group`。
 - `links`
-  整个 JSON 文件唯一的一组有向边定义。所有普通边、group 内部边、group 回到外层的边，以及根图到 `__end__` 的边，都统一写在这里。
+  整个 YAML 文件唯一的一组有向边定义。所有普通边、group 内部边、group 回到外层的边，以及根图到 `__end__` 的边，都统一写在这里。
 
 ## 2. `nodes` 怎么写
 
@@ -43,13 +38,11 @@
 
 ### 2.1 `agent` 节点
 
-```json
-{
-  "type": "agent",
-  "id": "Build",
-  "system_prompt": "",
-  "writable": true
-}
+```yaml
+- type: agent
+  id: Build
+  system_prompt: ""
+  writable: true
 ```
 
 约束：
@@ -61,25 +54,18 @@
 
 ### 2.2 `group` 节点
 
-```json
-{
-  "type": "group",
-  "id": "疑点辩论",
-  "nodes": [
-    {
-      "type": "agent",
-      "id": "漏洞挑战",
-      "system_prompt": "你负责漏洞挑战。",
-      "writable": false
-    },
-    {
-      "type": "agent",
-      "id": "漏洞论证",
-      "system_prompt": "你负责漏洞论证。",
-      "writable": false
-    }
-  ]
-}
+```yaml
+- type: group
+  id: 疑点辩论
+  nodes:
+    - type: agent
+      id: 漏洞挑战
+      system_prompt: 你负责漏洞挑战。
+      writable: false
+    - type: agent
+      id: 漏洞论证
+      system_prompt: 你负责漏洞论证。
+      writable: false
 ```
 
 字段说明：
@@ -104,24 +90,18 @@
 
 ## 3. `links` 怎么写
 
-`links` 统一写成对象数组，显式写出 `from`、`to`、`trigger`、`message_type`：
+`links` 统一写成对象数组，显式写出 `from`、`to`、`trigger`、`message_type`；推荐使用 YAML flow map，让每条 link 保持一行：
 
-```json
-[
-  {
-    "from": "上游节点",
-    "to": "下游节点",
-    "trigger": "<default>",
-    "message_type": "last"
-  }
-]
+```yaml
+links:
+  - { from: 上游节点, to: 下游节点, trigger: "<default>", message_type: last }
 ```
 
 约束：
 
 - `from` 必须指向 `agent`，不能直接指向 `group`。
 - `to` 必须指向 `agent` 或根图的 `__end__`，不能直接指向 `group`。
-- 整个 JSON 文件只允许这一组根级 `links`；`group` 内部禁止再声明 `links`。
+- 整个 YAML 文件只允许这一组根级 `links`；`group` 内部禁止再声明 `links`。
 - group 内部 agent 不允许直接连接 `__end__`；只有根图 agent 才能把边连到 `__end__`。
 - 当前运行时要求一个 group 只能有一个外部来源和一个入口成员；如果根级 `links` 让同一个 group 同时拥有多个外部入口成员，编译会直接失败。
 
@@ -139,12 +119,12 @@
 - 它不会替代 `links[].message_type` 的默认转发行为。
 - 可以写单个字符串或字符串数组。
 - 空数组 `[]` 等同于 `mode = none`。
-- 编译阶段会按 JSON 中 Agent 自上而下的定义顺序重排来源。
+- 编译阶段会按 YAML 中 Agent 自上而下的定义顺序重排来源。
 - group 内 agent 可以引用外层显式可见的 agent，但不能引用 sibling group 内部 agent。
 
 ## 5. 漏洞团队示例
 
-`vulnerability.json5` 当前使用的就是新 DSL：
+`vulnerability.yaml` 当前使用的就是新 DSL：
 
 - `疑点辩论` 是 `group` 节点。
 - `线索发现 -> 漏洞挑战` 是 group 的入口边；编译后根图会得到 `线索发现 -> 疑点辩论`，运行时实例入口会继承这条边的 `trigger/messageMode/maxTriggerRounds`。
@@ -153,10 +133,10 @@
 
 ## 6. 当前硬约束
 
-- 团队拓扑 JSON5 只支持递归式 `entry + nodes + links`
+- 团队拓扑 YAML 只支持递归式 `entry + nodes + links`
 - 节点 `type` 只允许 `agent` 或 `group`
 - `group` 内只允许 `nodes`，不允许 `entry`、`links`、`system_prompt`
-- 整个 JSON 文件只有一组根级 `links`
+- 整个 YAML 文件只有一组根级 `links`
 - 节点 ID 必须全局唯一
 - `links` 必须使用对象格式，并显式写出 `from / to / trigger / message_type`
 - agent 必须显式提供 `system_prompt` 与 `writable`

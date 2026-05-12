@@ -13,19 +13,19 @@ test("readLaunchTaskIdFromSearch 会把缺失或空白 taskId 统一归一成 nu
   assert.equal(readLaunchTaskIdFromSearch("?taskId=task-123"), "task-123");
 });
 
-test("fetchUiSnapshot 会按 JSON5 解析响应体", async () => {
+test("fetchUiSnapshot 会按 JSON 解析响应体", async () => {
   const originalFetch = globalThis.fetch;
   let requestedUrl = "";
   globalThis.fetch = (async (input) => {
     requestedUrl = String(input);
-    return new Response(`{
-    workspace: null,
-    task: null,
-    launchTaskId: "task-123",
-    launchCwd: "/tmp/demo",
-    taskLogFilePath: "/tmp/demo.log",
-    taskUrl: "http://localhost:4310/?taskId=task-123",
-  }`, { status: 200 });
+    return new Response(JSON.stringify({
+      workspace: null,
+      task: null,
+      launchTaskId: "task-123",
+      launchCwd: "/tmp/demo",
+      taskLogFilePath: "/tmp/demo.log",
+      taskUrl: "http://localhost:4310/?taskId=task-123",
+    }), { status: 200 });
   }) as typeof fetch;
 
   try {

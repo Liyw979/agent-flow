@@ -5,7 +5,7 @@ import { readBuiltinTopology } from "../../test-support/runtime/builtin-topology
 import { compileTeamDsl } from "./team-dsl";
 
 test("compileTeamDsl 支持 v8 递归式图 DSL，并保留 group 子图定义", () => {
-  const compiled = compileTeamDsl(readBuiltinTopology("vulnerability.json5"));
+  const compiled = compileTeamDsl(readBuiltinTopology("vulnerability.yaml"));
 
   assert.deepEqual(compiled.topology.edges, [
     {

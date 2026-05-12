@@ -39,7 +39,7 @@ function buildCliProgram(onCommand?: (command: ParsedCliCommand) => void) {
     .command("headless")
     .description("运行新 task，任务完成后退出 CLI")
     .option("--cwd <path>", "指定工作目录")
-    .option("--file <topology-file>", "团队拓扑 JSON5 文件路径")
+    .option("--file <topology-file>", "团队拓扑 YAML 文件路径")
     .option("--message <message>", "首条消息")
     .option("--show-message", "展示完整消息记录")
     .action((options) => {
@@ -56,7 +56,7 @@ function buildCliProgram(onCommand?: (command: ParsedCliCommand) => void) {
     .command("ui")
     .description("新建 task，并在浏览器中打开网页界面")
     .option("--cwd <path>", "指定工作目录")
-    .option("--file <topology-file>", "团队拓扑 JSON5 文件路径")
+    .option("--file <topology-file>", "团队拓扑 YAML 文件路径")
     .option("--message <message>", "新建 task 时的首条消息")
     .option("--show-message", "展示完整消息记录")
     .action((options) => {
@@ -84,7 +84,7 @@ export function buildCliHelpText(): string {
     "  - `task headless` 默认打印诊断信息与 attach 调试命令；传 `--show-message` 后再额外展示完整消息记录。",
     "  - `task ui` 默认打印诊断信息与 attach 调试命令；传 `--show-message` 后再额外展示完整消息记录，同时保持网页界面照常打开。",
     "  - `task ui` 会在当前 CLI 进程里启动本地 Web Host，并打开浏览器；命令本身会保持驻留，按 Ctrl+C 后才清理并退出。",
-    "  - 新建任务时必须传 `--file` 和 `--message`；`--file` 必须是 `.json5`。",
+    "  - 新建任务时必须传 `--file` 和 `--message`；`--file` 必须是 `.yaml` 或 `.yml`。",
   ].join("\n");
   return `${commanderHelp}\n${appendix}`;
 }

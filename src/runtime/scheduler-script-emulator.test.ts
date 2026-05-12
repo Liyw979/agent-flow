@@ -179,7 +179,7 @@ function createRepresentativeTopology(): TopologyRecord {
 }
 
 test("scheduler script drived 支持漏洞团队 2 个 finding 且每个 finding 各有两轮正反讨论后结束", async () => {
-  const topology = compileBuiltinTopology("vulnerability.json5").topology;
+  const topology = compileBuiltinTopology("vulnerability.yaml").topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
@@ -203,7 +203,7 @@ test("scheduler script drived 支持漏洞团队 2 个 finding 且每个 finding
 });
 
 test("scheduler script drived 不接受内置漏洞团队拓扑里单边未回应完就直接进入讨论总结", async () => {
-  const topology = compileBuiltinTopology("vulnerability.json5").topology;
+  const topology = compileBuiltinTopology("vulnerability.yaml").topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
@@ -1091,7 +1091,7 @@ test("scheduler script emulator 不会根据正文关键词替拓扑上的 decis
 });
 
 test("scheduler script emulator 在漏洞团队里把第二个 finding 错写成上一轮实例时直接失败", async () => {
-  const topology = compileBuiltinTopology("vulnerability.json5").topology;
+  const topology = compileBuiltinTopology("vulnerability.yaml").topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
@@ -1160,7 +1160,7 @@ test("scheduler script emulator 不允许 dispatch source 在 batch 未被消费
 });
 
 test("scheduler script emulator 不再支持非法短别名", async () => {
-  const topology = compileBuiltinTopology("vulnerability.json5").topology;
+  const topology = compileBuiltinTopology("vulnerability.yaml").topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点。",

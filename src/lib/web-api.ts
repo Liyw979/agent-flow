@@ -4,7 +4,6 @@ import type {
   TaskSnapshot,
   UiSnapshotPayload,
 } from "@shared/types";
-import { parseJson5 } from "@shared/json5";
 import { normalizeOptionalString } from "@shared/object-utils";
 
 function buildQuery(params: Record<string, string>) {
@@ -17,7 +16,7 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promi
     const message = await response.text();
     throw new Error(message || `请求失败：${response.status}`);
   }
-  return parseJson5<T>(await response.text());
+  return JSON.parse(await response.text()) as T;
 }
 
 export function readLaunchTaskIdFromSearch(search: string): string | null {
