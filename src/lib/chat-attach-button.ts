@@ -15,7 +15,7 @@ type VisibleChatAttachButtonState = {
   agentId: string;
   disabled: boolean;
   title: string;
-  label: "attach" | "打开中";
+  label: "attach";
 };
 
 type ChatAttachButtonState =
@@ -25,7 +25,6 @@ type ChatAttachButtonState =
 export function resolveChatMessageAttachButtonState(input: {
   sender: string;
   taskAgents: ReadonlyArray<ChatTaskAgentEntry>;
-  openingAgentTerminalId: string;
 }): ChatAttachButtonState {
   if (input.sender === "user" || input.sender === "system") {
     return {
@@ -41,7 +40,6 @@ export function resolveChatMessageAttachButtonState(input: {
       : {
           kind: "absent",
         },
-    openingState: input.openingAgentTerminalId === input.sender ? "opening" : "idle",
   });
 
   return {

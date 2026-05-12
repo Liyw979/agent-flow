@@ -32,7 +32,6 @@ type GlobalDomPatch = {
 
 interface RenderTopologyGraphInput {
   task: TaskSnapshot;
-  openingAgentTerminalId: string;
   onToggleMaximize: () => void;
   onOpenAgentTerminal: (agentId: string) => void;
 }
@@ -141,7 +140,6 @@ export async function renderTopologyGraphInDom(input: RenderTopologyGraphInput) 
           task={nextInput.task}
           isMaximized={false}
           onToggleMaximize={nextInput.onToggleMaximize}
-          openingAgentTerminalId={nextInput.openingAgentTerminalId}
           onOpenAgentTerminal={nextInput.onOpenAgentTerminal}
         />,
       );

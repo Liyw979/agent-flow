@@ -40,7 +40,6 @@ interface TopologyGraphProps {
   task: TaskSnapshot;
   isMaximized: boolean;
   onToggleMaximize: () => void;
-  openingAgentTerminalId: string;
   onOpenAgentTerminal: (agentId: string) => void;
 }
 
@@ -64,7 +63,6 @@ interface TopologyNodePresentation {
   content: TopologyNodeContent;
   statusBadge: TopologyAgentStatusBadgePresentation;
   headerActions: ReturnType<typeof getTopologyNodeHeaderActionOrder>;
-  isAttachOpening: boolean;
   attachDisabled: boolean;
   attachTitle: string;
 }
@@ -297,7 +295,6 @@ export function TopologyGraph({
   task,
   isMaximized,
   onToggleMaximize,
-  openingAgentTerminalId,
   onOpenAgentTerminal,
 }: TopologyGraphProps) {
   const topologyPanelBodyClassName = getTopologyPanelBodyClassName();
@@ -438,9 +435,7 @@ export function TopologyGraph({
     const attachState = resolveAgentAttachButtonState({
       agentId,
       sessionState: resolveSessionStateFromSessionIdText(taskAgent.opencodeSessionId),
-      openingState: openingAgentTerminalId === agentId ? "opening" : "idle",
     });
-    const isAttachOpening = attachState.label === "打开中";
     const attachDisabled = attachState.disabled;
     const attachTitle = attachState.title;
     return {
@@ -448,7 +443,6 @@ export function TopologyGraph({
       content,
       statusBadge,
       headerActions,
-      isAttachOpening,
       attachDisabled,
       attachTitle,
     };
@@ -517,7 +511,6 @@ export function TopologyGraph({
                 content,
                 statusBadge,
                 headerActions,
-                isAttachOpening,
                 attachDisabled,
                 attachTitle,
               } = buildNodePresentation(node.id);
@@ -570,9 +563,7 @@ export function TopologyGraph({
                                 className="inline-flex h-6 items-center justify-center gap-1 rounded-full border border-[#d8cdbd] bg-[#fffaf2] px-2 text-[10px] font-semibold text-foreground/76 shadow-[0_1px_0_rgba(255,255,255,0.45)] transition hover:border-[#cda27d] hover:bg-white disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:border-[#d8cdbd] disabled:hover:bg-[#fffaf2]"
                               >
                                 {renderAttachButtonIcon()}
-                                <span>
-                                  {isAttachOpening ? "打开中" : "attach"}
-                                </span>
+                                <span>attach</span>
                               </button>
                             );
                           }

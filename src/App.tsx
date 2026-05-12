@@ -66,7 +66,6 @@ function App() {
   const launchParams = useMemo(() => readLaunchParams(), []);
   const appShellClassName = getAppShellClassName();
   const workspaceLayoutMetrics = getAppWorkspaceLayoutMetrics();
-  const [openingAgentTerminalId, setOpeningAgentTerminalId] = useState("");
   const [agentTerminalActionError, setAgentTerminalActionError] = useState("");
   const [promptLineCount, setPromptLineCount] = useState(1);
   const [agentCardGapPx, setAgentCardGapPx] = useState(6);
@@ -195,12 +194,11 @@ function App() {
   }, [agentCards.length, agentPanelViewport, agentTerminalActionError]);
 
   async function handleOpenAgentTerminal(agentId: string) {
-    if (uiSnapshot.taskView.kind !== "ready" || openingAgentTerminalId === agentId) {
+    if (uiSnapshot.taskView.kind !== "ready") {
       return;
     }
 
     const { task } = uiSnapshot.taskView;
-    setOpeningAgentTerminalId(agentId);
     setAgentTerminalActionError("");
     try {
       await openAgentTerminal({
@@ -211,8 +209,6 @@ function App() {
       setAgentTerminalActionError(
         error instanceof Error ? error.message : `打开 ${agentId} 对应终端失败，请稍后重试。`,
       );
-    } finally {
-      setOpeningAgentTerminalId((current) => (current === agentId ? "" : current));
     }
   }
 
@@ -258,7 +254,6 @@ function App() {
               onToggleMaximize={() => {
                 setPanelMode((current) => (current === "topology-only" ? "default" : "topology-only"));
               }}
-              openingAgentTerminalId={openingAgentTerminalId}
               onOpenAgentTerminal={(agentId) => {
                 void handleOpenAgentTerminal(agentId);
               }}
@@ -276,7 +271,6 @@ function App() {
               onToggleMaximize={() => {
                 setPanelMode((current) => (current === "chat-only" ? "default" : "chat-only"));
               }}
-              openingAgentTerminalId={openingAgentTerminalId}
               onOpenAgentTerminal={(agentId) => {
                 void handleOpenAgentTerminal(agentId);
               }}
@@ -299,7 +293,6 @@ function App() {
               onToggleMaximize={() => {
                 setPanelMode((current) => (current === "topology-only" ? "default" : "topology-only"));
               }}
-              openingAgentTerminalId={openingAgentTerminalId}
               onOpenAgentTerminal={(agentId) => {
                 void handleOpenAgentTerminal(agentId);
               }}
@@ -323,7 +316,6 @@ function App() {
                   onToggleMaximize={() => {
                     setPanelMode((current) => (current === "chat-only" ? "default" : "chat-only"));
                   }}
-                  openingAgentTerminalId={openingAgentTerminalId}
                   onOpenAgentTerminal={(agentId) => {
                     void handleOpenAgentTerminal(agentId);
                   }}

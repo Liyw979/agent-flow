@@ -335,7 +335,6 @@ test("ChatWindow 只根据消息流展示运行中面板与最终消息", async 
           availableAgents={["Build", "QA", "线索发现"]}
           taskLogFilePath=""
           taskUrl=""
-          openingAgentTerminalId=""
           onSubmit={async () => undefined}
         />,
       );
