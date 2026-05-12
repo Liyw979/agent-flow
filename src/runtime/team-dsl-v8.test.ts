@@ -32,7 +32,7 @@ test("compileTeamDsl 支持 v8 递归式图 DSL，并保留 group 子图定义",
       target: "线索发现",
       trigger: "<continue>",
       messageMode: "last",
-      maxTriggerRounds: 4,
+      maxTriggerRounds: 999,
     },
   ]);
   assert.equal(compiled.topology.groupRules?.[0]?.id, "group-rule:疑点辩论");

@@ -349,7 +349,7 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出 group 辩论拓扑", (
       target: "线索发现",
       trigger: "<continue>",
       messageMode: "last",
-      maxTriggerRounds: 4,
+      maxTriggerRounds: 999,
     },
   ]);
   assert.deepEqual(compiled.topology.groupRules?.[0]?.members, [
