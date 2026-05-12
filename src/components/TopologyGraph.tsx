@@ -114,7 +114,7 @@ function TopologyAgentHistoryList(input: {
       className="min-h-0 flex-1 overflow-y-auto pr-1"
       data-topology-history-viewport={input.agentId}
     >
-      <div className="space-y-3">
+      <div className="space-y-1">
         {input.historyItems.map((item) => (
           <article
             key={item.id}
@@ -592,7 +592,7 @@ export function TopologyGraph({
                     </div>
                   </div>
 
-                  <div className="min-h-0 flex-1 px-2 py-2">
+                  <div className="flex min-h-0 flex-1 flex-col px-2 py-2">
                     {content.kind === "final-history" ? (
                       <TopologyAgentHistoryList
                         agentId={node.id}

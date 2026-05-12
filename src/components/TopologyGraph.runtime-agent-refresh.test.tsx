@@ -704,7 +704,14 @@ test("TopologyGraph 的单条最终历史消息按文字自然撑高，滚动发
     assert.ok(viewport instanceof HTMLElement);
     assert.ok(firstItem instanceof HTMLElement);
     assert.ok(secondItem instanceof HTMLElement);
+    const viewportParent = viewport.parentElement;
+    const historyList = viewport.firstElementChild;
+    assert.ok(viewportParent instanceof HTMLElement);
+    assert.ok(historyList instanceof HTMLElement);
     assert.equal(viewport.className.includes("overflow-y-auto"), true);
+    assert.equal(viewportParent.className.includes("flex"), true);
+    assert.equal(viewportParent.className.includes("flex-col"), true);
+    assert.equal(historyList.className.includes("space-y-1"), true);
     assert.equal(firstItem.className.includes("flex-none"), true);
     const firstItemText = firstItem.textContent;
     const secondItemText = secondItem.textContent;
