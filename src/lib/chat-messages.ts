@@ -10,9 +10,7 @@ import {
   parseTargetAgentIds,
 } from "@shared/chat-message-format";
 import {
-  extractLastDecisionResponse,
   stripDecisionResponseMarkup,
-  stripLeadingDecisionResponseLabel,
 } from "@shared/decision-response";
 
 export interface ChatMessageItem {
@@ -105,31 +103,11 @@ export function stripTrailingFollowUpOffer(content: string): string {
   return trimmed.slice(0, match.index).trimEnd();
 }
 
-function stripActionRequiredFeedbackLabel(content: string): string {
-  return stripLeadingDecisionResponseLabel(stripDecisionResponseMarkup(content));
-}
-
 function getMessageAllowedDecisionTriggers(message: MessageRecord): string[] {
-  if (message.kind === "agent-final" && message.routingKind === "labeled") {
+  if (message.kind === "agent-final" && message.routingKind === "triggered") {
     return [message.trigger];
   }
   return [];
-}
-
-export function getActionRequiredRequestDisplayBody(message: MessageRecord): string {
-  const normalized = stripTrailingMentions(message.content);
-  const allowedTriggers = getMessageAllowedDecisionTriggers(message);
-  const extracted = extractLastDecisionResponse(normalized, allowedTriggers);
-  if (extracted) {
-    return extracted;
-  }
-
-  return stripDecisionResponseMarkup(normalized, allowedTriggers);
-}
-
-function formatDisplayContentWithStoredMentions(sourceContent: string, body: string): string {
-  const mentions = extractTrailingMentionAgentIds(sourceContent);
-  return [stripTrailingMentions(body), buildMentionSuffix(mentions)].filter(Boolean).join("\n\n").trim();
 }
 
 function hasMeaningfulText(value: string): boolean {
@@ -182,42 +160,6 @@ export function extractAgentFinalDisplayContent(message: MessageRecord): string 
     .replace(/\n(?:---|\*\*\*)(?:\s*\n?)*$/u, "")
     .trim();
   return hasMeaningfulText(normalized) ? normalized : message.content.trim();
-}
-
-function buildMergedActionRequiredRequestContent(previous: ChatMessageItem, current: MessageRecord): string {
-  const summary = previous.content.trim();
-  const feedback = getActionRequiredRequestDisplayBody(current);
-  const previousLastMessage = previous.messageChain.at(-1);
-  if (!feedback) {
-    return formatDisplayContentWithStoredMentions(current.content, summary);
-  }
-
-  const normalizedSummary = summary.replace(/\s+/g, " ").trim();
-  const normalizedFeedback = feedback.replace(/\s+/g, " ").trim();
-  const normalizedSummaryFeedback = stripActionRequiredFeedbackLabel(summary)
-    .replace(/\s+/g, " ")
-    .trim();
-  const normalizedPreviousFinalResponse =
-    previousLastMessage
-    && isAgentFinalMessageRecord(previousLastMessage)
-      ? previousLastMessage.responseNote
-        .replace(/\s+/g, " ")
-        .trim()
-      : "";
-
-  if (!normalizedSummary) {
-    return formatDisplayContentWithStoredMentions(current.content, feedback);
-  }
-
-  if (
-    normalizedSummary === normalizedFeedback ||
-    normalizedSummaryFeedback === normalizedFeedback ||
-    normalizedPreviousFinalResponse === normalizedFeedback
-  ) {
-    return formatDisplayContentWithStoredMentions(current.content, summary);
-  }
-
-  return formatDisplayContentWithStoredMentions(current.content, `${summary}\n\n${feedback}`);
 }
 
 function buildMergedAgentFinalTriggerContent(previous: ChatMessageItem, current: MessageRecord): string {
@@ -273,47 +215,6 @@ function shouldMergeAgentFinalWithDispatch(previous: ChatMessageItem, current: M
   );
 }
 
-function shouldMergeActionRequiredRequest(previous: ChatMessageItem, current: MessageRecord) {
-  const previousLastMessage = previous.messageChain.at(-1);
-  return (
-    current.kind === "action-required-request" &&
-    previous.kinds.at(-1) === "agent-final" &&
-    !!previousLastMessage &&
-    isAgentFinalMessageRecord(previousLastMessage) &&
-    current.followUpMessageId === previousLastMessage.id
-  );
-}
-
-function findActionRequiredRequestMergeTargetIndex(
-  merged: ChatMessageItem[],
-  current: MessageRecord,
-): number {
-  if (current.kind !== "action-required-request" || !isNonSystemAgent(current.sender)) {
-    return -1;
-  }
-
-  for (let index = merged.length - 1; index >= 0; index -= 1) {
-    const candidate = merged[index];
-    const candidateLastMessage = candidate?.messageChain.at(-1);
-    if (!candidate || candidate.sender !== current.sender) {
-      continue;
-    }
-    if (candidate.kinds.includes("action-required-request")) {
-      continue;
-    }
-    if (
-      candidate.kinds.at(-1) === "agent-final" &&
-      !!candidateLastMessage &&
-      isAgentFinalMessageRecord(candidateLastMessage) &&
-      current.followUpMessageId === candidateLastMessage.id
-    ) {
-      return index;
-    }
-  }
-
-  return -1;
-}
-
 function shouldMergeMessages(previous: ChatMessageItem | undefined, current: MessageRecord) {
   if (!previous || previous.sender !== current.sender || !isNonSystemAgent(previous.sender)) {
     return false;
@@ -321,8 +222,7 @@ function shouldMergeMessages(previous: ChatMessageItem | undefined, current: Mes
 
   return (
     shouldMergeAgentDispatch(previous, current) ||
-    shouldMergeAgentFinalWithDispatch(previous, current) ||
-    shouldMergeActionRequiredRequest(previous, current)
+    shouldMergeAgentFinalWithDispatch(previous, current)
   );
 }
 
@@ -332,9 +232,6 @@ function getDisplayContent(message: MessageRecord): string {
   }
   if (message.kind === "agent-dispatch") {
     return message.content.trim();
-  }
-  if (message.kind === "action-required-request") {
-    return formatDisplayContentWithStoredMentions(message.content, getActionRequiredRequestDisplayBody(message));
   }
   return message.content;
 }
@@ -350,29 +247,14 @@ export function mergeTaskChatMessages(messages: MessageRecord[]): ChatMessageIte
       last.id = `${last.id}:${message.id}`;
       last.timestamp = message.timestamp;
       last.content =
-        message.kind === "action-required-request"
-          ? buildMergedActionRequiredRequestContent(last, message)
-          : message.kind === "agent-dispatch" && last.kinds.at(-1) === "agent-final"
-            ? buildMergedAgentFinalTriggerContent(last, message)
-            : message.kind === "agent-dispatch" && last.kinds.at(-1) === "agent-dispatch"
-              ? buildMergedAgentDispatchContent(last, message)
-              : [last.content, getDisplayContent(message)].filter(Boolean).join("\n\n");
+        message.kind === "agent-dispatch" && last.kinds.at(-1) === "agent-final"
+          ? buildMergedAgentFinalTriggerContent(last, message)
+          : message.kind === "agent-dispatch" && last.kinds.at(-1) === "agent-dispatch"
+            ? buildMergedAgentDispatchContent(last, message)
+            : [last.content, getDisplayContent(message)].filter(Boolean).join("\n\n");
       last.kinds.push(message.kind);
       last.messageChain.push(message);
       continue;
-    }
-
-    const continueRequestMergeTargetIndex = findActionRequiredRequestMergeTargetIndex(merged, message);
-    if (continueRequestMergeTargetIndex >= 0) {
-      const target = merged[continueRequestMergeTargetIndex];
-      if (target) {
-        target.id = `${target.id}:${message.id}`;
-        target.timestamp = message.timestamp;
-        target.content = buildMergedActionRequiredRequestContent(target, message);
-        target.kinds.push(message.kind);
-        target.messageChain.push(message);
-        continue;
-      }
     }
 
     merged.push(withOptionalString({

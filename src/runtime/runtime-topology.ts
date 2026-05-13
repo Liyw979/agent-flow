@@ -1,6 +1,5 @@
 import {
   getTopologyNodeRecords,
-  isActionRequiredTopologyTrigger,
   type RuntimeTopologyEdge,
   type GroupBundleRuntimeNode,
   type GroupBundleInstantiation,
@@ -8,6 +7,16 @@ import {
   type GroupRule,
   type TopologyRecord,
 } from "@shared/types";
+
+type ReportEdgeConfig =
+  | {
+      kind: "topology_edge";
+      edge: TopologyRecord["edges"][number];
+    }
+  | {
+      kind: "rule_report";
+      report: Exclude<GroupRule["report"], false>;
+    };
 
 function sanitizeInstanceSegment(value: string): string {
   return value.trim().replace(/\s+/g, "-");
@@ -122,9 +131,7 @@ export function instantiateGroupBundle(input: {
       target: targetNodeInstance.id,
       trigger: edge.trigger,
       messageMode: edge.messageMode,
-      ...(isActionRequiredTopologyTrigger(edge.trigger, edge.maxTriggerRounds) && typeof edge.maxTriggerRounds === "number"
-        ? { maxTriggerRounds: edge.maxTriggerRounds }
-        : {}),
+      maxTriggerRounds: edge.maxTriggerRounds,
     };
   });
 
@@ -145,10 +152,7 @@ export function instantiateGroupBundle(input: {
       target: entryNode.id,
       trigger: sourceToGroupEdge.trigger,
       messageMode: sourceToGroupEdge.messageMode,
-      ...(isActionRequiredTopologyTrigger(sourceToGroupEdge.trigger, sourceToGroupEdge.maxTriggerRounds)
-        && typeof sourceToGroupEdge.maxTriggerRounds === "number"
-        ? { maxTriggerRounds: sourceToGroupEdge.maxTriggerRounds }
-        : {}),
+      maxTriggerRounds: sourceToGroupEdge.maxTriggerRounds,
     });
   }
 
@@ -175,22 +179,15 @@ export function instantiateGroupBundle(input: {
       && edge.target === reportNode.id)
     : undefined;
   if (reportSourceNode && reportNode && rule.report !== false) {
-    const reportTrigger = groupToReportEdge?.trigger ?? rule.report.trigger;
-    const reportMaxTriggerRounds = groupToReportEdge?.maxTriggerRounds
-      ?? (rule.report.maxTriggerRounds === false
-        ? undefined
-        : rule.report.maxTriggerRounds);
+    const reportEdgeConfig: ReportEdgeConfig = groupToReportEdge
+      ? { kind: "topology_edge", edge: groupToReportEdge }
+      : { kind: "rule_report", report: rule.report };
     edges.push({
       source: reportSourceNode.id,
       target: reportNode.id,
-      trigger: reportTrigger,
-      messageMode:
-        groupToReportEdge?.messageMode
-        ?? rule.report.messageMode,
-      ...(isActionRequiredTopologyTrigger(reportTrigger, reportMaxTriggerRounds)
-        && typeof reportMaxTriggerRounds === "number"
-        ? { maxTriggerRounds: reportMaxTriggerRounds }
-        : {}),
+      trigger: resolveReportEdgeTrigger(reportEdgeConfig),
+      messageMode: resolveReportEdgeMessageMode(reportEdgeConfig),
+      maxTriggerRounds: resolveReportEdgeMaxTriggerRounds(reportEdgeConfig),
     });
   }
 
@@ -202,6 +199,18 @@ export function instantiateGroupBundle(input: {
     nodes,
     edges,
   };
+}
+
+function resolveReportEdgeTrigger(config: ReportEdgeConfig): string {
+  return config.kind === "topology_edge" ? config.edge.trigger : config.report.trigger;
+}
+
+function resolveReportEdgeMessageMode(config: ReportEdgeConfig): RuntimeTopologyEdge["messageMode"] {
+  return config.kind === "topology_edge" ? config.edge.messageMode : config.report.messageMode;
+}
+
+function resolveReportEdgeMaxTriggerRounds(config: ReportEdgeConfig): number {
+  return config.kind === "topology_edge" ? config.edge.maxTriggerRounds : config.report.maxTriggerRounds;
 }
 
 export function instantiateGroupBundles(input: {

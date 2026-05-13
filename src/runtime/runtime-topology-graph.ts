@@ -78,7 +78,3 @@ export function getNextGroupSequence(state: GraphTaskState, groupRuleId: string)
   state.groupSequenceByRule[groupRuleId] = next;
   return next;
 }
-
-export function buildGroupItemId(groupRuleId: string, sequence: number): string {
-  return `${groupRuleId}-${String(sequence).padStart(4, "0")}`;
-}

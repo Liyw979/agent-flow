@@ -2,11 +2,10 @@ import { Annotation, END, MemorySaver, START, StateGraph } from "@langchain/lang
 
 import {
   applyAgentResultToGraphState,
-  createGraphTaskState,
   createUserDispatchDecision,
   type GraphRoutingDecision,
 } from "./gating-router";
-import type { GraphTaskState } from "./gating-state";
+import { createEmptyGraphTaskState, type GraphTaskState } from "./gating-state";
 import type {
   LangGraphBatchRunner,
   LangGraphInputEvent,
@@ -14,32 +13,77 @@ import type {
 } from "./langgraph-host";
 
 interface RuntimeEnvelope {
-  graphState: GraphTaskState | null;
-  pendingInput: LangGraphInputEvent | null;
-  lastDecision: GraphRoutingDecision | null;
-  lastError: string | null;
+  graphState: GraphStateSlot;
+  pendingInput: PendingInputSlot;
+  lastDecision: LastDecisionSlot;
+  lastError: LastRuntimeError;
 }
+
+type GraphStateSlot =
+  | {
+      kind: "created";
+      graphState: GraphTaskState;
+    }
+  | {
+      kind: "empty";
+    };
+
+type PendingInputSlot =
+  | {
+      kind: "received";
+      event: LangGraphInputEvent;
+    }
+  | {
+      kind: "empty";
+    };
+
+type LastDecisionSlot =
+  | {
+      kind: "decided";
+      decision: GraphRoutingDecision;
+    }
+  | {
+      kind: "empty";
+    };
+
+type LastRuntimeError =
+  | {
+      kind: "failed";
+      message: string;
+    }
+  | {
+      kind: "none";
+    };
+
+type CheckpointSlot =
+  | {
+      kind: "found";
+      checkpoint: RuntimeEnvelope;
+    }
+  | {
+      kind: "missing";
+    };
 
 function takeLatestValue<T>(...values: [previous: T, next: T]): T {
   return values[1];
 }
 
 const RuntimeAnnotation = Annotation.Root({
-  graphState: Annotation<GraphTaskState | null>({
+  graphState: Annotation<GraphStateSlot>({
     reducer: takeLatestValue,
-    default: () => null,
+    default: () => ({ kind: "empty" }),
   }),
-  pendingInput: Annotation<LangGraphInputEvent | null>({
+  pendingInput: Annotation<PendingInputSlot>({
     reducer: takeLatestValue,
-    default: () => null,
+    default: () => ({ kind: "empty" }),
   }),
-  lastDecision: Annotation<GraphRoutingDecision | null>({
+  lastDecision: Annotation<LastDecisionSlot>({
     reducer: takeLatestValue,
-    default: () => null,
+    default: () => ({ kind: "empty" }),
   }),
-  lastError: Annotation<string | null>({
+  lastError: Annotation<LastRuntimeError>({
     reducer: takeLatestValue,
-    default: () => null,
+    default: () => ({ kind: "none" }),
   }),
 });
 
@@ -68,7 +112,7 @@ export class LangGraphRuntime {
       .addNode("task_failed", async (state: RuntimeEnvelope) => state)
       .addEdge(START, "task_loop")
       .addConditionalEdges("task_loop", (state: RuntimeEnvelope) => {
-        if (state.lastDecision?.type === "failed") {
+        if (state.lastDecision.kind === "decided" && state.lastDecision.decision.type === "failed") {
           return "task_failed";
         }
         return "task_finished";
@@ -87,20 +131,20 @@ export class LangGraphRuntime {
     topology: GraphTaskState["topology"];
     initialInput: LangGraphInputEvent;
   }): Promise<GraphTaskState> {
-    const graphState = createGraphTaskState({
+    const graphState = createEmptyGraphTaskState({
       taskId: input.taskId,
       topology: input.topology,
     });
     const result = await this.graph.invoke(
       {
-        graphState,
-        pendingInput: input.initialInput,
-        lastDecision: null,
-        lastError: null,
+        graphState: { kind: "created", graphState },
+        pendingInput: { kind: "received", event: input.initialInput },
+        lastDecision: { kind: "empty" },
+        lastError: { kind: "none" },
       } satisfies RuntimeEnvelope,
       runtimeConfig(input.taskId),
     ) as RuntimeEnvelope;
-    return result.graphState ?? graphState;
+    return result.graphState.kind === "created" ? result.graphState.graphState : graphState;
   }
 
   async resumeTask(input: {
@@ -109,33 +153,30 @@ export class LangGraphRuntime {
     event: LangGraphInputEvent;
   }): Promise<GraphTaskState> {
     const existing = await this.getCheckpoint(input.taskId);
-    const graphState = existing?.graphState ?? createGraphTaskState({
-      taskId: input.taskId,
-      topology: input.topology,
-    });
+    const graphState = resolveCheckpointGraphState(existing, input.taskId, input.topology);
     const result = await this.graph.invoke(
       {
-        graphState,
-        pendingInput: input.event,
-        lastDecision: existing?.lastDecision ?? null,
-        lastError: null,
+        graphState: { kind: "created", graphState },
+        pendingInput: { kind: "received", event: input.event },
+        lastDecision: { kind: "empty" },
+        lastError: { kind: "none" },
       } satisfies RuntimeEnvelope,
       runtimeConfig(input.taskId),
     ) as RuntimeEnvelope;
-    return result.graphState ?? graphState;
+    return result.graphState.kind === "created" ? result.graphState.graphState : graphState;
   }
 
-  async getCheckpoint(taskId: string): Promise<RuntimeEnvelope | null> {
+  async getCheckpoint(taskId: string): Promise<CheckpointSlot> {
     const state = await this.graph.getState(runtimeConfig(taskId));
     if (!state.values || Object.keys(state.values).length === 0) {
-      return null;
+      return { kind: "missing" };
     }
-    return state.values as RuntimeEnvelope;
+    return { kind: "found", checkpoint: state.values as RuntimeEnvelope };
   }
 
   async streamTask(
     taskId: string,
-    listener: (state: RuntimeEnvelope | null) => void,
+    listener: (state: CheckpointSlot) => void,
   ): Promise<void> {
     listener(await this.getCheckpoint(taskId));
   }
@@ -145,89 +186,75 @@ export class LangGraphRuntime {
   }
 
   private async runTaskLoop(state: RuntimeEnvelope): Promise<RuntimeEnvelope> {
-    const graphState = state.graphState;
-    if (!graphState) {
+    if (state.graphState.kind === "empty") {
       return {
         ...state,
         lastDecision: {
-          type: "failed",
-          errorMessage: "graphState 缺失",
+          kind: "decided",
+          decision: {
+            type: "failed",
+            errorMessage: "graphState 缺失",
+          },
         },
-        lastError: "graphState 缺失",
+        lastError: { kind: "failed", message: "graphState 缺失" },
       };
     }
 
-    let currentState = graphState;
-    let currentDecision: GraphRoutingDecision | null = state.pendingInput
-      ? createUserDispatchDecision(currentState, {
-        targetAgentId: state.pendingInput.targetAgentId,
-        content: state.pendingInput.content,
-      })
-      : state.lastDecision;
+    let currentState = state.graphState.graphState;
+    let currentDecision = resolveInitialRuntimeDecision(state, currentState);
 
     const inflight = new Map<string, LangGraphBatchRunner>();
     while (true) {
-      while (currentDecision?.type === "execute_batch") {
+      while (currentDecision.kind === "decided" && currentDecision.decision.type === "execute_batch") {
         const runners = await this.options.host.createBatchRunners({
           taskId: currentState.taskId,
           state: currentState,
-          batch: currentDecision.batch,
+          batch: currentDecision.decision.batch,
         });
         for (const runner of runners) {
           inflight.set(runner.id, runner);
         }
-        currentDecision = null;
+        currentDecision = { kind: "empty" };
       }
 
       if (inflight.size === 0) {
-        const shouldPauseAfterFinishedDecision = currentDecision?.type === "finished"
-          && (
-            currentDecision.finishReason === "wait_pending_decision_agents"
-            || (
-              currentDecision.finishReason === "no_runnable_agents"
-              && Object.keys(currentState.activeHandoffBatchBySource).length > 0
-            )
-          );
-        if (shouldPauseAfterFinishedDecision) {
-          return {
-            graphState: currentState,
-            pendingInput: null,
-            lastDecision: currentDecision,
-            lastError: null,
-          };
-        }
-
-        if (!currentDecision || currentDecision.type === "finished") {
+        if (currentDecision.kind === "empty" || currentDecision.decision.type === "finished") {
           currentState.taskStatus = "finished";
-          currentState.finishReason = currentDecision?.finishReason ?? currentState.finishReason ?? "idle";
+          currentState.finishReason = resolveFinishReason(currentDecision, currentState);
           await this.options.host.completeTask({
             taskId: currentState.taskId,
             status: "finished",
             finishReason: currentState.finishReason,
           });
           return {
-            graphState: currentState,
-            pendingInput: null,
-            lastDecision: currentDecision ?? {
-              type: "finished",
-              finishReason: currentState.finishReason,
-            },
-            lastError: null,
+            graphState: { kind: "created", graphState: currentState },
+            pendingInput: { kind: "empty" },
+            lastDecision: currentDecision.kind === "decided"
+              ? currentDecision
+              : {
+                  kind: "decided",
+                  decision: {
+                    type: "finished",
+                    finishReason: currentState.finishReason,
+                  },
+                },
+            lastError: { kind: "none" },
           };
         }
 
+        const failedDecision = requireFailedDecision(currentDecision);
         currentState.taskStatus = "failed";
         currentState.finishReason = "running";
         await this.options.host.completeTask({
           taskId: currentState.taskId,
           status: "failed",
-          failureReason: currentDecision.errorMessage,
+          failureReason: failedDecision.errorMessage,
         });
         return {
-          graphState: currentState,
-          pendingInput: null,
+          graphState: { kind: "created", graphState: currentState },
+          pendingInput: { kind: "empty" },
           lastDecision: currentDecision,
-          lastError: currentDecision.errorMessage,
+          lastError: { kind: "failed", message: failedDecision.errorMessage },
         };
       }
 
@@ -240,7 +267,59 @@ export class LangGraphRuntime {
       inflight.delete(settled.id);
       const reduced = applyAgentResultToGraphState(currentState, settled.result);
       currentState = reduced.state;
-      currentDecision = reduced.decision;
+      currentDecision = { kind: "decided", decision: reduced.decision };
     }
   }
+}
+
+function resolveCheckpointGraphState(
+  checkpoint: CheckpointSlot,
+  taskId: string,
+  topology: GraphTaskState["topology"],
+): GraphTaskState {
+  if (checkpoint.kind === "found" && checkpoint.checkpoint.graphState.kind === "created") {
+    return checkpoint.checkpoint.graphState.graphState;
+  }
+  return createEmptyGraphTaskState({
+    taskId,
+    topology,
+  });
+}
+
+function resolveInitialRuntimeDecision(
+  state: RuntimeEnvelope,
+  currentState: GraphTaskState,
+): LastDecisionSlot {
+  if (state.pendingInput.kind === "received") {
+    return {
+      kind: "decided",
+      decision: createUserDispatchDecision(currentState, {
+        targetAgentId: state.pendingInput.event.targetAgentId,
+        content: state.pendingInput.event.content,
+      }),
+    };
+  }
+  return state.lastDecision;
+}
+
+function resolveFinishReason(
+  decision: LastDecisionSlot,
+  currentState: GraphTaskState,
+): string {
+  if (decision.kind === "decided" && decision.decision.type === "finished") {
+    return decision.decision.finishReason;
+  }
+  if (currentState.finishReason) {
+    return currentState.finishReason;
+  }
+  return "idle";
+}
+
+function requireFailedDecision(
+  decision: LastDecisionSlot,
+): Extract<GraphRoutingDecision, { type: "failed" }> {
+  if (decision.kind === "decided" && decision.decision.type === "failed") {
+    return decision.decision;
+  }
+  throw new Error("期望 failed decision");
 }

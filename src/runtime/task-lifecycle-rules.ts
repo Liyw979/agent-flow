@@ -3,7 +3,6 @@ import {
   getMessageTargetAgentIds,
   isAgentDispatchMessageRecord,
   isAgentFinalMessageRecord,
-  isActionRequiredRequestMessageRecord,
   isTaskCompletedMessageRecord,
   isTaskRoundFinishedMessageRecord,
   isUserMessageRecord,
@@ -68,11 +67,6 @@ export function getPersistedCompletionSeedAgentIds(input: {
         seeds.add(targetName);
       }
     }
-    if (isActionRequiredRequestMessageRecord(message)) {
-      for (const targetAgentId of targetAgentIds) {
-        seeds.add(targetAgentId);
-      }
-    }
   }
 
   const defaultEntryAgent = resolveBuildAgentId(input.topology.nodes);
@@ -120,12 +114,6 @@ function referencesMissingActivatedAgent(
     );
   }
 
-  if (isActionRequiredRequestMessageRecord(message)) {
-    return parseTargetAgentIds(getMessageTargetAgentIds(message)).some(
-      (targetAgentId) => !knownAgentIds.has(targetAgentId),
-    );
-  }
-
   return false;
 }
 
@@ -146,8 +134,7 @@ export function shouldFinishTaskFromPersistedState(input: {
   }
   if (
     latestMessage &&
-    (isAgentDispatchMessageRecord(latestMessage) ||
-      isActionRequiredRequestMessageRecord(latestMessage))
+    isAgentDispatchMessageRecord(latestMessage)
   ) {
     return false;
   }
@@ -202,21 +189,6 @@ export function shouldFinishTaskFromPersistedState(input: {
   return true;
 }
 
-function resolveAgentStatusFromFinalMessage(
-  message: MessageRecord,
-  messages: MessageRecord[],
-): TaskAgentRecord["status"] {
-  if (!isAgentFinalMessageRecord(message)) {
-    return "completed";
-  }
-  if (messages.some((candidate) =>
-    isActionRequiredRequestMessageRecord(candidate) && candidate.followUpMessageId === message.id
-  )) {
-    return "action_required";
-  }
-  return "completed";
-}
-
 function hasLaterActivationForAgent(
   messages: MessageRecord[],
   agentId: string,
@@ -229,13 +201,6 @@ function hasLaterActivationForAgent(
 
     if (
       isUserMessageRecord(message) &&
-      parseTargetAgentIds(getMessageTargetAgentIds(message)).includes(agentId)
-    ) {
-      return true;
-    }
-
-    if (
-      isActionRequiredRequestMessageRecord(message) &&
       parseTargetAgentIds(getMessageTargetAgentIds(message)).includes(agentId)
     ) {
       return true;
@@ -288,7 +253,7 @@ export function reconcileTaskSnapshotFromMessages(input: {
     latestAgentFinalByName.set(message.sender, message);
   }
 
-  const reconciledAgents = agents.map((agent) => {
+  const reconciledAgents: TaskAgentRecord[] = agents.map((agent) => {
     const latestFinalMessage = latestAgentFinalByName.get(agent.id);
     if (!latestFinalMessage) {
       return agent;
@@ -306,8 +271,8 @@ export function reconcileTaskSnapshotFromMessages(input: {
 
     return {
       ...agent,
-      status: resolveAgentStatusFromFinalMessage(latestFinalMessage, input.messages),
-    };
+      status: "completed",
+    } satisfies TaskAgentRecord;
   });
 
   return {

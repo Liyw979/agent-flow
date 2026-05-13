@@ -7,6 +7,8 @@ import {
   type TopologyRecord,
 } from "@shared/types";
 
+const REQUIRED_MAX_TRIGGER_ROUNDS = 4;
+
 type DownstreamMode =
   | "group"
   | typeof DEFAULT_TOPOLOGY_TRIGGER
@@ -60,6 +62,7 @@ function buildGroupRuleFromReachable(topology: TopologyRecord, sourceNodeId: str
       targetRole: targetTemplates[index + 1]?.nodeId ?? "entry",
       trigger: "<default>" as const,
       messageMode: "last" as const,
+      maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS,
     })),
     exitWhen: "one_side_agrees",
     report: {
@@ -67,7 +70,7 @@ function buildGroupRuleFromReachable(topology: TopologyRecord, sourceNodeId: str
       templateName: reportTarget,
       trigger: DEFAULT_TOPOLOGY_TRIGGER,
       messageMode: "last",
-      maxTriggerRounds: false,
+      maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS,
     },
   };
 }
@@ -149,6 +152,7 @@ export function setGroupEnabledForDownstream(input: {
           target: input.targetNodeId,
           trigger: "<default>" as const,
           messageMode: "last" as const,
+          maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS,
         })
         .map((edge) => ({ ...edge }))
     : input.topology.edges.map((edge) => ({ ...edge }));
@@ -196,6 +200,7 @@ export function setDownstreamMode(input: {
           target: input.targetNodeId,
           trigger: normalizeTopologyEdgeTrigger(input.mode),
           messageMode: "last" as const,
+          maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS,
         });
 
   return {

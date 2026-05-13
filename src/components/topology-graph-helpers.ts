@@ -1,13 +1,6 @@
-import {
-  isDecisionAgentInTopology,
-  isTaskCompletedMessageRecord,
-  type MessageRecord,
-  type TopologyRecord,
-} from "@shared/types";
-
 export interface TopologyAgentStatusBadgePresentation {
   label: string;
-  icon: "idle" | "running" | "success" | "action_required" | "failed";
+  icon: "idle" | "running" | "success" | "failed";
   className: string;
   effectClassName: string;
 }
@@ -23,44 +16,20 @@ export function getTopologyNodeHeaderActionOrder(input: {
   ];
 }
 
-export function getTopologyAgentStatusBadgePresentation(
-  topology: Pick<TopologyRecord, "edges">,
-  agentId: string,
-  agentState: string,
-  options?: {
-    finalLoopDecisionAgentName?: string | null;
-  },
-): TopologyAgentStatusBadgePresentation {
-  const decisionAgent = isDecisionAgentInTopology(topology, agentId);
-  const isFinalLoopFailedDecisionAgent =
-    decisionAgent
-    && agentState === "failed"
-    && options?.finalLoopDecisionAgentName === agentId;
-
+export function getTopologyAgentStatusBadgePresentation(agentState: string): TopologyAgentStatusBadgePresentation {
   switch (agentState) {
     case "completed":
       return {
-        label: decisionAgent ? "已完成判定" : "已完成",
+        label: "已完成",
         icon: "success",
         className: "border border-[#2c4a3f]/18 bg-[#edf5f0] text-[#2c4a3f]",
         effectClassName: "",
       };
     case "failed":
       return {
-        label: decisionAgent
-          ? (isFinalLoopFailedDecisionAgent ? "继续处理，最后一次" : "继续处理")
-          : "执行失败",
-        icon: decisionAgent ? "action_required" : "failed",
-        className: decisionAgent
-          ? "border border-[#d6a14a]/55 bg-[#fff7e8] text-[#8a5a12]"
-          : "border border-[#d66b63]/45 bg-[#fff1ef] text-[#a33f38]",
-        effectClassName: "",
-      };
-    case "action_required":
-      return {
-        label: "继续处理",
-        icon: "action_required",
-        className: "border border-[#d6a14a]/55 bg-[#fff7e8] text-[#8a5a12]",
+        label: "执行失败",
+        icon: "failed",
+        className: "border border-[#d66b63]/45 bg-[#fff1ef] text-[#a33f38]",
         effectClassName: "",
       };
     case "running":
@@ -79,16 +48,4 @@ export function getTopologyAgentStatusBadgePresentation(
         effectClassName: "",
       };
   }
-}
-
-export function getTopologyLoopLimitFailedDecisionAgentName(
-  messages: MessageRecord[],
-): string | null {
-  const failedCompletionMessage = [...messages]
-    .reverse()
-    .find((message) => isTaskCompletedMessageRecord(message) && message.status === "failed");
-  const content = failedCompletionMessage?.content?.trim() ?? "";
-  const match = /^(.*?)\s*->\s*.*已连续交流\s+\d+\s+次，任务已结束$/u.exec(content);
-  const decisionAgentName = match?.[1]?.trim() ?? "";
-  return decisionAgentName || null;
 }

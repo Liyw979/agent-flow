@@ -1,12 +1,10 @@
 import {
-  assertNoAmbiguousTopologyTriggerRoutes,
-  DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
+  collectTopologyTriggerShapes,
+  isDefaultTopologyTrigger,
   LANGGRAPH_END_NODE_ID,
   type AgentRecord,
   createTopologyLangGraphRecord,
-  isActionRequiredTopologyTrigger,
-  isDefaultTopologyTrigger,
-  normalizeActionRequiredMaxRounds,
+  normalizeMaxTriggerRounds,
   normalizeInitialMessageAgentIds,
   normalizeTopologyEdgeTrigger,
   parseInitialMessageRoutingFromDslInput,
@@ -50,7 +48,7 @@ interface GraphDslLink {
   to: string;
   trigger: string;
   message_type: TopologyEdgeMessageMode;
-  maxTriggerRounds?: number;
+  maxTriggerRounds: number;
 }
 
 export interface GraphDslGraph {
@@ -103,27 +101,18 @@ const GraphDslLinkSchema = z.object({
   to: z.string(),
   trigger: z.string(),
   message_type: z.enum(["none", "last"]),
-  maxTriggerRounds: z.number().finite().optional(),
+  maxTriggerRounds: z.number().int().refine(
+    (value) => value === -1 || value >= 1,
+    "maxTriggerRounds 必须是 -1 或大于等于 1 的整数",
+  ),
 }).strict().superRefine((value, ctx) => {
-  let normalizedTrigger: string;
   try {
-    normalizedTrigger = normalizeTopologyEdgeTrigger(value.trigger);
+    normalizeTopologyEdgeTrigger(value.trigger);
   } catch (error) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["trigger"],
       message: error instanceof Error ? error.message : "非法 trigger。",
-    });
-    return;
-  }
-  if (
-    value.maxTriggerRounds !== undefined
-    && !isActionRequiredTopologyTrigger(normalizedTrigger, value.maxTriggerRounds)
-  ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["maxTriggerRounds"],
-      message: "只有 action-required trigger 才允许声明 maxTriggerRounds。",
     });
   }
 });
@@ -209,14 +198,7 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
         target: edge.target,
         trigger: edge.trigger,
         messageMode: edge.messageMode,
-        ...(isActionRequiredTopologyTrigger(edge.trigger, edge.maxTriggerRounds)
-          ? {
-              maxTriggerRounds:
-                edge.maxTriggerRounds === undefined
-                  ? DEFAULT_ACTION_REQUIRED_MAX_ROUNDS
-                  : normalizeActionRequiredMaxRounds(edge.maxTriggerRounds),
-            }
-          : {}),
+        maxTriggerRounds: normalizeMaxTriggerRounds(edge.maxTriggerRounds),
       }))
       .sort((left, right) => {
         const leftKey = `${left.source}__${left.target}__${left.trigger}__${left.messageMode}__${String(left.maxTriggerRounds)}`;
@@ -463,9 +445,7 @@ function mapGraphDslLinkToTopologyEdge(link: GraphDslLink): TopologyEdge {
     target: link.to,
     trigger,
     messageMode: link.message_type,
-    ...(isActionRequiredTopologyTrigger(trigger, link.maxTriggerRounds) && typeof link.maxTriggerRounds === "number"
-      ? { maxTriggerRounds: normalizeActionRequiredMaxRounds(link.maxTriggerRounds) }
-      : {}),
+    maxTriggerRounds: normalizeMaxTriggerRounds(link.maxTriggerRounds),
   };
 }
 
@@ -516,7 +496,7 @@ function collectScopeEdges(
         target: targetRole,
         trigger: mapped.trigger,
         messageMode: mapped.messageMode,
-        ...(mapped.maxTriggerRounds !== undefined ? { maxTriggerRounds: mapped.maxTriggerRounds } : {}),
+        maxTriggerRounds: mapped.maxTriggerRounds,
       }];
     }),
   );
@@ -663,7 +643,7 @@ function collectGroupRule(
         target: resolveRoleWithinScope(flat, parentScopeId, link.to),
         trigger: mapped.trigger,
         messageMode: mapped.messageMode,
-        ...(mapped.maxTriggerRounds !== undefined ? { maxTriggerRounds: mapped.maxTriggerRounds } : {}),
+        maxTriggerRounds: mapped.maxTriggerRounds,
       }];
     }),
   );
@@ -672,7 +652,7 @@ function collectGroupRule(
   }
 
   const onlyOutgoingEdge = outgoingEdges[0];
-  return {
+  const baseRule = {
     id: `group-rule:${groupId}`,
     groupNodeName: groupId,
     ...(sourceTemplateCandidates[0] ? { sourceTemplateName: sourceTemplateCandidates[0] } : {}),
@@ -686,23 +666,26 @@ function collectGroupRule(
       targetRole: edge.target,
       trigger: edge.trigger,
       messageMode: edge.messageMode,
-      ...(edge.maxTriggerRounds !== undefined ? { maxTriggerRounds: edge.maxTriggerRounds } : {}),
+      maxTriggerRounds: edge.maxTriggerRounds,
     })),
     exitWhen: "all_completed",
-    report: onlyOutgoingEdge
-      ? {
-          templateName: onlyOutgoingEdge.target,
-          sourceRole: onlyOutgoingEdge.source,
-          trigger: onlyOutgoingEdge.trigger,
-          messageMode: onlyOutgoingEdge.messageMode,
-          maxTriggerRounds:
-            isActionRequiredTopologyTrigger(onlyOutgoingEdge.trigger, onlyOutgoingEdge.maxTriggerRounds)
-            && typeof onlyOutgoingEdge.maxTriggerRounds === "number"
-              ? onlyOutgoingEdge.maxTriggerRounds
-              : false,
-        }
-      : false,
-  };
+  } satisfies Omit<GroupRule, "report">;
+  if (!onlyOutgoingEdge) {
+    return {
+      ...baseRule,
+      report: false,
+    } satisfies GroupRule;
+  }
+  return {
+    ...baseRule,
+    report: {
+      templateName: onlyOutgoingEdge.target,
+      sourceRole: onlyOutgoingEdge.source,
+      trigger: onlyOutgoingEdge.trigger,
+      messageMode: onlyOutgoingEdge.messageMode,
+      maxTriggerRounds: onlyOutgoingEdge.maxTriggerRounds,
+    },
+  } satisfies GroupRule;
 }
 
 function assertTopologyAgentsDeclared(
@@ -799,7 +782,7 @@ function compileGraphDsl(graph: GraphDslGraph): CompiledTeamDsl {
   };
 
   assertTopologyAgentsDeclared(compiledAgents, topology);
-  assertNoAmbiguousTopologyTriggerRoutes({
+  collectTopologyTriggerShapes({
     edges: topology.edges,
     endIncoming: topology.langgraph?.end?.incoming ?? [],
   });

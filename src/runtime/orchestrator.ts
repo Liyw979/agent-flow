@@ -8,19 +8,17 @@ import {
   type AgentTeamEvent,
   type AgentProgressActivityKind,
   type AgentProgressMessageRecord,
+  type AgentFinalMessageRecord,
   type AgentRoutingKind,
   type AgentRuntimeSnapshot,
   type AgentRecord,
-  assertNoAmbiguousTopologyTriggerRoutes,
   buildTopologyNodeRecords,
+  collectTopologyTriggerShapes,
   createDefaultTopology,
   DEFAULT_TOPOLOGY_TRIGGER,
-  DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
   type InitialMessageRouting,
-  isActionRequiredTopologyTrigger,
   LANGGRAPH_END_NODE_ID,
-  normalizeActionRequiredMaxRounds,
-  collectTopologyTriggerShapes,
+  normalizeMaxTriggerRounds,
   createTopologyLangGraphRecord,
   getTopologyEdgeId,
   getTopologyNodeRecords,
@@ -40,13 +38,13 @@ import {
   type TaskAgentRecord,
   type TaskRecord,
   type TaskSnapshot,
+  type TopologyLangGraphEndIncoming,
   type TopologyNodeRecord,
   type TopologyRecord,
   type WorkspaceSnapshot, toUtcIsoTimestamp,
 } from "@shared/types";
 import {
   formatAgentDispatchContent,
-  formatActionRequiredRequestContent,
   parseTargetAgentIds,
 } from "@shared/chat-message-format";
 import { stripDecisionResponseMarkup } from "@shared/decision-response";
@@ -123,7 +121,7 @@ type GroupRuleInput =
       reportToTemplateName: string;
       reportToTrigger: string;
       reportToMessageMode: "none" | "last";
-      reportToMaxTriggerRounds: number | false;
+      reportToMaxTriggerRounds: number;
     })
   | GroupRuleInputBase;
 
@@ -162,6 +160,15 @@ function coerceGroupRuleInput(
       maxTriggerRounds: rule.reportToMaxTriggerRounds,
     },
   };
+}
+
+function getTopologyEndIncoming(
+  topology: Partial<Pick<TopologyRecord, "langgraph">>,
+): TopologyLangGraphEndIncoming[] {
+  if (!topology.langgraph || !topology.langgraph.end) {
+    return [];
+  }
+  return topology.langgraph.end.incoming;
 }
 
 interface OrchestratorOptions {
@@ -816,7 +823,6 @@ export class Orchestrator {
       agentId,
       agentId,
       prompt,
-      1,
       "",
     );
     if (!(behavior.completeTaskOnFinish ?? true)) {
@@ -828,10 +834,6 @@ export class Orchestrator {
       if (latestTask.status === "failed" && latestTask.completedAt.length === 0) {
         await this.completeTask(task.cwd, task.id, "failed");
       }
-      return;
-    }
-
-    if (latestTask.status === "action_required") {
       return;
     }
 
@@ -1099,8 +1101,8 @@ export class Orchestrator {
         sourceAgentId,
         input.parsedDecision.trigger,
       );
-      if (resolved) {
-        return "labeled";
+      if (resolved.kind === "triggered") {
+        return "triggered";
       }
     }
 
@@ -1450,14 +1452,7 @@ export class Orchestrator {
         target: edge.target,
         trigger: edge.trigger,
         messageMode: edge.messageMode,
-        ...(isActionRequiredTopologyTrigger(edge.trigger, edge.maxTriggerRounds)
-          ? {
-              maxTriggerRounds:
-                edge.maxTriggerRounds === undefined
-                  ? DEFAULT_ACTION_REQUIRED_MAX_ROUNDS
-                  : normalizeActionRequiredMaxRounds(edge.maxTriggerRounds),
-            }
-          : {}),
+        maxTriggerRounds: normalizeMaxTriggerRounds(edge.maxTriggerRounds),
       }));
     const orderedAgentNodes = resolveTopologyAgentOrder(
       agents.map((agent) => ({ id: agent.id })),
@@ -1519,9 +1514,7 @@ export class Orchestrator {
         (agent) => agent.role && validNames.has(agent.templateName),
       ),
     );
-    const explicitEndIncoming = (
-      topology.langgraph?.end?.incoming ?? []
-    ).filter(
+    const explicitEndIncoming = getTopologyEndIncoming(topology).filter(
       (edge) =>
         validTopologyNames.has(edge.source) && typeof edge.trigger === "string",
     );
@@ -1535,7 +1528,7 @@ export class Orchestrator {
         (explicitStartTarget ? [explicitStartTarget] : []),
       endIncoming,
     });
-    assertNoAmbiguousTopologyTriggerRoutes({
+    collectTopologyTriggerShapes({
       edges,
       endIncoming: langgraph.end?.incoming ?? [],
     });
@@ -1683,7 +1676,6 @@ export class Orchestrator {
     batch: GraphDispatchBatch,
   ) {
     const task = this.store.getTask(taskId);
-    const batchSize = batch.jobs.length;
     const taskMessages = this.store.listMessages(taskId);
 
     if (
@@ -1691,7 +1683,10 @@ export class Orchestrator {
         (job) => job.kind === "transfer" || job.kind === "dispatch",
       )
     ) {
-      const sourceAgentId = batch.sourceAgentId ?? "System";
+      if (batch.source.kind !== "agent") {
+        throw new Error("拓扑自动派发缺少来源 Agent，无法构造派发消息。");
+      }
+      const sourceAgentId = batch.source.agentId;
       if (
         !this.shouldSuppressDuplicateDispatchMessage(
           taskId,
@@ -1746,93 +1741,14 @@ export class Orchestrator {
           from: "User",
           content: batch.sourceContent,
         };
-      } else if (job.kind === "action_required_request") {
-        const followUpContent = job.sourceContent.trim();
-        const remediationDisplayContent = job.displayContent.trim();
-        if (!followUpContent || !remediationDisplayContent) {
-          throw new Error(
-            `${job.sourceAgentId} 的 action_required 派发缺少可转发正文`,
-          );
-        }
-        const edgeForwardingConfig = this.getEdgeForwardingConfig(
-          buildEffectiveTopology(state),
-          job.sourceAgentId,
-          job.agentId,
-          batch.routingKind === "default"
-            ? DEFAULT_TOPOLOGY_TRIGGER
-            : batch.trigger,
-        );
-        const dispatchInitialMessageRouting =
-          this.resolveDispatchInitialMessageRouting(
-            this.getTaskAgentRunCount(taskId, job.agentId),
-            edgeForwardingConfig.initialMessageRouting,
-          );
-        const initialMessageSourceAliasesByAgentId =
-          this.resolveInitialMessageSourceAliases(
-            state,
-            job.sourceAgentId,
-            job.agentId,
-            dispatchInitialMessageRouting,
-          );
-        const forwardedContext = buildDownstreamForwardedContextFromMessages(
-          taskMessages,
-          followUpContent,
-          {
-            messageMode: edgeForwardingConfig.messageMode,
-            initialMessageRouting: dispatchInitialMessageRouting,
-            sourceAgentId: job.sourceAgentId,
-            initialMessageSourceAliasesByAgentId,
-            globalSourceOrder: this.resolveGlobalSourceOrder(state),
-          },
-        );
-        if (forwardedContext.kind === "empty") {
-          throw new Error(
-            `${job.sourceAgentId} 的 action_required 派发缺少可转发上下文`,
-          );
-        }
-        prompt = {
-          mode: "structured",
-          from: job.sourceAgentId,
-          agentMessage: forwardedContext.agentMessage,
-          omitSourceAgentSectionLabel: true,
-        };
-        forwardedAgentMessage = forwardedContext.agentMessage;
-        const remediationMessage: MessageRecord = {
-          id: randomUUID(),
-          taskId,
-          sender: job.sourceAgentId,
-          timestamp: toUtcIsoTimestamp(new Date().toISOString()),
-          content: formatActionRequiredRequestContent(
-            remediationDisplayContent,
-            [job.agentId],
-          ),
-          kind: "action-required-request",
-          followUpMessageId: job.sourceMessageId,
-          targetAgentIds: [job.agentId],
-          targetRunCounts: [
-            (this.store
-              .listTaskAgents(taskId)
-              .find((item) => item.id === job.agentId)?.runCount ?? 0) + 1,
-          ],
-          ...withOptionalString(
-            {},
-            "senderDisplayName",
-            this.resolveMessageSenderDisplayName(state, job.sourceAgentId),
-          ),
-        };
-        this.store.insertMessage(remediationMessage);
-        this.emit({
-          type: "message-created",
-          cwd,
-          payload: remediationMessage,
-        });
       } else {
-        if (!batch.sourceAgentId) {
+        if (batch.source.kind !== "agent") {
           throw new Error("拓扑自动派发缺少来源 Agent，无法构造转发消息。");
         }
+        const sourceAgentId = batch.source.agentId;
         const edgeForwardingConfig = this.getEdgeForwardingConfig(
           buildEffectiveTopology(state),
-          batch.sourceAgentId,
+          sourceAgentId,
           job.agentId,
           batch.routingKind === "default"
             ? DEFAULT_TOPOLOGY_TRIGGER
@@ -1846,7 +1762,7 @@ export class Orchestrator {
         const initialMessageSourceAliasesByAgentId =
           this.resolveInitialMessageSourceAliases(
             state,
-            batch.sourceAgentId,
+            sourceAgentId,
             job.agentId,
             dispatchInitialMessageRouting,
           );
@@ -1856,7 +1772,7 @@ export class Orchestrator {
           {
             messageMode: edgeForwardingConfig.messageMode,
             initialMessageRouting: dispatchInitialMessageRouting,
-            sourceAgentId: batch.sourceAgentId,
+            sourceAgentId,
             initialMessageSourceAliasesByAgentId,
             globalSourceOrder: this.resolveGlobalSourceOrder(state),
           },
@@ -1869,7 +1785,7 @@ export class Orchestrator {
               }
             : {
                 mode: "structured",
-                from: batch.sourceAgentId ?? "System",
+                from: sourceAgentId,
                 agentMessage: forwardedContext.agentMessage,
                 omitSourceAgentSectionLabel: true,
               };
@@ -1878,7 +1794,7 @@ export class Orchestrator {
       }
       if (prompt.mode === "control") {
         return {
-          id: `${batch.sourceAgentId ?? "user"}:${job.agentId}:${index}:${Date.now()}`,
+          id: `${batch.source.kind === "agent" ? batch.source.agentId : "user"}:${job.agentId}:${index}:${Date.now()}`,
           agentId: job.agentId,
           promise: this.executeLangGraphAgentOnce(
             cwd,
@@ -1887,24 +1803,22 @@ export class Orchestrator {
             job.agentId,
             executableAgentId,
             prompt,
-            batchSize,
             forwardedAgentMessage,
           ),
         };
       }
       return {
-        id: `${batch.sourceAgentId ?? "user"}:${job.agentId}:${index}:${Date.now()}`,
+        id: `${batch.source.kind === "agent" ? batch.source.agentId : "user"}:${job.agentId}:${index}:${Date.now()}`,
         agentId: job.agentId,
-        promise: this.executeLangGraphAgentOnce(
-          cwd,
-          task,
-          state,
-          job.agentId,
-          executableAgentId,
-          prompt,
-          batchSize,
-          forwardedAgentMessage,
-        ),
+          promise: this.executeLangGraphAgentOnce(
+            cwd,
+            task,
+            state,
+            job.agentId,
+            executableAgentId,
+            prompt,
+            forwardedAgentMessage,
+          ),
       };
     });
   }
@@ -1916,7 +1830,6 @@ export class Orchestrator {
     runtimeAgentId: string,
     executableAgentId: string,
     prompt: AgentExecutionPrompt,
-    concurrentBatchSize: number,
     forwardedAgentMessage: string,
   ): Promise<GraphAgentResult> {
     this.store.updateTaskAgentRun(task.id, runtimeAgentId, "running");
@@ -1989,7 +1902,7 @@ export class Orchestrator {
       const topology = this.store.getTopology();
       const dispatchedContent = this.buildAgentExecutionPrompt(prompt);
       const decisionAgent = isExecutionDecisionAgent({
-        state,
+        state: state ? { kind: "available", value: state } : { kind: "absent" },
         topology,
         runtimeAgentId,
         executableAgentId,
@@ -2046,13 +1959,13 @@ export class Orchestrator {
       if (!displayContent && !(decisionAgent && parsedDecision.kind === "valid")) {
         throw new Error(`${runtimeAgentId} 未返回可展示的结果正文`);
       }
-      const baseTaskMessage = {
+      const baseTaskMessage: Omit<AgentFinalMessageRecord, "routingKind" | "trigger"> = {
         id: response.messageId,
         taskId: task.id,
         content: displayContent,
         sender: runtimeAgentId,
         timestamp: toUtcIsoTimestamp(response.timestamp),
-        kind: "agent-final" as const,
+        kind: "agent-final",
         runCount: currentAgent.runCount,
         status: response.status,
         responseNote: parsedDecision.opinion ?? "",
@@ -2063,55 +1976,34 @@ export class Orchestrator {
         ),
       };
       let taskMessage: MessageRecord;
-      if (resolvedDecision === "labeled" && parsedDecision.kind === "valid") {
+      if (resolvedDecision === "triggered" && parsedDecision.kind === "valid") {
         taskMessage = {
           ...baseTaskMessage,
-          routingKind: "labeled",
+          routingKind: "triggered",
           trigger: parsedDecision.trigger,
-        };
+        } satisfies MessageRecord;
       } else if (resolvedDecision === "default") {
         taskMessage = {
           ...baseTaskMessage,
           routingKind: "default",
-        };
+        } satisfies MessageRecord;
       } else {
         taskMessage = {
           ...baseTaskMessage,
           routingKind: "invalid",
-        };
+        } satisfies MessageRecord;
       }
       this.store.insertMessage(taskMessage);
 
-      const actionRequiredTargets =
-        parsedDecision.kind === "valid" &&
-        resolvedDecision === "labeled" &&
-        resolveTriggerRoutingKindForSource(
-          effectiveTopology,
-          runtimeAgentId,
-          parsedDecision.trigger,
-        ) === "action_required"
-          ? this.getOutgoingEdgesForTrigger(
-              effectiveTopology,
-              runtimeAgentId,
-              parsedDecision.trigger,
-            )
-          : [];
       const agentStatus = resolveAgentStatusFromRouting({
         routingKind: resolvedDecision,
-        decisionAgent,
-        enteredActionRequired: actionRequiredTargets.length > 0,
       });
       this.store.updateTaskAgentStatus(
         task.id,
         runtimeAgentId,
         agentStatus,
       );
-      if (actionRequiredTargets.length > 0) {
-        this.updateTaskStatusIfActive(
-          task.id,
-          concurrentBatchSize > 1 ? "running" : "action_required",
-        );
-      } else if (agentStatus === "failed") {
+      if (agentStatus === "failed") {
         this.updateTaskStatusIfActive(task.id, "failed");
       } else {
         this.updateTaskStatusIfActive(task.id, "running");
@@ -2154,13 +2046,13 @@ export class Orchestrator {
         opinion: parsedDecision.opinion,
         signalDone: signal.done,
       };
-      if (resolvedDecision === "labeled" && parsedDecision.kind === "valid") {
-        const labeledResult: GraphAgentResult = {
+      if (resolvedDecision === "triggered" && parsedDecision.kind === "valid") {
+        const triggeredResult: GraphAgentResult = {
           ...baseGraphAgentResult,
-          routingKind: "labeled",
+          routingKind: "triggered",
           trigger: parsedDecision.trigger,
         };
-        return labeledResult;
+        return triggeredResult;
       }
       if (resolvedDecision === "default") {
         const defaultResult: GraphAgentResult = {
@@ -2177,7 +2069,7 @@ export class Orchestrator {
     } catch (error) {
       const topology = this.store.getTopology();
       const decisionAgent = isExecutionDecisionAgent({
-        state,
+        state: state ? { kind: "available", value: state } : { kind: "absent" },
         topology,
         runtimeAgentId,
         executableAgentId,
@@ -2306,16 +2198,6 @@ export class Orchestrator {
       ? Math.max(nowMs, latestMs + 1)
       : nowMs;
     return new Date(nextMs).toISOString();
-  }
-
-  private getOutgoingEdgesForTrigger(
-    topology: TopologyRecord,
-    sourceAgentId: string,
-    trigger: string,
-  ) {
-    return topology.edges.filter(
-      (edge) => edge.source === sourceAgentId && edge.trigger === trigger,
-    );
   }
 
   protected getEdgeForwardingConfig(

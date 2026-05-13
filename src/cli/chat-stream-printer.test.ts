@@ -8,15 +8,30 @@ import {
 } from "./chat-stream-printer";
 import { toUtcIsoTimestamp } from "@shared/types";
 
-function createMessage(input: {
+type TestMessageInputBase = {
   id: string;
   sender: string;
   timestamp: string;
   content: string;
-  kind: MessageRecord["kind"];
-  targetAgentIds?: string[];
-  finishReason?: string;
-}): MessageRecord {
+};
+
+type TestMessageInput =
+  | (TestMessageInputBase & {
+      kind: "user" | "agent-dispatch";
+      targetAgentIds: string[];
+    })
+  | (TestMessageInputBase & {
+      kind: "agent-final";
+    })
+  | (TestMessageInputBase & {
+      kind: "task-round-finished";
+      finishReason: string;
+    })
+  | (TestMessageInputBase & {
+      kind: "task-created" | "system-message" | "task-completed";
+    });
+
+function createMessage(input: TestMessageInput): MessageRecord {
   if (input.kind === "user") {
     return {
       id: input.id,
@@ -27,8 +42,8 @@ function createMessage(input: {
       kind: "user",
       scope: "task",
       taskTitle: "demo",
-      targetAgentIds: input.targetAgentIds ?? [],
-      targetRunCounts: (input.targetAgentIds ?? []).map(() => 1),
+      targetAgentIds: input.targetAgentIds,
+      targetRunCounts: input.targetAgentIds.map(() => 1),
     };
   }
   if (input.kind === "agent-final") {
@@ -54,22 +69,9 @@ function createMessage(input: {
       timestamp: toUtcIsoTimestamp(input.timestamp),
       content: input.content,
       kind: "agent-dispatch",
-      targetAgentIds: input.targetAgentIds ?? [],
-      targetRunCounts: (input.targetAgentIds ?? []).map(() => 1),
+      targetAgentIds: input.targetAgentIds,
+      targetRunCounts: input.targetAgentIds.map(() => 1),
       dispatchDisplayContent: input.content,
-    };
-  }
-  if (input.kind === "action-required-request") {
-    return {
-      id: input.id,
-      taskId: "task-1",
-      sender: input.sender,
-      timestamp: toUtcIsoTimestamp(input.timestamp),
-      content: input.content,
-      kind: "action-required-request",
-      followUpMessageId: input.id,
-      targetAgentIds: input.targetAgentIds ?? [],
-      targetRunCounts: (input.targetAgentIds ?? []).map(() => 1),
     };
   }
   if (input.kind === "task-completed") {
@@ -91,7 +93,7 @@ function createMessage(input: {
       timestamp: toUtcIsoTimestamp(input.timestamp),
       content: input.content,
       kind: "task-round-finished",
-      finishReason: input.finishReason ?? "round_finished",
+      finishReason: input.finishReason,
     };
   }
   if (input.kind === "task-created") {
@@ -192,8 +194,7 @@ test("renderChatStreamEntries 输出的是群聊文本，不包含 agent runtime
           sender: "Build",
           timestamp: toUtcIsoTimestamp("2026-04-19T10:00:00.000Z"),
           content: "@CodeReview",
-          kind: "agent-dispatch",
-          targetAgentIds: ["CodeReview"],
+          kind: "agent-dispatch", targetAgentIds: ["CodeReview"],
           targetRunCounts: [1],
           dispatchDisplayContent: "@CodeReview",
         },

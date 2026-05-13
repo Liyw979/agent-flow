@@ -3,50 +3,12 @@ import assert from "node:assert/strict";
 
 import {
   getTopologyAgentStatusBadgePresentation,
-  getTopologyLoopLimitFailedDecisionAgentName,
   getTopologyNodeHeaderActionOrder,
 } from "./topology-graph-helpers";
-import type { MessageRecord } from "@shared/types";
-import { toUtcIsoTimestamp } from "@shared/types";
 
-function createTaskCompletedMessage(input: {
-  id: string;
-  content: string;
-  status: "failed";
-}): MessageRecord {
-  return {
-    id: input.id,
-    taskId: "task-1",
-    sender: "system",
-    timestamp: toUtcIsoTimestamp("2026-04-23T10:00:00.000Z"),
-    content: input.content,
-    kind: "task-completed",
-    status: input.status,
-  };
-}
-
-function createTaskRoundFinishedMessage(input: {
-  id: string;
-  content: string;
-}): MessageRecord {
-  return {
-    id: input.id,
-    taskId: "task-1",
-    sender: "system",
-    timestamp: toUtcIsoTimestamp("2026-04-23T10:00:00.000Z"),
-    content: input.content,
-    kind: "task-round-finished",
-    finishReason: "round_finished",
-  };
-}
-
-test("getTopologyAgentStatusBadgePresentation 会把普通 agent 状态映射为 Electron 同款图标与文案", () => {
-  const topology = {
-    edges: [],
-  };
-
+test("getTopologyAgentStatusBadgePresentation 会把 agent 状态映射为 Electron 同款图标与文案", () => {
   assert.deepEqual(
-    getTopologyAgentStatusBadgePresentation(topology, "Build", "completed"),
+    getTopologyAgentStatusBadgePresentation("completed"),
     {
       label: "已完成",
       icon: "success",
@@ -56,7 +18,7 @@ test("getTopologyAgentStatusBadgePresentation 会把普通 agent 状态映射为
   );
 
   assert.deepEqual(
-    getTopologyAgentStatusBadgePresentation(topology, "Build", "running"),
+    getTopologyAgentStatusBadgePresentation("running"),
     {
       label: "运行中",
       icon: "running",
@@ -65,73 +27,25 @@ test("getTopologyAgentStatusBadgePresentation 会把普通 agent 状态映射为
       effectClassName: "topology-status-badge-running",
     },
   );
-});
-
-test("getTopologyAgentStatusBadgePresentation 会把判定 agent 映射为 action_required/completed 对应的状态徽标", () => {
-  const topology = {
-    edges: [
-      {
-        source: "CodeReview",
-        target: "Build",
-        trigger: "<continue>" as const,
-        messageMode: "last" as const,
-      },
-    ],
-  };
 
   assert.deepEqual(
-    getTopologyAgentStatusBadgePresentation(topology, "CodeReview", "completed"),
+    getTopologyAgentStatusBadgePresentation("failed"),
     {
-      label: "已完成判定",
-      icon: "success",
-      className: "border border-[#2c4a3f]/18 bg-[#edf5f0] text-[#2c4a3f]",
+      label: "执行失败",
+      icon: "failed",
+      className: "border border-[#d66b63]/45 bg-[#fff1ef] text-[#a33f38]",
       effectClassName: "",
     },
   );
 
   assert.deepEqual(
-    getTopologyAgentStatusBadgePresentation(topology, "CodeReview", "action_required"),
+    getTopologyAgentStatusBadgePresentation("idle"),
     {
-      label: "继续处理",
-      icon: "action_required",
-      className: "border border-[#d6a14a]/55 bg-[#fff7e8] text-[#8a5a12]",
+      label: "未启动",
+      icon: "idle",
+      className: "border border-[#c9d6ce]/85 bg-[#f7fbf8] text-[#5f7267]",
       effectClassName: "",
     },
-  );
-
-  assert.deepEqual(
-    getTopologyAgentStatusBadgePresentation(topology, "CodeReview", "failed", {
-      finalLoopDecisionAgentName: "CodeReview",
-    }),
-    {
-      label: "继续处理，最后一次",
-      icon: "action_required",
-      className: "border border-[#d6a14a]/55 bg-[#fff7e8] text-[#8a5a12]",
-      effectClassName: "",
-    },
-  );
-});
-
-test("getTopologyLoopLimitFailedDecisionAgentName 会从任务失败原因里识别超限 decisionAgent", () => {
-  assert.equal(
-    getTopologyLoopLimitFailedDecisionAgentName([
-      createTaskCompletedMessage({
-        id: "completion-1",
-        content: "UnitTest -> Build 已连续交流 4 次，任务已结束",
-        status: "failed",
-      }),
-    ]),
-    "UnitTest",
-  );
-
-  assert.equal(
-    getTopologyLoopLimitFailedDecisionAgentName([
-      createTaskRoundFinishedMessage({
-        id: "completion-2",
-        content: "本轮已完成，可继续 @Agent 发起下一轮。",
-      }),
-    ]),
-    null,
   );
 });
 

@@ -35,12 +35,10 @@ function getMessageKindSortRank(message: MessageRecord): number {
       return 50;
     case "agent-dispatch":
       return 60;
-    case "action-required-request":
-      return 70;
     case "task-round-finished":
-      return 80;
+      return 70;
     case "task-completed":
-      return 90;
+      return 80;
     default:
       return 999;
   }

@@ -37,7 +37,7 @@ test("validateProjectAgents 允许多个可写 Agent", () => {
 test("extractDslAgentsFromTopology 不会把未显式配置 writable 的 Build 视为默认可写", () => {
   const resolved = extractDslAgentsFromTopology({
     nodes: ["Build", "BA"],
-    edges: [{ source: "BA", target: "Build", trigger: "<default>", messageMode: "last" }],
+    edges: [{ source: "BA", target: "Build", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 }],
     nodeRecords: [
       { id: "Build", kind: "agent", templateName: "Build", initialMessageRouting: { mode: "inherit" } },
       { id: "BA", kind: "agent", templateName: "BA", prompt: "你是 BA。", initialMessageRouting: { mode: "inherit" } },

@@ -37,8 +37,6 @@ function getAgentProgressRank(status: string) {
     case "failed":
     case "completed":
       return 3;
-    case "action_required":
-      return 2;
     case "running":
       return 1;
     default:

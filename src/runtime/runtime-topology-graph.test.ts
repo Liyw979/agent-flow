@@ -3,21 +3,21 @@ import test from "node:test";
 
 import type { TopologyRecord } from "@shared/types";
 
-import { createGraphTaskState } from "./gating-router";
+import { createEmptyGraphTaskState } from "./gating-state";
 import { buildEffectiveTopology } from "./runtime-topology-graph";
 
 test("buildEffectiveTopology 不会因为 nodeRecords 只保存局部节点而丢掉 topology.nodes 里的静态节点", () => {
   const topology: TopologyRecord = {
     nodes: ["BA", "Build", "QA"],
     edges: [
-      { source: "BA", target: "Build", trigger: "<default>", messageMode: "last" },
-      { source: "Build", target: "QA", trigger: "<default>", messageMode: "last" },
+      { source: "BA", target: "Build", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 },
+      { source: "Build", target: "QA", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 },
     ],
     nodeRecords: [
       { id: "BA", kind: "agent", templateName: "BA", groupEnabled: false, initialMessageRouting: { mode: "inherit" } },
     ],
   };
-  const state = createGraphTaskState({
+  const state = createEmptyGraphTaskState({
     taskId: "task-runtime-topology",
     topology,
   });

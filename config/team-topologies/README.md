@@ -90,11 +90,11 @@ links: []
 
 ## 3. `links` 怎么写
 
-`links` 统一写成对象数组，显式写出 `from`、`to`、`trigger`、`message_type`；推荐使用 YAML flow map，让每条 link 保持一行：
+`links` 统一写成对象数组，显式写出 `from`、`to`、`trigger`、`message_type`、`maxTriggerRounds`；推荐使用 YAML flow map，让每条 link 保持一行：
 
 ```yaml
 links:
-  - { from: 上游节点, to: 下游节点, trigger: "<default>", message_type: last }
+  - { from: 上游节点, to: 下游节点, trigger: "<default>", message_type: last, maxTriggerRounds: 4 }
 ```
 
 约束：
@@ -109,7 +109,7 @@ links:
 
 - `<default>` 表示普通 handoff。
 - 其他任意尖括号标签都按字面值精确路由，例如 `<continue>`、`<complete>`、`<approved>`。
-- `maxTriggerRounds` 只有在 action-required 边上才允许声明。
+- `maxTriggerRounds` 是每条边都必须显式声明的字段；`-1` 表示无限次，其余值必须是大于等于 `1` 的整数。
 
 ## 4. `initialMessage`
 
@@ -138,6 +138,6 @@ links:
 - `group` 内只允许 `nodes`，不允许 `entry`、`links`、`system_prompt`
 - 整个 YAML 文件只有一组根级 `links`
 - 节点 ID 必须全局唯一
-- `links` 必须使用对象格式，并显式写出 `from / to / trigger / message_type`
+- `links` 必须使用对象格式，并显式写出 `from / to / trigger / message_type / maxTriggerRounds`
 - agent 必须显式提供 `system_prompt` 与 `writable`
 - `Build` 不允许覆盖 `system_prompt`
