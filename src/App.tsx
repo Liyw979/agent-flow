@@ -7,7 +7,6 @@ import { TopologyGraph } from "./components/TopologyGraph";
 import {
   fetchUiSnapshot,
   openAgentTerminal,
-  readLaunchParams,
   submitTask,
 } from "./lib/web-api";
 import { getAgentColorToken } from "./lib/agent-colors";
@@ -63,7 +62,6 @@ const UNMOUNTED_AGENT_PANEL_VIEWPORT: AgentPanelViewportState = {
 
 function App() {
   const queryClient = useQueryClient();
-  const launchParams = useMemo(() => readLaunchParams(), []);
   const appShellClassName = getAppShellClassName();
   const workspaceLayoutMetrics = getAppWorkspaceLayoutMetrics();
   const [agentTerminalActionError, setAgentTerminalActionError] = useState("");
@@ -77,17 +75,14 @@ function App() {
     UNMOUNTED_AGENT_PANEL_VIEWPORT,
   );
 
-  const launchTaskId = launchParams.taskId ?? "";
-  const uiSnapshotPollingIntervalMs = getUiSnapshotPollingIntervalMs(launchTaskId);
+  const uiSnapshotPollingIntervalMs = getUiSnapshotPollingIntervalMs();
   const panelVisibility = resolveAppPanelVisibility(panelMode);
-  const uiSnapshotQueryKey = ["ui-snapshot", launchTaskId] as const;
+  const uiSnapshotQueryKey = ["ui-snapshot"] as const;
   const uiSnapshotQuery = useQuery<UiSnapshotPayload, Error, AppUiSnapshot>({
     queryKey: uiSnapshotQueryKey,
-    enabled: launchTaskId.length > 0,
+    enabled: true,
     retry: false,
-    queryFn: async () => fetchUiSnapshot({
-      taskId: launchTaskId,
-    }),
+    queryFn: fetchUiSnapshot,
     refetchInterval: uiSnapshotPollingIntervalMs ?? false,
     refetchIntervalInBackground: true,
     structuralSharing: resolveUiSnapshotQueryStructuralSharing,

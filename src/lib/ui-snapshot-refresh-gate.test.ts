@@ -77,7 +77,7 @@ function createUiSnapshotPayload(input: {
     launchTaskId: "task-1",
     launchCwd: "/Users/liyw/code/empty",
     taskLogFilePath: "/Users/liyw/Library/Application Support/agent-team/logs/tasks/task-1.log",
-    taskUrl: "http://localhost:4310/?taskId=task-1",
+    taskUrl: "http://localhost:4310/",
     task: {
       task: {
         id: "task-1",

@@ -4,11 +4,6 @@ import type {
   TaskSnapshot,
   UiSnapshotPayload,
 } from "@shared/types";
-import { normalizeOptionalString } from "@shared/object-utils";
-
-function buildQuery(params: Record<string, string>) {
-  return new URLSearchParams(params).toString();
-}
 
 async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
@@ -19,19 +14,8 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promi
   return JSON.parse(await response.text()) as T;
 }
 
-export function readLaunchTaskIdFromSearch(search: string): string | null {
-  const params = new URLSearchParams(search);
-  return normalizeOptionalString(params.get("taskId")) ?? null;
-}
-
-export function readLaunchParams() {
-  return {
-    taskId: readLaunchTaskIdFromSearch(window.location.search),
-  };
-}
-
-export function fetchUiSnapshot(params: { taskId: string }) {
-  return fetchJson<UiSnapshotPayload>(`/api/ui-snapshot?${buildQuery(params)}`);
+export function fetchUiSnapshot() {
+  return fetchJson<UiSnapshotPayload>("/api/ui-snapshot");
 }
 
 export function submitTask(payload: SubmitTaskPayload) {

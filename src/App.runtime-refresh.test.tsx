@@ -124,7 +124,7 @@ function createUiSnapshot(input: {
     launchTaskId: TASK_ID,
     launchCwd: WORKSPACE_CWD,
     taskLogFilePath: null,
-    taskUrl: "http://localhost:4310/?taskId=task-app-runtime-refresh",
+    taskUrl: "http://localhost:4310/",
   };
 }
 
@@ -158,7 +158,7 @@ function getRequestUrl(input: RequestInfo | URL) {
 
 function setupDom(fetchImpl: typeof fetch, visibilityState: "visible" | "hidden" = "visible") {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
-    url: `http://localhost/?taskId=${TASK_ID}`,
+    url: "http://localhost/",
     pretendToBeVisual: true,
   });
   const previousValues = new Map<GlobalPatchKey, GlobalPatch>();
@@ -255,13 +255,11 @@ function restoreDefaultNotifyFunction() {
 
 function SubmitTaskInvalidationProbe() {
   const queryClient = useQueryClient();
-  const uiSnapshotQueryKey = ["ui-snapshot", TASK_ID] as const;
+  const uiSnapshotQueryKey = ["ui-snapshot"] as const;
   const uiSnapshotQuery = useQuery<UiSnapshotPayload, Error, AppUiSnapshot>({
     queryKey: uiSnapshotQueryKey,
     retry: false,
-    queryFn: async () => fetchUiSnapshot({
-      taskId: TASK_ID,
-    }),
+    queryFn: fetchUiSnapshot,
     structuralSharing: resolveUiSnapshotQueryStructuralSharing,
     select: resolveAppUiSnapshot,
   });

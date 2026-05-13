@@ -1,4 +1,4 @@
-export function normalizeOptionalString(value: string | null | undefined): string | undefined {
+function normalizeOptionalString(value: string | null | undefined): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }

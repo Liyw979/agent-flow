@@ -70,7 +70,6 @@ async function buildUiSnapshotPayload(
     taskLogFilePath: buildTaskLogFilePath(options.userDataPath, taskId),
     taskUrl: buildUiUrl({
       port: options.port,
-      taskId,
     }),
   };
 }
@@ -147,14 +146,12 @@ export async function startWebHost(
       }
 
       if (request.method === "GET" && url.pathname === "/api/ui-snapshot") {
-        const taskId = url.searchParams.get("taskId") ?? options.taskId;
-        json(response, 200, await buildUiSnapshotPayload(options.orchestrator, taskId, options));
+        json(response, 200, await buildUiSnapshotPayload(options.orchestrator, options.taskId, options));
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/tasks/runtime") {
-        const taskId = url.searchParams.get("taskId") ?? options.taskId;
-        const snapshot = await options.orchestrator.getTaskSnapshot(taskId);
+        const snapshot = await options.orchestrator.getTaskSnapshot(options.taskId);
         const payload: GetTaskRuntimePayload = {
           taskId: snapshot.task.id,
         };

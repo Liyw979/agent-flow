@@ -286,7 +286,6 @@ async function ensureUiHost(
     port,
     url: buildUiUrl({
       port,
-      taskId,
     }),
   };
 }
@@ -358,7 +357,6 @@ async function handleTaskUiCommand(
   const uiPort = uiHostBinding.port;
   const uiUrl = buildUiUrl({
     port: uiPort,
-    taskId: snapshot.task.id,
   });
   printTaskRunDiagnostics(diagnostics, uiUrl);
   const { host, url } = await ensureUiHost(

@@ -173,6 +173,64 @@ test("startWebHost 会同时监听 IPv4 和 IPv6 loopback，避免 localhost 命
   }
 });
 
+test("startWebHost 的 /api/tasks/runtime 始终绑定当前进程 task，不接受查询参数覆盖", async () => {
+  const port = await reservePort();
+  const capturedSnapshotTaskIds: string[] = [];
+  const capturedRuntimePayloads: Array<{ taskId: string }> = [];
+  const host = await startWebHost({
+    orchestrator: {
+      subscribe: () => () => undefined,
+      submitTask: async () => {
+        throw new Error("unexpected submitTask");
+      },
+      getTaskSnapshot: async (taskId: string) => {
+        capturedSnapshotTaskIds.push(taskId);
+        return {
+          task: {
+            id: "task-123",
+            title: "demo",
+            status: "running",
+            cwd: "/tmp/demo",
+            agentCount: 0,
+            createdAt: "2026-04-28T00:00:00.000Z",
+            completedAt: "",
+            initializedAt: "",
+          },
+          agents: [],
+          messages: [],
+        };
+      },
+      getWorkspaceSnapshot: async () => {
+        throw new Error("unexpected getWorkspaceSnapshot");
+      },
+      getTaskRuntime: async (payload: { taskId: string }) => {
+        capturedRuntimePayloads.push(payload);
+        return {
+          taskId: payload.taskId,
+          agents: [],
+        };
+      },
+      openAgentTerminal: async () => {
+        throw new Error("unexpected openAgentTerminal");
+      },
+    } as never,
+    taskId: "task-123",
+    port,
+    webRoot: null,
+    userDataPath: "/tmp",
+    bindHosts: [UI_LOOPBACK_IPV4_HOST],
+  });
+
+  try {
+    const response = await fetch(`http://localhost:${port}/api/tasks/runtime?taskId=task-overridden`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(capturedSnapshotTaskIds, ["task-123"]);
+    assert.deepEqual(capturedRuntimePayloads, [{ taskId: "task-123" }]);
+  } finally {
+    await host.close();
+  }
+});
+
 test("startWebHost 任一 bind host 监听失败时会关闭已监听 server 并取消订阅", async () => {
   const availableBindHosts = await resolveAvailableLoopbackBindHosts();
   if (availableBindHosts.length < 2) {

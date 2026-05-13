@@ -3,12 +3,11 @@ import test from "node:test";
 
 import { buildUiUrl } from "./ui-host-launch";
 
-test("buildUiUrl 只把 taskId 编进浏览器 URL，不再暴露 cwd", () => {
+test("buildUiUrl 只输出当前进程的浏览器入口地址", () => {
   assert.equal(
     buildUiUrl({
       port: 4310,
-      taskId: "task 123",
     }),
-    "http://localhost:4310/?taskId=task+123",
+    "http://localhost:4310/",
   );
 });

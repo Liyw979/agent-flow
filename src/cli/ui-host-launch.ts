@@ -10,10 +10,6 @@ export type UiLoopbackBindHost = (typeof UI_LOOPBACK_BIND_HOSTS)[number];
 
 export function buildUiUrl(input: {
   port: number;
-  taskId: string;
 }): string {
-  const query = new URLSearchParams({
-    taskId: input.taskId,
-  });
-  return `http://${UI_LOOPBACK_HOST}:${input.port}/?${query.toString()}`;
+  return `http://${UI_LOOPBACK_HOST}:${input.port}/`;
 }
