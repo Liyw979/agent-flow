@@ -33,13 +33,13 @@ nodes:
     system_prompt: 审查本次新增的代码（只看diff中的代码），是否存在安全漏洞(不关注代码bug、只关注越权、注入等安全问题)。你只允许输出当前拓扑已声明的 trigger：如果存在问题，输出 <continue> xxx；如果无问题，输出 <complete> xxx。
     writable: false
 links:
-  - { from: 任务分析, to: Build, trigger: "<default>", message_type: last }
-  - { from: Build, to: CodeReview, trigger: "<default>", message_type: last }
-  - { from: Build, to: UnitTest, trigger: "<default>", message_type: last }
-  - { from: Build, to: SecurityReview, trigger: "<default>", message_type: last }
+  - { from: 任务分析, to: Build, trigger: "<default>", message_type: last, maxTriggerRounds: 4 }
+  - { from: Build, to: CodeReview, trigger: "<default>", message_type: last, maxTriggerRounds: 4 }
+  - { from: Build, to: UnitTest, trigger: "<default>", message_type: last, maxTriggerRounds: 4 }
+  - { from: Build, to: SecurityReview, trigger: "<default>", message_type: last, maxTriggerRounds: 4 }
   - { from: CodeReview, to: Build, trigger: "<continue>", message_type: last, maxTriggerRounds: 4 }
   - { from: UnitTest, to: Build, trigger: "<continue>", message_type: last, maxTriggerRounds: 4 }
   - { from: SecurityReview, to: Build, trigger: "<continue>", message_type: last, maxTriggerRounds: 4 }
-  - { from: CodeReview, to: "__end__", trigger: "<complete>", message_type: none }
-  - { from: UnitTest, to: "__end__", trigger: "<complete>", message_type: none }
-  - { from: SecurityReview, to: "__end__", trigger: "<complete>", message_type: none }
+  - { from: CodeReview, to: "__end__", trigger: "<complete>", message_type: none, maxTriggerRounds: 4 }
+  - { from: UnitTest, to: "__end__", trigger: "<complete>", message_type: none, maxTriggerRounds: 4 }
+  - { from: SecurityReview, to: "__end__", trigger: "<complete>", message_type: none, maxTriggerRounds: 4 }

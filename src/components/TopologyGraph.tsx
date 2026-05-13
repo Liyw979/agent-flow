@@ -20,7 +20,6 @@ import { PANEL_HEADER_ACTION_BUTTON_CLASS } from "@/lib/panel-header-action-butt
 import { getPanelFullscreenButtonCopy } from "@/lib/panel-fullscreen-label";
 import {
   getTopologyAgentStatusBadgePresentation,
-  getTopologyLoopLimitFailedDecisionAgentName,
   getTopologyNodeHeaderActionOrder,
   type TopologyAgentStatusBadgePresentation,
 } from "@/components/topology-graph-helpers";
@@ -236,25 +235,6 @@ function renderStatusBadgeIcon(
     );
   }
 
-  if (presentation.icon === "action_required") {
-    return (
-      <svg
-        viewBox="0 0 16 16"
-        className="h-3.5 w-3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M12.6 8A4.6 4.6 0 1 1 8 3.4" />
-        <path d="M8 1.9h4v4" />
-        <path d="M12 2 8.9 5.1" />
-      </svg>
-    );
-  }
-
   return (
     <svg
       viewBox="0 0 16 16"
@@ -397,11 +377,6 @@ export function TopologyGraph({
       nodeHeight: NODE_HEIGHT,
     });
   }, [canvasViewport.height, canvasViewport.width, hasRenderableTopology, orderedNodeIds, topology.edges]);
-  const finalLoopDecisionAgentName = useMemo(
-    () => getTopologyLoopLimitFailedDecisionAgentName(task.messages),
-    [task.messages],
-  );
-
   function getTaskAgent(agentId: string): TaskAgentRecord {
     const taskAgent = taskAgents.get(agentId);
     if (!taskAgent) {
@@ -422,12 +397,7 @@ export function TopologyGraph({
       agentStatus,
     });
     const statusBadge = getTopologyAgentStatusBadgePresentation(
-      topology,
-      agentId,
       agentStatus,
-      {
-        finalLoopDecisionAgentName,
-      },
     );
     const headerActions = getTopologyNodeHeaderActionOrder({
       showAttachButton: true,

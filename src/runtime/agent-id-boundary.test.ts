@@ -33,7 +33,7 @@ test("用户派发决策使用 agentId 字段表达来源和目标", () => {
   assert.equal(decision.type, "execute_batch");
   assert.deepEqual(decision.batch, {
     routingKind: "default",
-    sourceAgentId: null,
+    source: { kind: "user" },
     sourceContent: "实现加法",
     displayContent: "实现加法",
     triggerTargets: ["Build"],
@@ -89,7 +89,7 @@ test("用户直接命中 group 时不会把 group 节点伪造成来源 agent", 
   });
 
   assert.equal(decision.type, "execute_batch");
-  assert.equal(decision.batch.sourceAgentId, null);
+  assert.deepEqual(decision.batch.source, { kind: "user" });
   assert.deepEqual(decision.batch.jobs, [
     {
       agentId: "执行-1",

@@ -3,152 +3,229 @@ import assert from "node:assert/strict";
 
 import {
   buildTopologyNodeRecords,
+  type AgentFinalMessageRecord,
   type MessageRecord,
+  type TopologyTrigger,
   type TopologyRecord, toUtcIsoTimestamp,
 } from "@shared/types";
-import { formatActionRequiredRequestContent } from "@shared/chat-message-format";
+import { formatAgentDispatchContent } from "@shared/chat-message-format";
 import {
   buildChatExecutionWindows,
   buildChatFeedItems,
 } from "./chat-execution-feed";
 import { mergeTaskChatMessages } from "./chat-messages";
 
-function createMessage(
-  overrides: Partial<MessageRecord> & {
-    kind: MessageRecord["kind"];
-    routingKind?: "default" | "labeled" | "invalid";
-  },
-): MessageRecord {
-  const id = overrides.id ?? "message-id";
-  const taskId = overrides.taskId ?? "task-id";
-  const content = overrides.content ?? "";
-  const sender = overrides.sender ?? "Build";
-  const timestamp = toUtcIsoTimestamp(
-    overrides.timestamp ?? "2026-04-25T08:00:00.000Z",
-  );
+type TestMessageBase = {
+  id: string;
+  sender: string;
+  content: string;
+  timestamp: ReturnType<typeof toUtcIsoTimestamp>;
+};
 
-  switch (overrides.kind) {
+type TestMessageInput =
+  | (TestMessageBase & {
+      kind: "agent-progress";
+      activityKind: Extract<MessageRecord, { kind: "agent-progress" }>["activityKind"];
+      label: string;
+      detail: string;
+      sessionId: string;
+      runCount: number;
+    })
+  | (TestMessageBase & {
+      kind: "agent-final";
+      response:
+        | { kind: "content" }
+        | { kind: "raw"; responseNote: string; rawResponse: string };
+    } & (
+      | { routingKind: "default" | "invalid" }
+      | { routingKind: "triggered"; trigger: TopologyTrigger }
+    ))
+  | (TestMessageBase & {
+      kind: "agent-final-with-run";
+      runCount: number;
+      response:
+        | { kind: "content" }
+        | { kind: "raw"; responseNote: string; rawResponse: string };
+    } & (
+      | { routingKind: "default" | "invalid" }
+      | { routingKind: "triggered"; trigger: TopologyTrigger }
+    ))
+  | (TestMessageBase & {
+      kind: "agent-dispatch";
+      targetAgentIds: string[];
+    })
+  | (TestMessageBase & {
+      kind: "agent-dispatch-with-runs";
+      targetAgentIds: string[];
+      targetRunCounts: number[];
+    })
+  | (TestMessageBase & {
+      kind: "user";
+      targetAgentIds: string[];
+    })
+  | (TestMessageBase & {
+      kind: "task-created" | "system-message";
+    })
+  | (TestMessageBase & {
+      kind: "task-completed";
+      status: Extract<MessageRecord, { kind: "task-completed" }>["status"];
+    })
+  | (TestMessageBase & {
+      kind: "task-round-finished";
+      finishReason: string;
+    });
+
+function createMessage(input: TestMessageInput): MessageRecord {
+  const taskId = "task-id";
+
+  switch (input.kind) {
     case "agent-progress":
       return {
-        id,
+        id: input.id,
         taskId,
-        content,
-        sender,
-        timestamp,
+        content: input.content,
+        sender: input.sender,
+        timestamp: input.timestamp,
         kind: "agent-progress",
-        activityKind: overrides.activityKind ?? "message",
-        label: overrides.label ?? content,
-        detail: overrides.detail ?? content,
+        activityKind: input.activityKind,
+        label: input.label,
+        detail: input.detail,
         detailState: "not_applicable",
-        sessionId: overrides.sessionId ?? "session-id",
-        runCount: overrides.runCount ?? 1,
+        sessionId: input.sessionId,
+        runCount: input.runCount,
       };
     case "agent-final": {
-      const routingKind = overrides.routingKind ?? "default";
-      const base = {
-        id,
+      const base: Omit<AgentFinalMessageRecord, "routingKind" | "trigger"> = {
+        id: input.id,
         taskId,
-        content,
-        sender,
-        timestamp,
+        content: input.content,
+        sender: input.sender,
+        timestamp: input.timestamp,
         kind: "agent-final" as const,
-        runCount: overrides.runCount ?? 1,
-        status: overrides.status ?? "completed",
-        responseNote: overrides.responseNote ?? "",
-        rawResponse: overrides.rawResponse ?? content,
+        runCount: 1,
+        status: "completed" as const,
+        responseNote: input.response.kind === "raw" ? input.response.responseNote : "",
+        rawResponse: input.response.kind === "raw" ? input.response.rawResponse : input.content,
       };
-      return routingKind === "labeled"
+      return input.routingKind === "triggered"
         ? {
             ...base,
-            routingKind: "labeled" as const,
-            trigger: overrides.trigger ?? "<trigger>",
-          }
+            routingKind: "triggered" as const,
+            trigger: input.trigger,
+          } satisfies AgentFinalMessageRecord
+        : input.routingKind === "invalid"
+          ? {
+              ...base,
+              routingKind: "invalid",
+            } satisfies AgentFinalMessageRecord
         : {
             ...base,
-            routingKind,
-          };
+            routingKind: "default",
+          } satisfies AgentFinalMessageRecord;
+    }
+    case "agent-final-with-run": {
+      const base: Omit<AgentFinalMessageRecord, "routingKind" | "trigger"> = {
+        id: input.id,
+        taskId,
+        content: input.content,
+        sender: input.sender,
+        timestamp: input.timestamp,
+        kind: "agent-final" as const,
+        runCount: input.runCount,
+        status: "completed" as const,
+        responseNote: input.response.kind === "raw" ? input.response.responseNote : "",
+        rawResponse: input.response.kind === "raw" ? input.response.rawResponse : input.content,
+      };
+      return input.routingKind === "triggered"
+        ? {
+            ...base,
+            routingKind: "triggered" as const,
+            trigger: input.trigger,
+          } satisfies AgentFinalMessageRecord
+        : input.routingKind === "invalid"
+          ? {
+              ...base,
+              routingKind: "invalid",
+            } satisfies AgentFinalMessageRecord
+        : {
+            ...base,
+            routingKind: "default",
+          } satisfies AgentFinalMessageRecord;
     }
     case "agent-dispatch":
       return {
-        id,
+        id: input.id,
         taskId,
-        content,
-        sender,
-        timestamp,
+        content: input.content,
+        sender: input.sender,
+        timestamp: input.timestamp,
         kind: "agent-dispatch",
-        targetAgentIds: overrides.targetAgentIds ?? [],
-        targetRunCounts:
-          overrides.targetRunCounts ??
-          (overrides.targetAgentIds ?? []).map((_value, index) => index + 1),
-        dispatchDisplayContent: overrides.dispatchDisplayContent ?? content,
+        targetAgentIds: input.targetAgentIds,
+        targetRunCounts: input.targetAgentIds.map((_value, index) => index + 1),
+        dispatchDisplayContent: input.content,
       };
-    case "action-required-request":
+    case "agent-dispatch-with-runs":
       return {
-        id,
+        id: input.id,
         taskId,
-        content,
-        sender,
-        timestamp,
-        kind: "action-required-request",
-        followUpMessageId:
-          overrides.followUpMessageId ?? "follow-up-message-id",
-        targetAgentIds: overrides.targetAgentIds ?? [],
-        targetRunCounts:
-          overrides.targetRunCounts ??
-          (overrides.targetAgentIds ?? []).map((_value, index) => index + 1),
+        content: input.content,
+        sender: input.sender,
+        timestamp: input.timestamp,
+        kind: "agent-dispatch",
+        targetAgentIds: input.targetAgentIds,
+        targetRunCounts: input.targetRunCounts,
+        dispatchDisplayContent: input.content,
       };
     case "user":
       return {
-        id,
+        id: input.id,
         taskId,
-        content,
+        content: input.content,
         sender: "user",
-        timestamp,
+        timestamp: input.timestamp,
         kind: "user",
         scope: "task",
         taskTitle: "demo",
-        targetAgentIds: overrides.targetAgentIds ?? [],
-        targetRunCounts:
-          overrides.targetRunCounts ??
-          (overrides.targetAgentIds ?? []).map((_value, index) => index + 1),
+        targetAgentIds: input.targetAgentIds,
+        targetRunCounts: input.targetAgentIds.map((_value, index) => index + 1),
       };
     case "task-created":
       return {
-        id,
+        id: input.id,
         taskId,
-        content,
+        content: input.content,
         sender: "system",
-        timestamp,
+        timestamp: input.timestamp,
         kind: "task-created",
       };
     case "system-message":
       return {
-        id,
+        id: input.id,
         taskId,
-        content,
+        content: input.content,
         sender: "system",
-        timestamp,
+        timestamp: input.timestamp,
         kind: "system-message",
       };
     case "task-completed":
       return {
-        id,
+        id: input.id,
         taskId,
-        content,
+        content: input.content,
         sender: "system",
-        timestamp,
+        timestamp: input.timestamp,
         kind: "task-completed",
-        status: "failed",
+        status: input.status,
       };
     case "task-round-finished":
       return {
-        id,
+        id: input.id,
         taskId,
-        content,
+        content: input.content,
         sender: "system",
-        timestamp,
+        timestamp: input.timestamp,
         kind: "task-round-finished",
-        finishReason: overrides.finishReason ?? "round_finished",
+        finishReason: input.finishReason,
       };
   }
 }
@@ -160,19 +237,19 @@ const topology: TopologyRecord = {
       source: "Build",
       target: "UnitTest",
       trigger: "<default>",
-      messageMode: "last",
+      messageMode: "last", maxTriggerRounds: 4,
     },
     {
       source: "Build",
       target: "TaskReview",
       trigger: "<default>",
-      messageMode: "last",
+      messageMode: "last", maxTriggerRounds: 4,
     },
     {
       source: "TaskReview",
       target: "Build",
       trigger: "<continue>",
-      messageMode: "last",
+      messageMode: "last", maxTriggerRounds: 4,
     },
   ],
   nodeRecords: buildTopologyNodeRecords({
@@ -194,19 +271,19 @@ const vulnerabilityTopology: TopologyRecord = {
       source: "线索发现",
       target: "漏洞挑战-1",
       trigger: "<default>",
-      messageMode: "last",
+      messageMode: "last", maxTriggerRounds: 4,
     },
     {
       source: "漏洞挑战-1",
       target: "漏洞论证-1",
       trigger: "<continue>",
-      messageMode: "last",
+      messageMode: "last", maxTriggerRounds: 4,
     },
     {
       source: "漏洞论证-1",
       target: "讨论总结-1",
       trigger: "<complete>",
-      messageMode: "last",
+      messageMode: "last", maxTriggerRounds: 4,
     },
   ],
   nodeRecords: buildTopologyNodeRecords({
@@ -242,26 +319,26 @@ test("buildChatExecutionWindows 会把用户 @ 的目标变成执行窗口", () 
   assert.equal(executionWindows[0]?.anchorMessageId, mergedMessages[0]?.id);
 });
 
-test("buildChatExecutionWindows 会把 action-required-request 指向的目标变成执行窗口", () => {
+test("buildChatExecutionWindows 会把 trigger 派发指向的目标变成执行窗口", () => {
   const messages = [
     createMessage({
       id: "review-final",
       sender: "TaskReview",
       kind: "agent-final",
       content: "请补充测试说明。",
-      routingKind: "labeled",
+      response: { kind: "content" },
+      routingKind: "triggered",
       trigger: "<continue>",
       timestamp: toUtcIsoTimestamp("2026-04-25T08:00:10.000Z"),
     }),
     createMessage({
       id: "review-request",
       sender: "TaskReview",
-      kind: "action-required-request",
-      content: formatActionRequiredRequestContent("请补充测试说明。", [
+      kind: "agent-dispatch",
+      content: formatAgentDispatchContent("请补充测试说明。", [
         "Build",
       ]),
-      followUpMessageId: "review-final",
-      targetAgentIds: ["Build"],
+            targetAgentIds: ["Build"],
       timestamp: toUtcIsoTimestamp("2026-04-25T08:00:11.000Z"),
     }),
   ];
@@ -376,22 +453,24 @@ test("buildChatFeedItems 会在 final 出现后立即用普通消息替换动态
       sender: "漏洞挑战-1",
       kind: "agent-final",
       content: "当前证据不足以证明这里一定能越界写入。",
-      routingKind: "labeled",
+      routingKind: "triggered",
       trigger: "<continue>",
-      responseNote: "当前证据不足以证明这里一定能越界写入。",
-      rawResponse: "<continue> 当前证据不足以证明这里一定能越界写入。",
+      response: {
+        kind: "raw",
+        responseNote: "当前证据不足以证明这里一定能越界写入。",
+        rawResponse: "<continue> 当前证据不足以证明这里一定能越界写入。",
+      },
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:02.000Z"),
     }),
     createMessage({
       id: "challenge-request",
       sender: "漏洞挑战-1",
-      kind: "action-required-request",
-      content: formatActionRequiredRequestContent(
+      kind: "agent-dispatch",
+      content: formatAgentDispatchContent(
         "当前证据不足以证明这里一定能越界写入。",
         ["漏洞论证-1"],
       ),
-      followUpMessageId: "challenge-final",
-      targetAgentIds: ["漏洞论证-1"],
+            targetAgentIds: ["漏洞论证-1"],
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:03.000Z"),
     }),
     createMessage({
@@ -471,22 +550,24 @@ test("buildChatFeedItems 会剥离重复 trigger，但保留 final 正文与回�
       sender: "漏洞挑战-1",
       kind: "agent-final",
       content: "当前证据不足以证明这里一定能越界写入。",
-      routingKind: "labeled",
+      routingKind: "triggered",
       trigger: "<continue>",
-      responseNote: "当前证据不足以证明这里一定能越界写入。",
-      rawResponse: "<continue>\n当前证据不足以证明这里一定能越界写入。\n\n<continue>",
+      response: {
+        kind: "raw",
+        responseNote: "当前证据不足以证明这里一定能越界写入。",
+        rawResponse: "<continue>\n当前证据不足以证明这里一定能越界写入。\n\n<continue>",
+      },
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:02.000Z"),
     }),
     createMessage({
       id: "challenge-request-repeated-trigger",
       sender: "漏洞挑战-1",
-      kind: "action-required-request",
-      content: formatActionRequiredRequestContent(
+      kind: "agent-dispatch",
+      content: formatAgentDispatchContent(
         "当前证据不足以证明这里一定能越界写入。",
         ["漏洞论证-1"],
       ),
-      followUpMessageId: "challenge-final-repeated-trigger",
-      targetAgentIds: ["漏洞论证-1"],
+            targetAgentIds: ["漏洞论证-1"],
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:03.000Z"),
     }),
   ];
@@ -531,21 +612,23 @@ test("buildChatFeedItems 会保证 漏洞挑战 final 先于 漏洞论证 progre
       sender: "漏洞挑战-1",
       kind: "agent-final",
       content: "漏洞挑战最终结论",
-      routingKind: "labeled",
+      routingKind: "triggered",
       trigger: "<continue>",
-      responseNote: "漏洞挑战最终结论",
-      rawResponse: "<continue> 漏洞挑战最终结论",
+      response: {
+        kind: "raw",
+        responseNote: "漏洞挑战最终结论",
+        rawResponse: "<continue> 漏洞挑战最终结论",
+      },
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:02.000Z"),
     }),
     createMessage({
       id: "challenge-request",
       sender: "漏洞挑战-1",
-      kind: "action-required-request",
-      content: formatActionRequiredRequestContent("漏洞挑战最终结论", [
+      kind: "agent-dispatch",
+      content: formatAgentDispatchContent("漏洞挑战最终结论", [
         "漏洞论证-1",
       ]),
-      followUpMessageId: "challenge-final",
-      targetAgentIds: ["漏洞论证-1"],
+            targetAgentIds: ["漏洞论证-1"],
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:03.000Z"),
     }),
     createMessage({
@@ -611,21 +694,23 @@ test("buildChatFeedItems 会在 challenge final 后让后继 argument 进入唯�
       sender: "漏洞挑战-1",
       kind: "agent-final",
       content: "漏洞挑战最终结论",
-      routingKind: "labeled",
+      routingKind: "triggered",
       trigger: "<continue>",
-      responseNote: "漏洞挑战最终结论",
-      rawResponse: "<continue> 漏洞挑战最终结论",
+      response: {
+        kind: "raw",
+        responseNote: "漏洞挑战最终结论",
+        rawResponse: "<continue> 漏洞挑战最终结论",
+      },
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:02.000Z"),
     }),
     createMessage({
       id: "challenge-request",
       sender: "漏洞挑战-1",
-      kind: "action-required-request",
-      content: formatActionRequiredRequestContent("漏洞挑战最终结论", [
+      kind: "agent-dispatch",
+      content: formatAgentDispatchContent("漏洞挑战最终结论", [
         "漏洞论证-1",
       ]),
-      followUpMessageId: "challenge-final",
-      targetAgentIds: ["漏洞论证-1"],
+            targetAgentIds: ["漏洞论证-1"],
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:03.000Z"),
     }),
     createMessage({
@@ -727,20 +812,18 @@ test("buildChatExecutionWindows 会用 runCount 精确把 final 绑定到同一 
     createMessage({
       id: "dispatch-build-1",
       sender: "TaskReview",
-      kind: "action-required-request",
-      content: formatActionRequiredRequestContent("请补充测试", ["Build"]),
-      followUpMessageId: "review-final-1",
-      targetAgentIds: ["Build"],
+      kind: "agent-dispatch-with-runs",
+      content: formatAgentDispatchContent("请补充测试", ["Build"]),
+            targetAgentIds: ["Build"],
       targetRunCounts: [1],
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:00.000Z"),
     }),
     createMessage({
       id: "dispatch-build-2",
       sender: "QA",
-      kind: "action-required-request",
-      content: formatActionRequiredRequestContent("请补充日志", ["Build"]),
-      followUpMessageId: "qa-final-1",
-      targetAgentIds: ["Build"],
+      kind: "agent-dispatch-with-runs",
+      content: formatAgentDispatchContent("请补充日志", ["Build"]),
+            targetAgentIds: ["Build"],
       targetRunCounts: [2],
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:01.000Z"),
     }),
@@ -759,9 +842,10 @@ test("buildChatExecutionWindows 会用 runCount 精确把 final 绑定到同一 
     createMessage({
       id: "build-final-2",
       sender: "Build",
-      kind: "agent-final",
+      kind: "agent-final-with-run",
       content: "Build 第二次执行完成",
       routingKind: "default",
+      response: { kind: "content" },
       runCount: 2,
       timestamp: toUtcIsoTimestamp("2026-04-30T10:00:03.000Z"),
     }),

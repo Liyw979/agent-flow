@@ -9,21 +9,13 @@ import type {
 } from "@shared/types";
 import { getTopologyNodeRecords } from "@shared/types";
 
-export interface GraphActionRequiredRequest {
-  sourceMessageId: string;
-  trigger: string;
-  targetAgentIds: string[];
-  opinion: string;
-  agentContextContent: string;
-}
-
 export interface GatingSourceRoundState {
   currentRound: number;
   decisionPassRound: Map<string, number>;
 }
 
 export interface GatingHandoffDispatchBatchState {
-  dispatchKind: "handoff" | "labeled";
+  dispatchKind: "handoff" | "triggered";
   sourceAgentId: string;
   sourceContent: string;
   targets: string[];
@@ -49,7 +41,7 @@ export interface GraphSourceRoundState {
 }
 
 export interface GraphHandoffBatchState {
-  dispatchKind: "handoff" | "labeled";
+  dispatchKind: "handoff" | "triggered";
   sourceAgentId: string;
   sourceContent: string;
   targets: string[];
@@ -78,9 +70,7 @@ export interface GraphTaskState {
   queuedAgents: string[];
   sourceRoundStateByAgent: Record<string, GraphSourceRoundState>;
   activeHandoffBatchBySource: Record<string, GraphHandoffBatchState>;
-  pendingActionRequiredRequestsByAgent: Record<string, GraphActionRequiredRequest>;
-  pendingHandoffRepairTargetsBySource: Record<string, string[]>;
-  actionRequiredLoopCountByEdge: Record<string, number>;
+  triggerLoopCountByEdge: Record<string, number>;
   groupSequenceByRule: Record<string, number>;
   hasForwardedInitialTask: boolean;
 }
@@ -109,9 +99,7 @@ export function createEmptyGraphTaskState(input: {
     queuedAgents: [],
     sourceRoundStateByAgent: {},
     activeHandoffBatchBySource: {},
-    pendingActionRequiredRequestsByAgent: {},
-    pendingHandoffRepairTargetsBySource: {},
-    actionRequiredLoopCountByEdge: {},
+    triggerLoopCountByEdge: {},
     groupSequenceByRule: {},
     hasForwardedInitialTask: false,
   };
@@ -199,25 +187,7 @@ export function cloneGraphTaskState(state: GraphTaskState): GraphTaskState {
         },
       ]),
     ),
-    pendingActionRequiredRequestsByAgent: Object.fromEntries(
-      Object.entries(state.pendingActionRequiredRequestsByAgent).map(([agentId, request]) => [
-        agentId,
-        {
-          sourceMessageId: request.sourceMessageId,
-          trigger: request.trigger,
-          targetAgentIds: [...request.targetAgentIds],
-          opinion: request.opinion,
-          agentContextContent: request.agentContextContent,
-        },
-      ]),
-    ),
-    pendingHandoffRepairTargetsBySource: Object.fromEntries(
-      Object.entries(state.pendingHandoffRepairTargetsBySource).map(([sourceAgentId, targets]) => [
-        sourceAgentId,
-        [...targets],
-      ]),
-    ),
-    actionRequiredLoopCountByEdge: { ...state.actionRequiredLoopCountByEdge },
+    triggerLoopCountByEdge: { ...state.triggerLoopCountByEdge },
     groupSequenceByRule: { ...state.groupSequenceByRule },
     hasForwardedInitialTask: state.hasForwardedInitialTask,
   };

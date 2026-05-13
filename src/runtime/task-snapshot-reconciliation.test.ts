@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { MessageRecord, TaskAgentRecord, TaskRecord } from "@shared/types";
+import type {
+  AgentFinalMessageRecord,
+  MessageRecord,
+  TaskAgentRecord,
+  TaskRecord,
+  TopologyTrigger,
+} from "@shared/types";
 import { reconcileTaskSnapshotFromMessages } from "./task-lifecycle-rules";
 import { toUtcIsoTimestamp } from "@shared/types";
 
@@ -16,15 +22,14 @@ function createAgentFinalMessage(
   } & (
     | {
         routingKind: "default" | "invalid";
-        trigger?: never;
       }
     | {
-        routingKind: "labeled";
-        trigger: string;
+        routingKind: "triggered";
+        trigger: TopologyTrigger;
       }
   ),
-): MessageRecord {
-  const base = {
+): AgentFinalMessageRecord {
+  const base: Omit<AgentFinalMessageRecord, "routingKind" | "trigger"> = {
     id: input.id,
     taskId: "task-1",
     sender: input.sender,
@@ -36,16 +41,21 @@ function createAgentFinalMessage(
     responseNote: "",
     rawResponse: input.content,
   };
-  return input.routingKind === "labeled"
+  return input.routingKind === "triggered"
     ? {
         ...base,
-        routingKind: "labeled" as const,
+        routingKind: "triggered" as const,
         trigger: input.trigger,
-      }
+      } satisfies AgentFinalMessageRecord
+    : input.routingKind === "invalid"
+      ? {
+          ...base,
+          routingKind: "invalid",
+        } satisfies AgentFinalMessageRecord
     : {
         ...base,
-        routingKind: input.routingKind,
-      };
+        routingKind: "default",
+      } satisfies AgentFinalMessageRecord;
 }
 
 function createTaskRoundFinishedMessage(input: {
@@ -107,7 +117,7 @@ test("task-round-finished 与更晚的 agent-final 必须纠正滞后的 task/ag
       sender: "CodeReview",
       timestamp: toUtcIsoTimestamp("2026-04-21T03:48:00.819Z"),
       content: "<complete>通过</complete>",
-      routingKind: "labeled",
+      routingKind: "triggered",
       trigger: "<complete>",
     }),
     createTaskRoundFinishedMessage({

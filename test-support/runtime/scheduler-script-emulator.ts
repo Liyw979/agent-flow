@@ -8,11 +8,12 @@ import {
 
 import {
   applyAgentResultToGraphState,
-  createGraphTaskState,
   createUserDispatchDecision,
   type GraphAgentResult,
+  type GraphDispatchBatch,
   type GraphRoutingDecision,
 } from "@/runtime/gating-router";
+import { createEmptyGraphTaskState } from "@/runtime/gating-state";
 import { parseDecision, type AllowedDecisionTrigger } from "@/runtime/decision-parser";
 import { buildEffectiveTopology } from "@/runtime/runtime-topology-graph";
 import { isExecutionDecisionAgent } from "@/runtime/decision-agent-context";
@@ -30,57 +31,128 @@ import {
 type ParsedScriptLine = ParsedSchedulerScriptLine;
 type ScriptRoutingMeta =
   | {
-      routingKind: "default" | "invalid";
-      trigger?: never;
+      routingKind: "default";
     }
   | {
-      routingKind: "labeled";
+      routingKind: "invalid";
+    }
+  | {
+      routingKind: "triggered";
       trigger: string;
     };
 
-function createScriptRoutingMeta(
-  input:
-    | {
-        routingKind: "default" | "invalid";
-      }
-    | {
-        routingKind: "labeled";
-        trigger: string;
-      },
-): ScriptRoutingMeta {
-  if (input.routingKind === "labeled") {
-    return {
-      routingKind: "labeled",
-      trigger: input.trigger,
+type ExplicitDecisionTrigger =
+  | {
+      kind: "matched";
+      trigger: string;
+    }
+  | {
+      kind: "invalid";
     };
-  }
-  return {
-    routingKind: input.routingKind === "invalid" ? "invalid" : "default",
-  };
-}
 
 interface RunSchedulerScriptEmulatorOptions {
   topology: TopologyRecord;
   script: string[];
 }
 
-type GraphTaskStateLike = ReturnType<typeof createGraphTaskState>;
+type GraphTaskStateLike = ReturnType<typeof createEmptyGraphTaskState>;
 
-interface SchedulerScriptTraceStep {
+function isBatchSourceAgent(batch: GraphDispatchBatch, agentId: string): boolean {
+  return batch.source.kind === "agent" && batch.source.agentId === agentId;
+}
+
+function describeBatchSource(batch: GraphDispatchBatch): string {
+  return batch.source.kind === "agent" ? batch.source.agentId : "user";
+}
+
+type ConsumedDispatch =
+  | {
+      kind: "consumed";
+      batchId: string;
+      dispatchOwner: DispatchOwner;
+    }
+  | {
+      kind: "not_consumed";
+    };
+
+type DispatchOwner =
+  | {
+      kind: "known";
+      lineIndex: number;
+    }
+  | {
+      kind: "unknown";
+    };
+
+type DispatchOwnerEntry = {
+  batchId: string;
+  lineIndex: number;
+};
+
+type DispatchOwnerRegistry = {
+  record(batchId: string, lineIndex: number): DispatchOwnerRegistry;
+  resolve(batchId: string): DispatchOwner;
+};
+
+type ExplicitDispatch =
+  | {
+      kind: "inline_dispatch" | "dispatch_assertion";
+      targets: string[];
+      batchId: string;
+    }
+  | {
+      kind: "none";
+    };
+
+type TraceBatchRef =
+  | {
+      kind: "present";
+      batchId: string;
+    }
+  | {
+      kind: "absent";
+    };
+
+type InitialTraceStep =
+  | {
+      kind: "present";
+      step: Extract<SchedulerScriptTraceStep, { kind: "initial" }>;
+    }
+  | {
+      kind: "absent";
+    };
+
+
+interface SchedulerScriptTraceStepBase {
   lineIndex: number;
   line: ParsedScriptLine;
-  senderId: string | null;
   beforeState: GraphTaskStateLike;
-  beforeDecision: GraphRoutingDecision | null;
   afterState: GraphTaskStateLike;
   afterDecision: GraphRoutingDecision;
-  beforeBatchId: string | null;
-  afterBatchId: string | null;
-  explicitDispatchKind: "inline_dispatch" | "dispatch_assertion" | null;
-  explicitTargets: string[];
-  consumedBatchId: string | null;
-  consumedDispatchLineIndex: number | null;
 }
+
+type SchedulerScriptTraceStep =
+  | (SchedulerScriptTraceStepBase & {
+      kind: "initial";
+      line: Extract<ParsedScriptLine, { kind: "message" }>;
+      senderId: "user";
+      afterBatchId: string;
+    })
+  | (SchedulerScriptTraceStepBase & {
+      kind: "state";
+      line: Extract<ParsedScriptLine, { kind: "state" }>;
+      beforeDecision: GraphRoutingDecision;
+    })
+  | (SchedulerScriptTraceStepBase & {
+      kind: "message";
+      line: Extract<ParsedScriptLine, { kind: "message" }>;
+      senderId: string;
+      beforeDecision: GraphRoutingDecision;
+      beforeBatch: TraceBatchRef;
+      afterBatch: TraceBatchRef;
+      explicitDispatch: ExplicitDispatch;
+      consumedDispatch: ConsumedDispatch;
+    });
 
 interface SchedulerScriptTrace {
   topology: TopologyRecord;
@@ -92,12 +164,15 @@ interface SchedulerScriptTrace {
 type SchedulerScriptDecisionSnapshot =
   | {
       type: "execute_batch";
-      sourceAgentId: string | null;
+      source: GraphDispatchBatch["source"];
       targets: string[];
     }
   | {
       type: "finished";
-      finishReason?: string;
+    }
+  | {
+      type: "finished_with_reason";
+      finishReason: string;
     }
   | {
       type: "failed";
@@ -109,7 +184,7 @@ interface RequiredDispatchAssertion {
   senderId: string;
   targets: string[];
   kind: "inline_dispatch" | "dispatch_assertion";
-  batchId: string | null;
+  batchId: string;
 }
 
 interface RequiredConsumerMessage {
@@ -119,14 +194,33 @@ interface RequiredConsumerMessage {
   batchId: string;
 }
 
-interface SchedulerScriptNegativeVariant {
-  kind: "missing_target" | "missing_dispatch_line" | "missing_consumer_line" | "truncate_after_line";
-  sourceLineIndex: number;
-  removedTarget: string | null;
-  removedMessageLineIndex: number | null;
-  script: string[];
-  expectedFailureCategory: "dispatch_contract" | "consumer_contract";
-}
+type SchedulerScriptNegativeVariant =
+  | {
+      kind: "missing_target";
+      sourceLineIndex: number;
+      removedTarget: string;
+      script: string[];
+      expectedFailureCategory: "dispatch_contract";
+    }
+  | {
+      kind: "missing_dispatch_line";
+      sourceLineIndex: number;
+      script: string[];
+      expectedFailureCategory: "dispatch_contract";
+    }
+  | {
+      kind: "missing_consumer_line";
+      sourceLineIndex: number;
+      removedMessageLineIndex: number;
+      script: string[];
+      expectedFailureCategory: "consumer_contract";
+    }
+  | {
+      kind: "truncate_after_line";
+      sourceLineIndex: number;
+      script: string[];
+      expectedFailureCategory: "consumer_contract";
+    };
 
 export function dispatchAssertionTargetsCovered(
   actualTargets: string[],
@@ -164,20 +258,12 @@ export function buildUnexpectedNextSenderMessage(input: {
 }
 
 export function buildUnexpectedScriptEndMessage(input: {
-  state: ReturnType<typeof createGraphTaskState>;
+  state: ReturnType<typeof createEmptyGraphTaskState>;
   decision: GraphRoutingDecision;
 }): string {
   if (input.decision.type === "execute_batch") {
     return `脚本提前结束，当前还缺少 ${formatTargetList(getScriptVisibleDecisionTargets(input.state, input.decision))} 这批调度断言，调度状态为 ${describeDecision(input.decision)}`;
   }
-
-  if (isPendingDecisionAgentFinishedDecision(input.decision)) {
-    const pendingTargets = getAllowedPendingSendersFromFinishedDecision(input.state, input.decision);
-    if (pendingTargets.length > 0) {
-      return `脚本提前结束，当前仍在等待 ${formatTargetList(pendingTargets)}，调度状态为 ${describeDecision(input.decision)}`;
-    }
-  }
-
   return `脚本提前结束，当前调度状态为 ${describeDecision(input.decision)}`;
 }
 
@@ -189,26 +275,21 @@ export function isImplicitEmptyDispatchAssertionLine(input: {
   return input.line.body.length === 0
     && input.line.targets.length === 0
     && input.decision.type === "execute_batch"
-    && input.decision.batch.sourceAgentId === input.senderId;
+    && isBatchSourceAgent(input.decision.batch, input.senderId);
 }
 
-export function canImplicitlyFinishScript(decision: GraphRoutingDecision): boolean {
+export function canScriptEndAfterLastLine(decision: GraphRoutingDecision): boolean {
   return decision.type === "finished";
 }
 
-export function canScriptEndAfterLastLine(input: {
-  state: ReturnType<typeof createGraphTaskState>;
-  lastLine: ParsedScriptLine;
-  decision: GraphRoutingDecision;
-}): boolean {
-  if (!canImplicitlyFinishScript(input.decision)) {
-    return false;
-  }
-
-  return !(
-    isPendingDecisionAgentFinishedDecision(input.decision)
-    && getAllowedPendingSendersFromFinishedDecision(input.state, input.decision).length > 0
-  );
+function getPendingRuntimeSenders(
+  state: ReturnType<typeof createEmptyGraphTaskState>,
+): string[] {
+  return [...new Set([
+    ...state.runningAgents,
+    ...state.queuedAgents,
+    ...Object.values(state.activeHandoffBatchBySource).flatMap((batch) => batch.pendingTargets),
+  ])];
 }
 
 export function shouldRequireSourceDispatchAssertion(input: {
@@ -217,15 +298,14 @@ export function shouldRequireSourceDispatchAssertion(input: {
   nextSenderId: string;
 }): boolean {
   return input.decision.type === "execute_batch"
-    && input.decision.batch.sourceAgentId !== null
-    && input.decision.batch.sourceAgentId !== input.currentSenderId
-    && input.decision.batch.jobs.every((job) => job.kind !== "action_required_request")
+    && input.decision.batch.source.kind === "agent"
+    && input.decision.batch.source.agentId !== input.currentSenderId
     && input.decision.batch.jobs.some((job) => job.agentId === input.nextSenderId);
 }
 
 function collectActualTransitionTargets(input: {
   transitions: Array<ScriptRoutingMeta & {
-    state: ReturnType<typeof createGraphTaskState>;
+    state: ReturnType<typeof createEmptyGraphTaskState>;
     decision: GraphRoutingDecision;
   }>;
   senderId: string;
@@ -246,54 +326,25 @@ function collectActualTransitionTargets(input: {
   ];
 }
 
-function isPendingDecisionAgentFinishedDecision(
-  decision: GraphRoutingDecision,
-): decision is Extract<GraphRoutingDecision, { type: "finished" }> {
-  return decision.type === "finished"
-    && (decision.finishReason === "wait_pending_decision_agents" || decision.finishReason === "no_runnable_agents");
-}
-
-export function getAllowedPendingSendersFromFinishedDecision(
-  state: ReturnType<typeof createGraphTaskState>,
-  _decision: Extract<GraphRoutingDecision, { type: "finished" }>,
-): string[] {
-  return [
-    ...new Set(
-      Object.values(state.activeHandoffBatchBySource).flatMap((batch) => batch.pendingTargets),
-    ),
-  ];
-}
-
 export function preferWaitingDecisionCandidatesForPendingNextSender<T extends {
   result: GraphAgentResult;
-  state: ReturnType<typeof createGraphTaskState>;
+  state: ReturnType<typeof createEmptyGraphTaskState>;
   decision: GraphRoutingDecision;
 }>(input: {
   candidates: T[];
   nextSenderId: string;
 }): T[] {
-  const pendingDecisionAgentCandidates = input.candidates.filter((candidate) =>
-    isPendingDecisionAgentFinishedDecision(candidate.decision)
-    && getAllowedPendingSendersFromFinishedDecision(candidate.state, candidate.decision).includes(input.nextSenderId)
+  const waitingCandidates = input.candidates.filter((candidate) =>
+    getPendingRuntimeSenders(candidate.state).includes(input.nextSenderId)
   );
-  if (pendingDecisionAgentCandidates.length === 0) {
-    return input.candidates;
-  }
-
-  const preferredLabeled = pendingDecisionAgentCandidates.filter((candidate) =>
-    candidate.result.routingKind === "labeled"
-  );
-  return preferredLabeled.length > 0 ? preferredLabeled : pendingDecisionAgentCandidates;
+  return waitingCandidates.length > 0 ? waitingCandidates : input.candidates;
 }
 
 function createTraceBatchIdFactory() {
   let nextId = 1;
   const ids = new Map<GraphRoutingDecision, string>();
 
-  return (decision: GraphRoutingDecision | null): string | null => {
-    if (!decision || decision.type !== "execute_batch") {
-      return null;
-    }
+  return (decision: Extract<GraphRoutingDecision, { type: "execute_batch" }>): string => {
     const existing = ids.get(decision);
     if (existing) {
       return existing;
@@ -305,6 +356,61 @@ function createTraceBatchIdFactory() {
   };
 }
 
+function resolveRequiredBatchId(
+  decision: GraphRoutingDecision,
+  resolveBatchId: (decision: Extract<GraphRoutingDecision, { type: "execute_batch" }>) => string,
+): string {
+  if (decision.type !== "execute_batch") {
+    assert.fail(`期望 execute_batch，实际是 ${describeDecision(decision)}`);
+  }
+  return resolveBatchId(decision);
+}
+
+function requireScriptLine(lines: ParsedScriptLine[], index: number): ParsedScriptLine {
+  const line = lines[index];
+  if (!line) {
+    assert.fail(`第 ${index + 1} 条脚本不存在`);
+  }
+  return line;
+}
+
+function requireRawScriptLine(script: string[], index: number): string {
+  const line = script[index];
+  if (!line) {
+    assert.fail(`第 ${index + 1} 条原始脚本不存在`);
+  }
+  return line;
+}
+
+function requireArrayItem<T>(items: T[], index: number, description: string): T {
+  const item = items[index];
+  if (!item) {
+    assert.fail(`${description} 不存在：${index}`);
+  }
+  return item;
+}
+
+function getNextScriptLine(lines: ParsedScriptLine[], index: number): ParsedScriptLine | null {
+  return lines[index] ?? null;
+}
+
+function createDispatchOwnerRegistry(
+  entries: readonly DispatchOwnerEntry[],
+): DispatchOwnerRegistry {
+  return {
+    record: (batchId, lineIndex) => createDispatchOwnerRegistry([
+      ...entries,
+      { batchId, lineIndex },
+    ]),
+    resolve: (batchId) => entries.reduce<DispatchOwner>(
+      (resolved, entry) => resolved.kind === "known" || entry.batchId !== batchId
+        ? resolved
+        : { kind: "known", lineIndex: entry.lineIndex },
+      { kind: "unknown" },
+    ),
+  };
+}
+
 async function runSchedulerScriptInternal(
   options: RunSchedulerScriptEmulatorOptions,
 ): Promise<SchedulerScriptTrace> {
@@ -313,88 +419,76 @@ async function runSchedulerScriptInternal(
   const resolveBatchId = createTraceBatchIdFactory();
   // 这里只记录 trace 归因信息，方便把“某个 batch 来自哪条脚本行”映射回报错文案；
   // 真正的调度状态始终只来自 graph core 返回的 state / decision。
-  const explicitDispatchOwnerByBatchId = new Map<string, number>();
-  const latestExplicitBatchIdBySource = new Map<string, string>();
+  let dispatchOwnerRegistry = createDispatchOwnerRegistry([]);
 
-  const firstLine = lines[0];
-  assert.notEqual(firstLine, undefined, "脚本不能为空");
-  assert.equal(firstLine?.kind, "message", "第一条脚本必须是 user 消息");
-  assert.equal(firstLine?.sender, "user", "第一条脚本必须是 user: @Agent ...");
+  const firstLine = requireScriptLine(lines, 0);
+  if (firstLine.kind !== "message") {
+    assert.fail("第一条脚本必须是 user 消息");
+  }
+  const firstMessageLine = firstLine;
+  if (firstMessageLine.sender !== "user") {
+    assert.fail("第一条脚本必须是 user: @Agent ...");
+  }
 
-  const initialTarget = extractLeadingMention(firstLine.body);
+  const initialTarget = extractLeadingMention(firstMessageLine.body);
   assert.ok(initialTarget, "第一条 user 消息必须以 @Agent 开头");
 
-  let state = createGraphTaskState({
+  let state = createEmptyGraphTaskState({
     taskId: "scheduler-script-emulator",
     topology: options.topology,
   });
   let currentDecision = createUserDispatchDecision(state, {
     targetAgentId: initialTarget,
-    content: stripLeadingMention(firstLine.body),
+    content: stripLeadingMention(firstMessageLine.body),
   });
-  assertExecuteBatchTargets(currentDecision, [initialTarget], firstLine.raw);
+  assertExecuteBatchTargets(currentDecision, [initialTarget], firstMessageLine.raw);
 
   steps.push({
+    kind: "initial",
     lineIndex: 0,
-    line: firstLine,
+    line: firstMessageLine,
     senderId: "user",
     beforeState: state,
-    beforeDecision: null,
     afterState: state,
     afterDecision: currentDecision,
-    beforeBatchId: null,
-    afterBatchId: resolveBatchId(currentDecision),
-    explicitDispatchKind: null,
-    explicitTargets: [],
-    consumedBatchId: null,
-    consumedDispatchLineIndex: null,
+    afterBatchId: resolveRequiredBatchId(currentDecision, resolveBatchId),
   });
 
   for (let index = 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    assert.notEqual(line, undefined, `第 ${index + 1} 条脚本不存在`);
-    const ensuredLine = line!;
+    const ensuredLine = requireScriptLine(lines, index);
     const beforeState = state;
     const beforeDecision = currentDecision;
-    const beforeBatchId = resolveBatchId(beforeDecision);
+    const beforeBatch: TraceBatchRef = beforeDecision.type === "execute_batch"
+      ? { kind: "present", batchId: resolveBatchId(beforeDecision) }
+      : { kind: "absent" };
 
     if (ensuredLine.kind === "state") {
       assert.equal(index, lines.length - 1, "state 行只能出现在脚本最后");
       assert.equal(currentDecision.type, "finished", `期望最终状态为 finished，实际是 ${describeDecision(currentDecision)}`);
       steps.push({
+        kind: "state",
         lineIndex: index,
         line: ensuredLine,
-        senderId: null,
         beforeState,
         beforeDecision,
         afterState: state,
         afterDecision: currentDecision,
-        beforeBatchId,
-        afterBatchId: resolveBatchId(currentDecision),
-        explicitDispatchKind: null,
-        explicitTargets: [],
-        consumedBatchId: null,
-        consumedDispatchLineIndex: null,
       });
       continue;
     }
 
     const senderId = resolveScriptAgentId(state, ensuredLine.sender);
-    let consumedBatchId = beforeDecision.type === "execute_batch"
+    const consumedBatch: TraceBatchRef = beforeDecision.type === "execute_batch"
       && beforeDecision.batch.jobs.some((job) => job.agentId === senderId)
-      ? beforeBatchId
-      : null;
-    if (consumedBatchId === null && isPendingDecisionAgentFinishedDecision(beforeDecision)) {
-      const matchedSourceIds = Object.values(beforeState.activeHandoffBatchBySource)
-        .filter((batch) => batch.pendingTargets.includes(senderId))
-        .map((batch) => batch.sourceAgentId);
-      if (matchedSourceIds.length === 1) {
-        consumedBatchId = latestExplicitBatchIdBySource.get(matchedSourceIds[0] ?? "") ?? null;
-      }
-    }
-    const consumedDispatchLineIndex = consumedBatchId
-      ? explicitDispatchOwnerByBatchId.get(consumedBatchId) ?? null
-      : null;
+      ? beforeBatch
+      : { kind: "absent" };
+    const consumedDispatch: ConsumedDispatch = consumedBatch.kind === "present"
+      ? {
+          kind: "consumed",
+          batchId: consumedBatch.batchId,
+          dispatchOwner: dispatchOwnerRegistry.resolve(consumedBatch.batchId),
+        }
+      : { kind: "not_consumed" };
     if (isImplicitEmptyDispatchAssertionLine({
       line: ensuredLine,
       senderId,
@@ -419,9 +513,9 @@ async function runSchedulerScriptInternal(
         `${ensuredLine.raw} 期望断言 execute_batch，实际是 ${describeDecision(currentDecision)}`,
       );
       assert.equal(
-        currentDecision.batch.sourceAgentId,
+        currentDecision.batch.source.kind === "agent" ? currentDecision.batch.source.agentId : "",
         senderId,
-        `${ensuredLine.raw} 的 sender 不是当前调度批次的 source，实际 source 为 ${currentDecision.batch.sourceAgentId ?? "null"}`,
+        `${ensuredLine.raw} 的 sender 不是当前调度批次的 source，实际 source 为 ${describeBatchSource(currentDecision.batch)}`,
       );
       const actualTargets = getScriptVisibleDecisionTargets(state, currentDecision);
       assert.equal(
@@ -433,16 +527,11 @@ async function runSchedulerScriptInternal(
           actualTargets,
         }),
       );
-      if (beforeBatchId) {
-        explicitDispatchOwnerByBatchId.set(beforeBatchId, index);
-        const sourceAgentId = currentDecision.type === "execute_batch"
-          ? currentDecision.batch.sourceAgentId
-          : null;
-        if (sourceAgentId) {
-          latestExplicitBatchIdBySource.set(sourceAgentId, beforeBatchId);
-        }
+      if (beforeBatch.kind === "present") {
+        dispatchOwnerRegistry = dispatchOwnerRegistry.record(beforeBatch.batchId, index);
       }
       steps.push({
+        kind: "message",
         lineIndex: index,
         line: ensuredLine,
         senderId,
@@ -450,12 +539,12 @@ async function runSchedulerScriptInternal(
         beforeDecision,
         afterState: state,
         afterDecision: currentDecision,
-        beforeBatchId,
-        afterBatchId: beforeBatchId,
-        explicitDispatchKind: "dispatch_assertion",
-        explicitTargets: actualTargets,
-        consumedBatchId,
-        consumedDispatchLineIndex,
+        beforeBatch,
+        afterBatch: beforeBatch,
+        explicitDispatch: beforeBatch.kind === "present"
+          ? { kind: "dispatch_assertion", targets: actualTargets, batchId: beforeBatch.batchId }
+          : { kind: "none" },
+        consumedDispatch,
       });
       continue;
     }
@@ -466,7 +555,7 @@ async function runSchedulerScriptInternal(
       ensuredLine.raw,
     );
 
-    const nextLine = lines[index + 1] ?? null;
+    const nextLine = getNextScriptLine(lines, index + 1);
     const decisionResolution = applyMessageLineAndMatchDecision({
       state,
       line: ensuredLine,
@@ -477,7 +566,18 @@ async function runSchedulerScriptInternal(
 
     state = decisionResolution.state;
     currentDecision = decisionResolution.decision;
-    const decisionRouting = createScriptRoutingMeta(decisionResolution);
+    const decisionRouting: ScriptRoutingMeta = decisionResolution.routingKind === "triggered"
+      ? {
+          routingKind: "triggered",
+          trigger: decisionResolution.trigger,
+        }
+      : decisionResolution.routingKind === "invalid"
+        ? {
+            routingKind: "invalid",
+          }
+        : {
+            routingKind: "default",
+          };
     const explicitTargets = ensuredLine.targets.length > 0
       ? resolveActualTransitionTargets(
         decisionResolution.state,
@@ -486,14 +586,14 @@ async function runSchedulerScriptInternal(
         decisionRouting,
       )
       : [];
-    const afterBatchId = resolveBatchId(currentDecision);
-    if (ensuredLine.targets.length > 0 && afterBatchId) {
-      explicitDispatchOwnerByBatchId.set(afterBatchId, index);
-      if (currentDecision.type === "execute_batch" && currentDecision.batch.sourceAgentId) {
-        latestExplicitBatchIdBySource.set(currentDecision.batch.sourceAgentId, afterBatchId);
-      }
+    const afterBatch: TraceBatchRef = currentDecision.type === "execute_batch"
+      ? { kind: "present", batchId: resolveBatchId(currentDecision) }
+      : { kind: "absent" };
+    if (ensuredLine.targets.length > 0 && afterBatch.kind === "present") {
+      dispatchOwnerRegistry = dispatchOwnerRegistry.record(afterBatch.batchId, index);
     }
     steps.push({
+      kind: "message",
       lineIndex: index,
       line: ensuredLine,
       senderId,
@@ -501,22 +601,17 @@ async function runSchedulerScriptInternal(
       beforeDecision,
       afterState: state,
       afterDecision: currentDecision,
-      beforeBatchId,
-      afterBatchId,
-      explicitDispatchKind: ensuredLine.targets.length > 0 ? "inline_dispatch" : null,
-      explicitTargets,
-      consumedBatchId,
-      consumedDispatchLineIndex,
+      beforeBatch,
+      afterBatch,
+      explicitDispatch: ensuredLine.targets.length > 0 && afterBatch.kind === "present"
+        ? { kind: "inline_dispatch", targets: explicitTargets, batchId: afterBatch.batchId }
+        : { kind: "none" },
+      consumedDispatch,
     });
   }
 
-  const lastLine = lines[lines.length - 1]!;
   assert.equal(
-    canScriptEndAfterLastLine({
-      state,
-      lastLine,
-      decision: currentDecision,
-    }),
+    canScriptEndAfterLastLine(currentDecision),
     true,
     buildUnexpectedScriptEndMessage({
       state,
@@ -541,15 +636,14 @@ export function collectDecisionSnapshots(
     if (step.afterDecision.type === "execute_batch") {
       return {
         type: "execute_batch",
-        sourceAgentId: step.afterDecision.batch.sourceAgentId,
+        source: step.afterDecision.batch.source,
         targets: getScriptVisibleDecisionTargets(step.afterState, step.afterDecision),
       };
     }
     if (step.afterDecision.type === "finished") {
-      return {
-        type: "finished",
-        ...(step.afterDecision.finishReason ? { finishReason: step.afterDecision.finishReason } : {}),
-      };
+      return step.afterDecision.finishReason
+        ? { type: "finished_with_reason", finishReason: step.afterDecision.finishReason }
+        : { type: "finished" };
     }
     return {
       type: "failed",
@@ -562,18 +656,16 @@ export function collectRequiredDispatchAssertions(
   trace: SchedulerScriptTrace,
 ): RequiredDispatchAssertion[] {
   return trace.steps.flatMap((step) => {
-    if (step.line.kind !== "message" || step.senderId === null || step.explicitDispatchKind === null) {
+    if (step.kind !== "message" || step.explicitDispatch.kind === "none") {
       return [];
     }
 
     return [{
       lineIndex: step.lineIndex,
       senderId: step.senderId,
-      targets: [...step.explicitTargets],
-      kind: step.explicitDispatchKind,
-      batchId: step.explicitDispatchKind === "dispatch_assertion"
-        ? step.beforeBatchId
-        : step.afterBatchId,
+      targets: [...step.explicitDispatch.targets],
+      kind: step.explicitDispatch.kind,
+      batchId: step.explicitDispatch.batchId,
     }];
   });
 }
@@ -581,29 +673,26 @@ export function collectRequiredDispatchAssertions(
 export function collectRequiredConsumerMessages(
   trace: SchedulerScriptTrace,
 ): RequiredConsumerMessage[] {
-  const dispatchByBatchId = new Map<string, {
-    lineIndex: number;
-  }>();
-  for (const dispatch of collectRequiredDispatchAssertions(trace)) {
-    if (dispatch.batchId) {
-      dispatchByBatchId.set(dispatch.batchId, {
-        lineIndex: dispatch.lineIndex,
-      });
-    }
-  }
-  const initialStep = trace.steps[0];
-  if (initialStep?.line.kind === "message" && initialStep.afterBatchId) {
-    dispatchByBatchId.set(initialStep.afterBatchId, {
-      lineIndex: initialStep.lineIndex,
-    });
-  }
+  const initialStep = getInitialTraceStep(trace);
+  const requiredDispatches = createDispatchOwnerRegistry([
+    ...collectRequiredDispatchAssertions(trace).map((dispatch) => ({
+      batchId: dispatch.batchId,
+      lineIndex: dispatch.lineIndex,
+    })),
+    ...(initialStep.kind === "present"
+      ? [{
+          batchId: initialStep.step.afterBatchId,
+          lineIndex: initialStep.step.lineIndex,
+        }]
+      : []),
+  ]);
 
   return trace.steps.flatMap((step) => {
-    if (step.line.kind !== "message" || step.senderId === null || !step.consumedBatchId) {
+    if (step.kind !== "message" || step.consumedDispatch.kind !== "consumed") {
       return [];
     }
-    const dispatch = dispatchByBatchId.get(step.consumedBatchId);
-    if (!dispatch) {
+    const dispatch = requiredDispatches.resolve(step.consumedDispatch.batchId);
+    if (dispatch.kind === "unknown") {
       return [];
     }
 
@@ -611,9 +700,17 @@ export function collectRequiredConsumerMessages(
       dispatchLineIndex: dispatch.lineIndex,
       consumerLineIndex: step.lineIndex,
       consumerAgentId: step.senderId,
-      batchId: step.consumedBatchId,
+      batchId: step.consumedDispatch.batchId,
     }];
   });
+}
+
+function getInitialTraceStep(trace: SchedulerScriptTrace): InitialTraceStep {
+  const step = trace.steps[0];
+  if (!step || step.kind !== "initial") {
+    return { kind: "absent" };
+  }
+  return { kind: "present", step };
 }
 
 function buildMissingTargetVariant(input: {
@@ -622,7 +719,7 @@ function buildMissingTargetVariant(input: {
   removedTargetIndex: number;
   removedTarget: string;
 }): SchedulerScriptNegativeVariant {
-  const parsedLine = parseSchedulerScriptLine(input.script[input.lineIndex] ?? "");
+  const parsedLine = parseSchedulerScriptLine(requireRawScriptLine(input.script, input.lineIndex));
   assert.equal(parsedLine.kind, "message", `第 ${input.lineIndex + 1} 行必须是消息行`);
   const nextTargets = parsedLine.targets.filter((_, index) => index !== input.removedTargetIndex);
   const nextLine = formatSchedulerScriptMessageLine({
@@ -636,7 +733,6 @@ function buildMissingTargetVariant(input: {
     kind: "missing_target",
     sourceLineIndex: input.lineIndex,
     removedTarget: input.removedTarget,
-    removedMessageLineIndex: null,
     script: nextScript,
     expectedFailureCategory: "dispatch_contract",
   };
@@ -649,8 +745,6 @@ function buildMissingDispatchLineVariant(input: {
   return {
     kind: "missing_dispatch_line",
     sourceLineIndex: input.sourceLineIndex,
-    removedTarget: null,
-    removedMessageLineIndex: null,
     script: input.script.filter((_, index) => index !== input.sourceLineIndex),
     expectedFailureCategory: "dispatch_contract",
   };
@@ -664,11 +758,32 @@ function buildMissingConsumerLineVariant(input: {
   return {
     kind: "missing_consumer_line",
     sourceLineIndex: input.sourceLineIndex,
-    removedTarget: null,
     removedMessageLineIndex: input.removedMessageLineIndex,
     script: input.script.filter((_, index) => index !== input.removedMessageLineIndex),
     expectedFailureCategory: "consumer_contract",
   };
+}
+
+function shouldBuildMissingConsumerLineVariant(input: {
+  trace: SchedulerScriptTrace;
+  consumer: RequiredConsumerMessage;
+}): boolean {
+  const previousStep = input.trace.steps.find((step) =>
+    step.lineIndex === input.consumer.consumerLineIndex - 1
+  );
+  if (!previousStep || previousStep.afterDecision.type !== "execute_batch") {
+    return true;
+  }
+  const nextStep = input.trace.steps.find((step) =>
+    step.lineIndex === input.consumer.consumerLineIndex + 1
+  );
+  if (!nextStep || nextStep.line.kind !== "message") {
+    return true;
+  }
+  const nextSenderId = resolveScriptAgentId(nextStep.beforeState, nextStep.line.sender);
+  return !previousStep.afterDecision.batch.jobs.some((job) =>
+    job.agentId === nextSenderId
+  );
 }
 
 function buildTruncateAfterLineVariant(input: {
@@ -678,8 +793,6 @@ function buildTruncateAfterLineVariant(input: {
   return {
     kind: "truncate_after_line",
     sourceLineIndex: input.sourceLineIndex,
-    removedTarget: null,
-    removedMessageLineIndex: null,
     script: input.script.slice(0, input.sourceLineIndex + 1),
     expectedFailureCategory: "consumer_contract",
   };
@@ -694,14 +807,14 @@ export function buildDispatchOmissionVariants(input: {
   const consumerMessages = collectRequiredConsumerMessages(input.trace);
 
   for (const dispatch of dispatchAssertions) {
-    const parsedLine = parseSchedulerScriptLine(input.script[dispatch.lineIndex] ?? "");
+    const parsedLine = parseSchedulerScriptLine(requireRawScriptLine(input.script, dispatch.lineIndex));
     assert.equal(parsedLine.kind, "message", `第 ${dispatch.lineIndex + 1} 行必须是消息行`);
     parsedLine.targets.forEach((_, targetIndex) => {
       variants.push(buildMissingTargetVariant({
         script: input.script,
         lineIndex: dispatch.lineIndex,
         removedTargetIndex: targetIndex,
-        removedTarget: dispatch.targets[targetIndex] ?? parsedLine.targets[targetIndex] ?? "",
+        removedTarget: requireArrayItem(dispatch.targets, targetIndex, "待删除的 dispatch target"),
       }));
     });
 
@@ -714,22 +827,20 @@ export function buildDispatchOmissionVariants(input: {
   }
 
   for (const consumer of consumerMessages) {
-    variants.push(buildMissingConsumerLineVariant({
-      script: input.script,
-      sourceLineIndex: consumer.dispatchLineIndex,
-      removedMessageLineIndex: consumer.consumerLineIndex,
-    }));
+    if (shouldBuildMissingConsumerLineVariant({ trace: input.trace, consumer })) {
+      variants.push(buildMissingConsumerLineVariant({
+        script: input.script,
+        sourceLineIndex: consumer.dispatchLineIndex,
+        removedMessageLineIndex: consumer.consumerLineIndex,
+      }));
+    }
   }
 
   for (const step of input.trace.steps) {
     if (step.lineIndex >= input.script.length - 1) {
       continue;
     }
-    if (canScriptEndAfterLastLine({
-      state: step.afterState,
-      lastLine: step.line,
-      decision: step.afterDecision,
-    })) {
+    if (canScriptEndAfterLastLine(step.afterDecision)) {
       continue;
     }
     variants.push(buildTruncateAfterLineVariant({
@@ -745,10 +856,10 @@ function getAutoDerivedNegativeFailurePattern(
   variant: SchedulerScriptNegativeVariant,
 ): RegExp {
   if (variant.expectedFailureCategory === "consumer_contract") {
-    return /脚本提前结束|当前仍在等待|当前还缺少|下一条回应 Agent 不匹配|脚本包含 \[|sender 不在当前 execute_batch 目标里|sender 不在当前等待中的 pending targets 里|无法继续推进|没有显式给出 @|并没有显式给出 @|调度目标不匹配|decision 决策无法唯一推断|trigger 路由无法唯一推断/u;
+    return /脚本提前结束|当前还缺少|下一条回应 Agent 不匹配|脚本包含 \[|sender 不在当前 execute_batch 目标里|无法继续推进|没有显式给出 @|并没有显式给出 @|调度目标不匹配|decision 决策无法唯一推断|trigger 路由无法唯一推断/u;
   }
 
-  return /调度目标不匹配|脚本包含 \[|没有显式给出 @|execute_batch|脚本提前结束|当前仍在等待|当前还缺少|不存在的 Agent|下一条回应 Agent 不匹配|decision 决策无法唯一推断|trigger 路由无法唯一推断/u;
+  return /调度目标不匹配|脚本包含 \[|没有显式给出 @|execute_batch|脚本提前结束|当前还缺少|不存在的 Agent|下一条回应 Agent 不匹配|decision 决策无法唯一推断|trigger 路由无法唯一推断/u;
 }
 
 export async function assertAutoDerivedNegativeScripts(
@@ -782,7 +893,7 @@ export async function assertAutoDerivedNegativeScripts(
 }
 
 function resolveScriptAgentId(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   rawName: string,
 ): string {
   const effectiveTopology = buildEffectiveTopology(state);
@@ -810,7 +921,7 @@ function resolveScriptAgentId(
 }
 
 function resolveScriptTargetNameForComparison(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   rawName: string,
 ): string {
   try {
@@ -824,13 +935,16 @@ function resolveScriptTargetNameForComparison(
 }
 
 function assertSenderAllowed(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   senderId: string,
   decision: GraphRoutingDecision,
   rawLine: string,
 ): void {
   if (decision.type === "execute_batch") {
     const actualTargets = decision.batch.jobs.map((job) => job.agentId);
+    if (getPendingRuntimeSenders(state).includes(senderId)) {
+      return;
+    }
     assert.ok(
       actualTargets.includes(senderId),
       buildUnexpectedNextSenderMessage({
@@ -841,17 +955,7 @@ function assertSenderAllowed(
     );
     return;
   }
-
-  if (isPendingDecisionAgentFinishedDecision(decision)) {
-    const pendingTargets = getAllowedPendingSendersFromFinishedDecision(state, decision);
-    assert.ok(
-      pendingTargets.includes(senderId),
-      buildUnexpectedNextSenderMessage({
-        rawLine,
-        actualSenderId: senderId,
-        simulatedTargets: pendingTargets,
-      }),
-    );
+  if (getPendingRuntimeSenders(state).includes(senderId)) {
     return;
   }
 
@@ -888,7 +992,7 @@ function describeDecision(decision: GraphRoutingDecision): string {
 }
 
 function describeDecisionWithVisibleTargets(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   decision: GraphRoutingDecision,
 ): string {
   if (decision.type === "execute_batch") {
@@ -903,18 +1007,18 @@ function describeDecisionWithVisibleTargets(
 }
 
 function applyMessageLineAndMatchDecision(input: {
-  state: ReturnType<typeof createGraphTaskState>;
+  state: ReturnType<typeof createEmptyGraphTaskState>;
   line: Extract<ParsedScriptLine, { kind: "message" }>;
   senderId: string;
   topology: TopologyRecord;
   nextLine: ParsedScriptLine | null;
 }): {
-  state: ReturnType<typeof createGraphTaskState>;
+  state: ReturnType<typeof createEmptyGraphTaskState>;
   decision: GraphRoutingDecision;
 } & ScriptRoutingMeta {
   const executableAgentId = input.senderId;
   const decisionAgent = isExecutionDecisionAgent({
-    state: input.state,
+    state: { kind: "available", value: input.state },
     topology: input.topology,
     runtimeAgentId: input.senderId,
     executableAgentId,
@@ -924,37 +1028,37 @@ function applyMessageLineAndMatchDecision(input: {
     : [];
   const explicitDecisionTrigger = decisionAgent
     ? resolveExplicitDecisionTriggerFromLine(input.line.body, allowedDecisionTriggers)
-    : null;
+    : { kind: "invalid" as const };
 
   const matchedCandidates: Array<{
     result: GraphAgentResult;
-    state: ReturnType<typeof createGraphTaskState>;
+    state: ReturnType<typeof createEmptyGraphTaskState>;
     decision: GraphRoutingDecision;
   }> = [];
   const attemptedTransitions: Array<ScriptRoutingMeta & {
-    state: ReturnType<typeof createGraphTaskState>;
+    state: ReturnType<typeof createEmptyGraphTaskState>;
     decision: GraphRoutingDecision;
   }> = [];
   const attemptedDecisions: string[] = [];
 
-  const candidateTransitions = explicitDecisionTrigger
-    ? [{ routingKind: "labeled" as const, trigger: explicitDecisionTrigger }]
+  const candidateTransitions = explicitDecisionTrigger.kind === "matched"
+    ? [{ routingKind: "triggered" as const, trigger: explicitDecisionTrigger.trigger }]
     : decisionAgent
       ? resolveCandidateDecisionTriggers(input.state, input.senderId).map((trigger) => ({
-        routingKind: "labeled" as const,
+        routingKind: "triggered" as const,
         trigger,
       }))
       : [{ routingKind: "default" as const }];
 
   for (const candidateTransition of candidateTransitions) {
     const messageIdSuffix = "trigger" in candidateTransition ? candidateTransition.trigger : "<default>";
-    const result: GraphAgentResult = candidateTransition.routingKind === "labeled"
+    const result: GraphAgentResult = candidateTransition.routingKind === "triggered"
       ? {
           agentId: input.senderId,
           messageId: `script:${input.senderId}:${messageIdSuffix}`,
           status: "completed",
           decisionAgent,
-          routingKind: "labeled",
+          routingKind: "triggered",
           trigger: candidateTransition.trigger,
           agentStatus: "completed",
           agentContextContent: input.line.body,
@@ -975,8 +1079,16 @@ function applyMessageLineAndMatchDecision(input: {
           signalDone: false,
         };
     const reduced = applyAgentResultToGraphState(input.state, result);
+    const candidateRouting: ScriptRoutingMeta = candidateTransition.routingKind === "triggered"
+      ? {
+          routingKind: "triggered",
+          trigger: candidateTransition.trigger,
+        }
+      : {
+          routingKind: "default",
+        };
     attemptedTransitions.push({
-      ...createScriptRoutingMeta(candidateTransition),
+      ...candidateRouting,
       state: reduced.state,
       decision: reduced.decision,
     });
@@ -991,7 +1103,7 @@ function applyMessageLineAndMatchDecision(input: {
       state: reduced.state,
       routingDecision: reduced.decision,
       senderId: input.senderId,
-      ...createScriptRoutingMeta(candidateTransition),
+      ...candidateRouting,
       decisionAgent,
     })) {
       continue;
@@ -1062,10 +1174,11 @@ function applyMessageLineAndMatchDecision(input: {
       );
     }
     if (
-      input.nextLine?.kind === "message"
+      input.nextLine && input.nextLine.kind === "message"
       && attemptedTransitions.length > 0
       && attemptedTransitions.every((transition) =>
-        transition.decision.type === "finished" && transition.decision.finishReason !== "wait_pending_decision_agents"
+        transition.decision.type === "finished"
+        && getPendingRuntimeSenders(transition.state).length === 0
       )
     ) {
       assert.fail(
@@ -1083,18 +1196,23 @@ function applyMessageLineAndMatchDecision(input: {
     `${input.line.raw} 的 trigger 路由无法唯一推断。实际候选为 [${attemptedDecisions.join("; ")}]`,
   );
 
-  const chosen = disambiguatedCandidates[0]!;
+  const chosen = requireArrayItem(disambiguatedCandidates, 0, "唯一匹配的 trigger 路由候选");
   if (input.line.targets.length > 0) {
     const expectedTargets = input.line.targets.map((target) =>
       resolveScriptTargetNameForComparison(chosen.state, target)
     );
     const actualTargets = chosen.decision.type === "execute_batch"
       ? getScriptVisibleDecisionTargets(chosen.state, chosen.decision)
-      : resolveDeferredDecisionTargets(
-        chosen.state,
-        input.senderId,
-        createScriptRoutingMeta(chosen.result),
-      );
+      : chosen.result.routingKind === "triggered"
+        ? resolveDeferredDecisionTargets(
+          chosen.state,
+          input.senderId,
+          {
+            routingKind: "triggered",
+            trigger: chosen.result.trigger,
+          },
+        )
+        : [];
     assert.equal(
       arraysEqual(actualTargets, expectedTargets),
       true,
@@ -1106,29 +1224,41 @@ function applyMessageLineAndMatchDecision(input: {
     );
   }
 
+  const chosenRouting: ScriptRoutingMeta = chosen.result.routingKind === "triggered"
+    ? {
+        routingKind: "triggered",
+        trigger: chosen.result.trigger,
+      }
+    : chosen.result.routingKind === "invalid"
+      ? {
+          routingKind: "invalid",
+        }
+      : {
+          routingKind: "default",
+        };
   if (chosen.decision.type === "execute_batch") {
     return {
       state: chosen.state,
       decision: chosen.decision,
-      ...createScriptRoutingMeta(chosen.result),
+      ...chosenRouting,
     };
   }
 
   return {
     state: chosen.state,
     decision: chosen.decision,
-    ...createScriptRoutingMeta(chosen.result),
+    ...chosenRouting,
   };
 }
 
 function disambiguateDecisionCandidates<T extends {
   result: GraphAgentResult;
-  state: ReturnType<typeof createGraphTaskState>;
+  state: ReturnType<typeof createEmptyGraphTaskState>;
   decision: GraphRoutingDecision;
 }>(input: {
   candidates: T[];
   line: Extract<ParsedScriptLine, { kind: "message" }>;
-  state: ReturnType<typeof createGraphTaskState>;
+  state: ReturnType<typeof createEmptyGraphTaskState>;
   senderId: string;
   nextLine: ParsedScriptLine | null;
 }): T[] {
@@ -1137,31 +1267,33 @@ function disambiguateDecisionCandidates<T extends {
     return candidates;
   }
 
-  if (nextLine?.kind === "message" && !isDispatchAssertionLine(nextLine)) {
+  if (nextLine && nextLine.kind === "message" && !isDispatchAssertionLine(nextLine)) {
+    const nextMessageLine = nextLine;
     const sourceOnly = candidates.filter((candidate) => {
       let nextSenderId: string;
       try {
-        nextSenderId = resolveScriptAgentId(candidate.state, nextLine.sender);
+        nextSenderId = resolveScriptAgentId(candidate.state, nextMessageLine.sender);
       } catch {
         return false;
       }
       return candidate.decision.type === "execute_batch"
-        && candidate.decision.batch.sourceAgentId === nextSenderId
+        && isBatchSourceAgent(candidate.decision.batch, nextSenderId)
         && !getScriptVisibleDecisionTargets(candidate.state, candidate.decision).includes(nextSenderId);
     });
     if (sourceOnly.length > 0) {
       return sourceOnly;
     }
+    const resolvedCandidate = candidates.find((candidate) => {
+      try {
+        resolveScriptAgentId(candidate.state, nextMessageLine.sender);
+        return true;
+      } catch {
+        return false;
+      }
+    });
     const nextSenderId = resolveScriptAgentId(
-      candidates.find((candidate) => {
-        try {
-          resolveScriptAgentId(candidate.state, nextLine.sender);
-          return true;
-        } catch {
-          return false;
-        }
-      })?.state ?? state,
-      nextLine.sender,
+      resolvedCandidate ? resolvedCandidate.state : state,
+      nextMessageLine.sender,
     );
     const preferredWaitingCandidates = preferWaitingDecisionCandidatesForPendingNextSender({
       candidates,
@@ -1178,10 +1310,21 @@ function disambiguateDecisionCandidates<T extends {
         candidate.state,
         candidate.decision,
         senderId,
-        createScriptRoutingMeta(candidate.result),
+        candidate.result.routingKind === "triggered"
+          ? {
+              routingKind: "triggered",
+              trigger: candidate.result.trigger,
+            }
+          : candidate.result.routingKind === "invalid"
+            ? {
+                routingKind: "invalid",
+              }
+            : {
+                routingKind: "default",
+              },
       )
     );
-    const firstTargets = actualTargetGroups[0] ?? [];
+    const firstTargets = requireArrayItem(actualTargetGroups, 0, "第一组实际目标");
     const sameImmediateTargets = actualTargetGroups.every((targets) =>
       arraysEqual(targets, firstTargets)
     );
@@ -1204,7 +1347,14 @@ function disambiguateDecisionCandidates<T extends {
       resolveDeferredDecisionTargets(
         state,
         senderId,
-        createScriptRoutingMeta(candidate.result),
+        candidate.result.routingKind === "triggered"
+          ? {
+              routingKind: "triggered",
+              trigger: candidate.result.trigger,
+            }
+          : {
+              routingKind: "default",
+            },
       ),
       expectedTargets,
     )
@@ -1215,7 +1365,7 @@ function disambiguateDecisionCandidates<T extends {
 export function matchesExpectedTransition(input: {
   line: Extract<ParsedScriptLine, { kind: "message" }>;
   nextLine: ParsedScriptLine | null;
-  state: ReturnType<typeof createGraphTaskState>;
+  state: ReturnType<typeof createEmptyGraphTaskState>;
   routingDecision: GraphRoutingDecision;
   senderId: string;
   decisionAgent: boolean;
@@ -1236,18 +1386,16 @@ export function matchesExpectedTransition(input: {
       if (hasHiddenDecisionTargets) {
         return false;
       }
-      if (input.routingDecision.batch.sourceAgentId !== input.senderId) {
+      if (!isBatchSourceAgent(input.routingDecision.batch, input.senderId)) {
         return false;
       }
       const actualTargets = getScriptVisibleDecisionTargets(input.state, input.routingDecision);
       return arraysEqual(actualTargets, expectedTargets);
     }
-    return isPendingDecisionAgentFinishedDecision(input.routingDecision)
-      && deferredDecisionTargets.length > 0
-      && arraysEqual(expectedTargets, deferredDecisionTargets);
+    return false;
   }
 
-  if (input.nextLine?.kind === "message") {
+  if (input.nextLine && input.nextLine.kind === "message") {
     if (isDispatchAssertionLine(input.nextLine)) {
       if (input.routingDecision.type !== "execute_batch") {
         return false;
@@ -1264,22 +1412,30 @@ export function matchesExpectedTransition(input: {
       );
     }
     if (input.decisionAgent && input.routingDecision.type === "execute_batch") {
+      const executeBatchDecision = input.routingDecision;
       if (hasHiddenDecisionTargets) {
         return false;
       }
       const nextSenderId = resolveScriptAgentId(input.state, input.nextLine.sender);
       if (shouldRequireSourceDispatchAssertion({
         currentSenderId: input.senderId,
-        decision: input.routingDecision,
+        decision: executeBatchDecision,
         nextSenderId,
       })) {
         return false;
       }
-      const actualTargets = getScriptVisibleDecisionTargets(input.state, input.routingDecision);
-      if (input.routingDecision.batch.sourceAgentId === nextSenderId) {
+      const actualTargets = getScriptVisibleDecisionTargets(input.state, executeBatchDecision);
+      if (isBatchSourceAgent(executeBatchDecision.batch, nextSenderId)) {
         return !actualTargets.includes(nextSenderId);
       }
       return actualTargets.includes(nextSenderId);
+    }
+    const nextSenderId = resolveScriptAgentId(input.state, input.nextLine.sender);
+    if (
+      input.routingDecision.type === "finished"
+      && getPendingRuntimeSenders(input.state).includes(nextSenderId)
+    ) {
+      return true;
     }
   }
 
@@ -1287,18 +1443,15 @@ export function matchesExpectedTransition(input: {
     return false;
   }
 
-  if (input.nextLine?.kind === "state" && input.nextLine.value === "finished") {
+  if (input.nextLine && input.nextLine.kind === "state" && input.nextLine.value === "finished") {
     return input.routingDecision.type === "finished";
   }
 
-  if (input.nextLine?.kind === "message") {
+  if (input.nextLine && input.nextLine.kind === "message") {
     const nextSenderId = resolveScriptAgentId(input.state, input.nextLine.sender);
-    if (isPendingDecisionAgentFinishedDecision(input.routingDecision)) {
-      return getAllowedPendingSendersFromFinishedDecision(input.state, input.routingDecision).includes(nextSenderId);
-    }
     if (
       input.routingDecision.type === "execute_batch"
-      && (input.routingDecision.batch.sourceAgentId !== input.senderId || input.decisionAgent)
+      && (!isBatchSourceAgent(input.routingDecision.batch, input.senderId) || input.decisionAgent)
     ) {
       if (hasHiddenDecisionTargets) {
         return false;
@@ -1308,7 +1461,7 @@ export function matchesExpectedTransition(input: {
     return false;
   }
 
-  if (input.nextLine === null) {
+  if (!input.nextLine) {
     return input.routingDecision.type === "finished";
   }
 
@@ -1323,11 +1476,11 @@ function arraysEqual(left: string[], right: string[]): boolean {
 }
 
 function resolveDeferredDecisionTargets(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   senderId: string,
   routing: ScriptRoutingMeta,
 ): string[] {
-  if (routing.routingKind !== "labeled") {
+  if (routing.routingKind !== "triggered") {
     return [];
   }
 
@@ -1340,7 +1493,7 @@ function resolveDeferredDecisionTargets(
 }
 
 function resolveActualTransitionTargets(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   decision: GraphRoutingDecision,
   senderId: string,
   routing: ScriptRoutingMeta,
@@ -1352,7 +1505,7 @@ function resolveActualTransitionTargets(
 }
 
 function resolveCandidateDecisionTriggers(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   senderId: string,
 ): string[] {
   const topology = buildEffectiveTopology(state);
@@ -1366,7 +1519,7 @@ function resolveCandidateDecisionTriggers(
 }
 
 function resolveAllowedDecisionTriggersForScript(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   senderId: string,
 ): AllowedDecisionTrigger[] {
   const topology = buildEffectiveTopology(state);
@@ -1383,12 +1536,12 @@ function resolveAllowedDecisionTriggersForScript(
 function resolveExplicitDecisionTriggerFromLine(
   content: string,
   allowedTriggers: readonly AllowedDecisionTrigger[],
-): string | null {
+): ExplicitDecisionTrigger {
   const parsed = parseDecision(content, true, allowedTriggers);
   if (parsed.kind === "invalid") {
-    return null;
+    return { kind: "invalid" };
   }
-  return parsed.trigger;
+  return { kind: "matched", trigger: parsed.trigger };
 }
 
 function isDirectTransitionFromSender(
@@ -1396,12 +1549,12 @@ function isDirectTransitionFromSender(
   decision: GraphRoutingDecision,
 ): boolean {
   return decision.type === "execute_batch"
-    ? decision.batch.sourceAgentId === senderId
+    ? isBatchSourceAgent(decision.batch, senderId)
     : true;
 }
 
 function getScriptVisibleDecisionTargets(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   decision: Extract<GraphRoutingDecision, { type: "execute_batch" }>,
 ): string[] {
   return decision.batch.jobs
@@ -1410,7 +1563,7 @@ function getScriptVisibleDecisionTargets(
 }
 
 function getStrictHiddenDecisionTargets(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   decision: Extract<GraphRoutingDecision, { type: "execute_batch" }>,
 ): string[] {
   return decision.batch.jobs
@@ -1419,22 +1572,23 @@ function getStrictHiddenDecisionTargets(
 }
 
 function isImplicitScriptHiddenTarget(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   agentId: string,
 ): boolean {
   return agentId === LANGGRAPH_END_NODE_ID || isCompletedGroupRuntimeTarget(state, agentId);
 }
 
 function isCompletedGroupRuntimeTarget(
-  state: ReturnType<typeof createGraphTaskState>,
+  state: ReturnType<typeof createEmptyGraphTaskState>,
   agentId: string,
 ): boolean {
   const runtimeNode = state.runtimeNodes.find((node) => node.id === agentId);
-  if (!runtimeNode?.groupId) {
+  if (!runtimeNode) {
     return false;
   }
+  const groupId = runtimeNode.groupId;
   return state.groupActivations.some((activation) =>
     activation.dispatched
-    && activation.completedBundleGroupIds.includes(runtimeNode.groupId ?? ""),
+    && activation.completedBundleGroupIds.includes(groupId),
   );
 }

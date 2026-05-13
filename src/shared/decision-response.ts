@@ -80,34 +80,6 @@ function normalizeDecisionSignalTokens(
   }));
 }
 
-function stripKnownDecisionSignalTokens(
-  content: string,
-  allowedTriggers: readonly string[] = EMPTY_ALLOWED_TRIGGERS,
-): string {
-  return normalizeDecisionSignalTokens(allowedTriggers).reduce(
-    (current, token) => current.split(token.start).join("").split(token.end).join(""),
-    content,
-  );
-}
-
-export function stripLeadingDecisionResponseLabel(
-  content: string,
-  allowedTriggers: readonly string[] = EMPTY_ALLOWED_TRIGGERS,
-): string {
-  return stripKnownDecisionSignalTokens(content, allowedTriggers).trim();
-}
-
-export function extractLastDecisionResponse(
-  content: string,
-  allowedTriggers: readonly string[] = EMPTY_ALLOWED_TRIGGERS,
-): string {
-  const parsed = extractTrailingDecisionSignalBlock(content, allowedTriggers);
-  if (parsed.kind === "missing") {
-    return "";
-  }
-  return parsed.response;
-}
-
 export function extractTrailingDecisionSignalBlock(
   content: string,
   allowedTriggers: readonly string[] = EMPTY_ALLOWED_TRIGGERS,

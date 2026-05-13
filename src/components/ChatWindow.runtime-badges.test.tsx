@@ -118,6 +118,7 @@ function createWorkspaceAndTask(): {
         target: "疑点辩论",
         trigger: "<continue>",
         messageMode: "last" as const,
+        maxTriggerRounds: 4,
       },
     ],
     nodeRecords: [
@@ -166,12 +167,14 @@ function createWorkspaceAndTask(): {
             targetRole: "讨论总结",
             trigger: "<complete>",
             messageMode: "last" as const,
+            maxTriggerRounds: 4,
           },
           {
             sourceRole: "漏洞论证",
             targetRole: "讨论总结",
             trigger: "<complete>",
             messageMode: "last" as const,
+            maxTriggerRounds: 4,
           },
         ],
         exitWhen: "all_completed",
@@ -180,7 +183,7 @@ function createWorkspaceAndTask(): {
           templateName: "线索发现",
           trigger: "<default>" as const,
           messageMode: "none" as const,
-          maxTriggerRounds: false,
+          maxTriggerRounds: -1,
         },
       },
     ],
@@ -232,7 +235,7 @@ function createWorkspaceAndTask(): {
         taskId: "task-chat-window-runtime-badges",
         opencodeSessionId: "session-challenge-1",
         opencodeAttachBaseUrl: "http://localhost:4310",
-        status: "action_required",
+        status: "failed",
         runCount: 1,
       },
       {
@@ -291,12 +294,12 @@ test("ChatWindow 只根据消息流展示运行中面板与最终消息", async 
         id: "build-progress",
         taskId: task.task.id,
         sender: "Build",
-        content: "Build 正在继续处理",
+        content: "Build 正在执行中",
         timestamp: toUtcIsoTimestamp("2026-04-29T10:00:01.000Z"),
         kind: "agent-progress",
         activityKind: "thinking",
         label: "思考",
-        detail: "Build 正在继续处理",
+        detail: "Build 正在执行中",
         detailState: "not_applicable",
         sessionId: "session-build",
         runCount: 1,
@@ -342,7 +345,7 @@ test("ChatWindow 只根据消息流展示运行中面板与最终消息", async 
 
     const text = container.textContent ?? "";
     assert.equal(container.querySelectorAll('[aria-label="运行中"]').length, 1);
-    assert.match(text, /Build 正在继续处理/);
+    assert.match(text, /Build 正在执行中/);
     assert.match(text, /QA 校验失败/);
 
     const copyButton = Array.from(container.querySelectorAll("button")).find(
@@ -361,7 +364,7 @@ test("ChatWindow 只根据消息流展示运行中面板与最终消息", async 
     assert.match(copiedTranscript, /@Build @QA 请处理本轮问题/);
     assert.match(copiedTranscript, /发现第 1 个可疑点：这里需要进入对抗讨论。/);
     assert.match(copiedTranscript, /QA 校验失败/);
-    assert.doesNotMatch(copiedTranscript, /Build 正在继续处理/);
+    assert.doesNotMatch(copiedTranscript, /Build 正在执行中/);
   } finally {
     await act(async () => {
       root.unmount();

@@ -54,14 +54,14 @@ function link(
   to: string,
   trigger: `<${string}>`,
   message_type: "none" | "last",
-  maxTriggerRounds?: number,
+  maxTriggerRounds = 4,
 ) {
   return {
     from,
     to,
     trigger,
     message_type,
-    ...(typeof maxTriggerRounds === "number" ? { maxTriggerRounds } : {}),
+    maxTriggerRounds,
   };
 }
 
@@ -69,12 +69,14 @@ function endLink(
   from: string,
   trigger: `<${string}>`,
   message_type: "none" | "last",
+  maxTriggerRounds = 4,
 ) {
   return {
     from,
     to: "__end__" as const,
     trigger,
     message_type,
+    maxTriggerRounds,
   };
 }
 
@@ -158,9 +160,9 @@ test("compileTeamDsl 支持把 group + 全局 links DSL 编译成 agents + topol
     ],
   );
   assert.deepEqual(compiled.topology.edges, [
-    { source: "BA", target: "Build", trigger: "<default>", messageMode: "last" },
-    { source: "Build", target: "SecurityResearcher", trigger: "<default>", messageMode: "last" },
-    { source: "SecurityResearcher", target: "Build", trigger: "<continue>", messageMode: "last" },
+    { source: "BA", target: "Build", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 },
+    { source: "Build", target: "SecurityResearcher", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 },
+    { source: "SecurityResearcher", target: "Build", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
   ]);
 });
 
@@ -336,13 +338,13 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出 group 辩论拓扑", (
       source: "疑点辩论",
       target: "线索发现",
       trigger: "<default>",
-      messageMode: "none",
+      messageMode: "none", maxTriggerRounds: 4,
     },
     {
       source: "线索发现",
       target: "线索完备性评估",
       trigger: "<complete>",
-      messageMode: "last",
+      messageMode: "last", maxTriggerRounds: 4,
     },
     {
       source: "线索完备性评估",
@@ -366,8 +368,8 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出 group 辩论拓扑", (
   assert.deepEqual(firstRule.edges, [
     { sourceRole: "漏洞论证", targetRole: "漏洞挑战", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
     { sourceRole: "漏洞挑战", targetRole: "漏洞论证", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
-    { sourceRole: "漏洞论证", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last" },
-    { sourceRole: "漏洞挑战", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last" },
+    { sourceRole: "漏洞论证", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last", maxTriggerRounds: 4 },
+    { sourceRole: "漏洞挑战", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last", maxTriggerRounds: 4 },
   ]);
 });
 
@@ -533,13 +535,13 @@ test("compileTeamDsl 会为子 group 与孙 group 推导稳定的 entryRole、so
       sourceRole: "InnerEntry",
       targetRole: "Leaf",
       trigger: "<inner-next>",
-      messageMode: "last",
+      messageMode: "last", maxTriggerRounds: 4,
     },
     {
       sourceRole: "Leaf",
       targetRole: "InnerEntry",
       trigger: "<leaf-report>",
-      messageMode: "none",
+      messageMode: "none", maxTriggerRounds: 4,
     },
   ]);
   assert.deepEqual(innerReportRule.report, {
@@ -547,7 +549,7 @@ test("compileTeamDsl 会为子 group 与孙 group 推导稳定的 entryRole、so
     sourceRole: "InnerEntry",
     trigger: "<inner-report>",
     messageMode: "none",
-    maxTriggerRounds: false,
+    maxTriggerRounds: 4,
   });
 
   assert.deepEqual(leafRule?.members, [
@@ -561,7 +563,7 @@ test("compileTeamDsl 会为子 group 与孙 group 推导稳定的 entryRole、so
       sourceRole: "LeafWorker",
       targetRole: "LeafSummary",
       trigger: "<leaf-complete>",
-      messageMode: "last",
+      messageMode: "last", maxTriggerRounds: 4,
     },
   ]);
   assert.deepEqual(leafReportRule.report, {
@@ -569,7 +571,7 @@ test("compileTeamDsl 会为子 group 与孙 group 推导稳定的 entryRole、so
     sourceRole: "LeafSummary",
     trigger: "<leaf-report>",
     messageMode: "none",
-    maxTriggerRounds: false,
+    maxTriggerRounds: 4,
   });
 });
 
@@ -588,7 +590,8 @@ test("compileTeamDsl 会拒绝在 link 上声明 initialMessage", () => {
             to: "B",
             trigger: "<complete>",
             message_type: "last",
-            initialMessage: ["A"],
+            maxTriggerRounds: 4,
+initialMessage: ["A"],
           },
         ],
       }),
@@ -609,50 +612,69 @@ test("compileTeamDsl 会拒绝非法 maxTriggerRounds，而不是偷偷取整或
           link("线索发现", "疑点辩论", "<continue>", "last", 0),
         ],
       }),
-    /maxTriggerRounds 必须是大于等于 1 的整数/u,
+    /maxTriggerRounds 必须是 -1 或大于等于 1 的整数/u,
   );
 });
 
-test("compileTeamDsl 会拒绝空白包裹的 <default> 搭配 maxTriggerRounds", () => {
-  assert.throws(
-    () =>
-      compileTeamDsl({
-        entry: "Judge",
-        nodes: [
-          agentNode("Judge", "你负责普通流转。", false),
-          agentNode("Build", "", true),
-        ],
-        links: [
-          {
-            from: "Judge",
-            to: "Build",
-            trigger: " <default> ",
-            message_type: "last",
-            maxTriggerRounds: 3,
-          },
-        ],
-      }),
-    /只有 action-required trigger 才允许声明 maxTriggerRounds/u,
-  );
+test("compileTeamDsl 会规范化带空白的 <default> trigger，并保留 maxTriggerRounds", () => {
+  const compiled = compileTeamDsl({
+    entry: "Judge",
+    nodes: [
+      agentNode("Judge", "你负责普通流转。", false),
+      agentNode("Build", "", true),
+    ],
+    links: [
+      {
+        from: "Judge",
+        to: "Build",
+        trigger: " <default> ",
+        message_type: "last",
+        maxTriggerRounds: 3,
+      },
+    ],
+  });
+
+  assert.deepEqual(compiled.topology.edges, [
+    {
+      source: "Judge",
+      target: "Build",
+      trigger: "<default>",
+      messageMode: "last",
+      maxTriggerRounds: 3,
+    },
+  ]);
 });
 
-test("compileTeamDsl 会拒绝同一 source 把同一个 trigger 同时用于 labeled 和 action_required", () => {
-  assert.throws(
-    () =>
-      compileTeamDsl({
-        entry: "Judge",
-        nodes: [
-          agentNode("Judge", promptWithTriggers("你负责判定。", "<same>"), false),
-          agentNode("Build", "", true),
-          agentNode("Summary", "你负责总结。", false),
-        ],
-        links: [
-          link("Judge", "Build", "<same>", "last", 2),
-          link("Judge", "Summary", "<same>", "last"),
-        ],
-      }),
-    /同一 source 不允许把同一个 trigger 同时用于 action_required 和 labeled/u,
-  );
+test("compileTeamDsl 允许同一 source 把同一个 trigger 派发到多个下游", () => {
+  const compiled = compileTeamDsl({
+    entry: "Judge",
+    nodes: [
+      agentNode("Judge", promptWithTriggers("你负责判定。", "<same>"), false),
+      agentNode("Build", "", true),
+      agentNode("Summary", "你负责总结。", false),
+    ],
+    links: [
+      link("Judge", "Build", "<same>", "last", 2),
+      link("Judge", "Summary", "<same>", "last", 2),
+    ],
+  });
+
+  assert.deepEqual(compiled.topology.edges, [
+    {
+      source: "Judge",
+      target: "Build",
+      trigger: "<same>",
+      messageMode: "last",
+      maxTriggerRounds: 2,
+    },
+    {
+      source: "Judge",
+      target: "Summary",
+      trigger: "<same>",
+      messageMode: "last",
+      maxTriggerRounds: 2,
+    },
+  ]);
 });
 
 test("compileTeamDsl 会拒绝 source system_prompt 未显式声明自定义 outgoing trigger", () => {
@@ -731,7 +753,7 @@ test("matchesAppliedTeamDslAgents 会把 agent 一致但拓扑不同识别为只
     matchesAppliedTeamDslTopology(
       {
         nodes: ["Build", "BA", "CodeReview", "UnitTest", "TaskReview"],
-        edges: [{ source: "Build", target: "BA", trigger: "<default>", messageMode: "last" }],
+        edges: [{ source: "Build", target: "BA", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 }],
         nodeRecords: buildTopologyNodeRecords({
           nodes: ["Build", "BA", "CodeReview", "UnitTest", "TaskReview"],
           groupNodeIds: new Set(),

@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { TopologyRecord } from "@shared/types";
 
-import { createGraphTaskState } from "./gating-router";
+import { createEmptyGraphTaskState } from "./gating-state";
 import { materializeRuntimeGroupAgentsForItems } from "./gating-group";
 import { compileTeamDsl, type TeamDslDefinition } from "./team-dsl";
 
@@ -18,7 +18,7 @@ function createGroupTopology(): TopologyRecord {
       { id: "Summary模板", kind: "agent", templateName: "Summary模板", initialMessageRouting: { mode: "inherit" } },
     ],
     edges: [
-      { source: "线索发现", target: "漏洞疑点辩论", trigger: "<default>", messageMode: "last" },
+      { source: "线索发现", target: "漏洞疑点辩论", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 },
     ],
     groupRules: [
       {
@@ -32,10 +32,10 @@ function createGroupTopology(): TopologyRecord {
           { role: "summary", templateName: "Summary模板" },
         ],
         edges: [
-          { sourceRole: "pro", targetRole: "con", trigger: "<continue>", messageMode: "last" },
-          { sourceRole: "con", targetRole: "pro", trigger: "<continue>", messageMode: "last" },
-          { sourceRole: "pro", targetRole: "summary", trigger: "<complete>", messageMode: "last" },
-          { sourceRole: "con", targetRole: "summary", trigger: "<complete>", messageMode: "last" },
+          { sourceRole: "pro", targetRole: "con", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
+          { sourceRole: "con", targetRole: "pro", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
+          { sourceRole: "pro", targetRole: "summary", trigger: "<complete>", messageMode: "last", maxTriggerRounds: 4 },
+          { sourceRole: "con", targetRole: "summary", trigger: "<complete>", messageMode: "last", maxTriggerRounds: 4 },
         ],
         exitWhen: "one_side_agrees",
         report: {
@@ -43,7 +43,7 @@ function createGroupTopology(): TopologyRecord {
           templateName: "线索发现",
           trigger: "<default>",
           messageMode: "last",
-          maxTriggerRounds: false,
+          maxTriggerRounds: -1,
         },
       },
     ],
@@ -72,13 +72,14 @@ function link(
   to: string,
   trigger: `<${string}>`,
   message_type: "none" | "last",
+  maxTriggerRounds = 4,
 ) {
-  return { from, to, trigger, message_type };
+  return { from, to, trigger, message_type, maxTriggerRounds };
 }
 
 test("materializeRuntimeGroupAgentsForItems 会把 finding 批量实例化进 GraphTaskState", () => {
   const topology = createGroupTopology();
-  const state = createGraphTaskState({
+  const state = createEmptyGraphTaskState({
     taskId: "task-group-1",
     topology,
   });
@@ -121,7 +122,7 @@ test("materializeRuntimeGroupAgentsForItems 展开嵌套 group 时会继承父�
       link("OuterEntry", "Sink", "<outer-report>", "none"),
     ],
   }).topology;
-  const state = createGraphTaskState({
+  const state = createEmptyGraphTaskState({
     taskId: "task-nested-group-runtime",
     topology,
   });
@@ -154,7 +155,7 @@ test("materializeRuntimeGroupAgentsForItems 展开嵌套 group 时会继承父�
       source: "OuterEntry-1",
       target: "InnerEntry-2",
       trigger: "<outer-next>",
-      messageMode: "last",
+      messageMode: "last", maxTriggerRounds: 4,
     },
   );
   assert.deepEqual(
@@ -163,7 +164,7 @@ test("materializeRuntimeGroupAgentsForItems 展开嵌套 group 时会继承父�
       source: "InnerSummary-2",
       target: "OuterEntry-1",
       trigger: "<inner-report>",
-      messageMode: "none",
+      messageMode: "none", maxTriggerRounds: 4,
     },
   );
   assert.equal(state.runtimeNodes.find((node) => node.id === "InnerEntry-2")?.sourceNodeId, "OuterEntry-1");

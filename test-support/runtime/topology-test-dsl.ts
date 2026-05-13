@@ -1,23 +1,25 @@
 import {
   buildTopologyNodeRecords,
   DEFAULT_TOPOLOGY_TRIGGER,
+  type GroupRule,
   LANGGRAPH_END_NODE_ID,
   LANGGRAPH_START_NODE_ID,
-  normalizeActionRequiredMaxRounds,
+  normalizeMaxTriggerRounds,
   normalizeTopologyEdgeTrigger,
-  type GroupRule,
   type TopologyEdge,
   type TopologyEdgeTrigger,
-  type TopologyNodeRecord,
   type TopologyLangGraphRecord,
+  type TopologyNodeRecord,
   type TopologyRecord,
 } from "@shared/types";
+
+const REQUIRED_MAX_TRIGGER_ROUNDS = 4;
 
 type TriggerConfig =
   | TopologyEdgeTrigger
   | {
       trigger: TopologyEdgeTrigger;
-      maxTriggerRounds?: number;
+      maxTriggerRounds: number;
     };
 type DownstreamMode = TriggerConfig | "group";
 
@@ -77,6 +79,7 @@ function buildEdges(input: CreateTopologyInput): TopologyEdge[] {
           target,
           trigger: DEFAULT_TOPOLOGY_TRIGGER,
           messageMode: "last",
+          maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS,
         });
         continue;
       }
@@ -87,9 +90,9 @@ function buildEdges(input: CreateTopologyInput): TopologyEdge[] {
           typeof mode === "string" ? mode : mode.trigger,
         ),
         messageMode: "last",
-        ...(typeof mode === "object" && typeof mode.maxTriggerRounds === "number"
-          ? { maxTriggerRounds: normalizeActionRequiredMaxRounds(mode.maxTriggerRounds) }
-          : {}),
+        maxTriggerRounds: normalizeMaxTriggerRounds(
+          typeof mode === "object" ? mode.maxTriggerRounds : REQUIRED_MAX_TRIGGER_ROUNDS,
+        ),
       });
     }
   }
@@ -180,7 +183,7 @@ function buildGroupRules(input: CreateTopologyInput): GroupRule[] {
         templateName: config.reportTo,
         trigger: DEFAULT_TOPOLOGY_TRIGGER,
         messageMode: "last",
-        maxTriggerRounds: false,
+        maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS,
       },
     };
   });
@@ -224,12 +227,11 @@ export function createTopology(
   const nodeRecords = buildNodeRecords(nodes, input);
   const groupRules = buildGroupRules(input);
 
-  const topology: TopologyRecord = {
+  return {
     nodes,
     edges,
     nodeRecords,
-    ...(langgraph ? { langgraph } : {}),
-    ...(groupRules.length > 0 ? { groupRules } : {}),
+    ...(langgraph ? {langgraph} : {}),
+    ...(groupRules.length > 0 ? {groupRules} : {}),
   };
-  return topology;
 }

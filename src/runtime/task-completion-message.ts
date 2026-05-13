@@ -14,5 +14,5 @@ export function buildTaskCompletionMessageContent(input: {
     return failureReason;
   }
 
-  return `Task「${input.taskTitle}」已结束，本轮仍有待继续处理的问题，或执行过程已中断。请直接查看群聊中最近一条失败消息，并继续处理状态为“继续处理”或“执行失败”的 Agent。`;
+  return `Task「${input.taskTitle}」已结束。本轮存在失败或中断，请直接查看群聊中最近一条失败消息，并检查状态为“执行失败”的 Agent。`;
 }

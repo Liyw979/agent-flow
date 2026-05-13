@@ -153,7 +153,6 @@ function MessageBubble({
   const hasTaskCreated = message.kinds.includes("task-created");
   const hasTaskCompleted = message.kinds.includes("task-completed");
   const hasTaskRoundFinished = message.kinds.includes("task-round-finished");
-  const hasActionRequiredRequest = message.kinds.includes("action-required-request");
   const hasTopologyBlocked = message.kinds.includes("topology-blocked");
   const agentColor = isAgent ? getAgentColorToken(message.sender) : null;
   const senderLabel = isUser ? null : getChatSenderLabel(message.sender);
@@ -210,7 +209,6 @@ function MessageBubble({
         hasTaskCreated && "border border-border/70 bg-muted/70 text-foreground",
         hasTaskCompleted && "border border-primary/20 bg-primary/10 text-foreground",
         hasTaskRoundFinished && "border border-primary/20 bg-primary/10 text-foreground",
-        hasActionRequiredRequest && "border border-secondary/60 bg-secondary/15 text-foreground",
         hasTopologyBlocked && "border border-primary/40 bg-primary/10 text-foreground",
         isSystem && message.kinds.length === 0 && "bg-muted text-foreground",
         isAgent && "shadow-sm",

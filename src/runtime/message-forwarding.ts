@@ -1,12 +1,10 @@
 import {
   extractAgentFinalDisplayContent,
-  getActionRequiredRequestDisplayBody,
 } from "../lib/chat-messages";
 import {
   getMessageTargetAgentIds,
   getMessageSenderDisplayName,
   isAgentFinalMessageRecord,
-  isActionRequiredRequestMessageRecord,
   type InitialMessageRouting,
   type MessageRecord,
   type TopologyEdgeMessageMode,
@@ -352,13 +350,7 @@ function matchesAgentIdOrAliases(
 
 
 function isForwardableInitialSourceMessage(message: MinimalMessage): boolean {
-  if (isAgentFinalMessageRecord(message)) {
-    return message.content.trim().length > 0;
-  }
-  if (isActionRequiredRequestMessageRecord(message)) {
-    return message.content.trim().length > 0;
-  }
-  return false;
+  return isAgentFinalMessageRecord(message) && message.content.trim().length > 0;
 }
 
 function matchesForwardingMessageAgentAlias(message: MinimalMessage, alias: string): boolean {
@@ -388,11 +380,6 @@ function normalizeForwardableMessageContent(message: MinimalMessage): string {
   if (isAgentFinalMessageRecord(message)) {
     return stripTrailingStandaloneMentions(
       extractAgentFinalDisplayContent(message),
-    );
-  }
-  if (message.kind === "action-required-request") {
-    return stripTrailingStandaloneMentions(
-      getActionRequiredRequestDisplayBody(message),
     );
   }
   return stripTrailingStandaloneMentions(message.content.trim());

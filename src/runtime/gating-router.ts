@@ -1,44 +1,46 @@
 import {
-  DEFAULT_TOPOLOGY_TRIGGER,
-  DEFAULT_ACTION_REQUIRED_MAX_ROUNDS,
-  getActionRequiredEdgeLoopLimit,
-  getTopologyNodeRecords,
+  getTriggerEdgeLoopLimit,
   getGroupRules,
-  isActionRequiredTopologyTrigger,
   isDefaultTopologyTrigger,
   normalizeTopologyEdgeTrigger,
   resolveTriggerRoutingKindForSource,
   type AgentStatus,
+  type TopologyLangGraphEndIncoming,
   type TopologyRecord,
 } from "@shared/types";
 
-import { resolveActionRequiredRequestContinuationAction } from "./gating-rules";
 import {
   GatingScheduler,
   type GatingAgentState,
-  type GatingBatchContinuation,
   type GatingDispatchPlan,
-  type GatingRepairBatchContinuation,
 } from "./gating-scheduler";
 import {
   applySchedulerRuntimeToGraphState,
   cloneGraphTaskState,
-  createEmptyGraphTaskState,
   graphStateToSchedulerRuntime,
-  type GraphActionRequiredRequest,
   type GraphTaskState,
 } from "./gating-state";
-import { buildEffectiveTopology, ensureRuntimeAgentStatuses } from "./runtime-topology-graph";
+import { materializeRuntimeGroupAgentsForItems } from "./gating-group";
 import {
-  buildGroupItemId,
-  getNextGroupSequence,
+  buildEffectiveTopology,
+  ensureRuntimeAgentStatuses,
   getGroupRuleEntryRuntimeNodeIds,
   getGroupRuleIdForNode,
+  getNextGroupSequence,
   getRuntimeTemplateName,
   isGroupNode,
 } from "./runtime-topology-graph";
-import { compileTopology } from "./topology-compiler";
-import { materializeRuntimeGroupAgentsForItems } from "./gating-group";
+
+type HandoffOptions =
+  | {
+      kind: "all_targets";
+      advanceSourceRound: boolean;
+    }
+  | {
+      kind: "restricted";
+      restrictTargets: Set<string>;
+      advanceSourceRound: boolean;
+    };
 
 interface GraphRawDispatchJob {
   agentId: string;
@@ -55,7 +57,7 @@ interface GraphTransferDispatchJob {
   kind: "transfer";
 }
 
-interface GraphLabeledDispatchJob {
+interface GraphTriggeredDispatchJob {
   agentId: string;
   sourceAgentId: string;
   sourceMessageId: string;
@@ -64,38 +66,35 @@ interface GraphLabeledDispatchJob {
   kind: "dispatch";
 }
 
-interface GraphActionRequiredDispatchJob {
-  agentId: string;
-  sourceAgentId: string;
-  sourceMessageId: string;
-  sourceContent: string;
-  displayContent: string;
-  kind: "action_required_request";
-}
-
 type GraphDispatchJob =
   | GraphRawDispatchJob
   | GraphTransferDispatchJob
-  | GraphLabeledDispatchJob;
+  | GraphTriggeredDispatchJob;
 
-type GraphDispatchJobEntry = GraphDispatchJob | GraphActionRequiredDispatchJob;
+type GraphDispatchBatchSource =
+  | {
+      kind: "user";
+    }
+  | {
+      kind: "agent";
+      agentId: string;
+    };
 
 interface GraphDispatchBatchBase {
-  routingKind: "default" | "labeled";
-  sourceAgentId: string | null;
+  routingKind: "default" | "triggered";
+  source: GraphDispatchBatchSource;
   sourceContent: string;
   displayContent: string;
-  jobs: GraphDispatchJobEntry[];
+  jobs: GraphDispatchJob[];
   triggerTargets: string[];
 }
 
 export type GraphDispatchBatch =
   | (GraphDispatchBatchBase & {
       routingKind: "default";
-      trigger?: never;
     })
   | (GraphDispatchBatchBase & {
-      routingKind: "labeled";
+      routingKind: "triggered";
       trigger: string;
     });
 
@@ -113,6 +112,24 @@ export type GraphRoutingDecision =
       errorMessage: string;
     };
 
+type DispatchPlanResult =
+  | {
+      kind: "planned";
+      plan: GatingDispatchPlan;
+    }
+  | {
+      kind: "empty";
+    };
+
+type GroupActivationResult =
+  | {
+      kind: "activated";
+      content: string;
+    }
+  | {
+      kind: "not_ready";
+    };
+
 interface GraphAgentResultBase {
   agentId: string;
   messageId: string;
@@ -128,36 +145,21 @@ export type GraphAgentResult =
   | (GraphAgentResultBase & {
       status: "failed";
       routingKind: "invalid";
-      trigger?: never;
       errorMessage: string;
     })
   | (GraphAgentResultBase & {
       status: "completed";
       routingKind: "default";
-      trigger?: never;
     })
   | (GraphAgentResultBase & {
       status: "completed";
       routingKind: "invalid";
-      trigger?: never;
     })
   | (GraphAgentResultBase & {
       status: "completed";
-      routingKind: "labeled";
+      routingKind: "triggered";
       trigger: string;
     });
-
-interface ActionRequiredLoopLimitDecision {
-  errorMessage: string;
-  maxTriggerRounds: number;
-}
-
-export function createGraphTaskState(input: {
-  taskId: string;
-  topology: GraphTaskState["topology"];
-}): GraphTaskState {
-  return createEmptyGraphTaskState(input);
-}
 
 export function createUserDispatchDecision(
   state: GraphTaskState,
@@ -168,18 +170,24 @@ export function createUserDispatchDecision(
 ): GraphRoutingDecision {
   if (isGroupNode(state, input.targetAgentId)) {
     try {
-      const entryTargets = materializeGroupNodeTargets(state, input.targetAgentId, input.content);
+      const entryTargets = materializeGroupNodeTargets(
+        state,
+        input.targetAgentId,
+        input.content,
+        { kind: "user" },
+      );
       if (entryTargets.length === 0) {
         return {
           type: "failed",
           errorMessage: `${input.targetAgentId} 未生成可执行的入口实例`,
         };
       }
+      markAgentsScheduled(state, entryTargets);
       return {
         type: "execute_batch",
         batch: {
           routingKind: "default",
-          sourceAgentId: null,
+          source: { kind: "user" },
           sourceContent: input.content,
           displayContent: input.content,
           triggerTargets: [...entryTargets],
@@ -199,11 +207,12 @@ export function createUserDispatchDecision(
     }
   }
 
+  markAgentsScheduled(state, [input.targetAgentId]);
   return {
     type: "execute_batch",
     batch: {
       routingKind: "default",
-      sourceAgentId: null,
+      source: { kind: "user" },
       sourceContent: input.content,
       displayContent: input.content,
       triggerTargets: [input.targetAgentId],
@@ -222,15 +231,27 @@ export function createUserDispatchDecision(
 function resolveGraphAgentResultTriggerRouteKind(
   topology: TopologyRecord,
   result: GraphAgentResult,
-): "default" | "labeled" | "action_required" | "invalid" {
+): "default" | "triggered" | "invalid" {
   switch (result.routingKind) {
     case "invalid":
       return "invalid";
     case "default":
       return "default";
-    case "labeled":
-      return resolveTriggerRoutingKindForSource(topology, result.agentId, result.trigger) ?? "invalid";
+    case "triggered":
+      return resolveTriggeredRouteKind(topology, result.agentId, result.trigger);
   }
+}
+
+function resolveTriggeredRouteKind(
+  topology: TopologyRecord,
+  agentId: string,
+  trigger: string,
+): "triggered" | "invalid" {
+  const routeKind = resolveTriggerRoutingKindForSource(topology, agentId, trigger);
+  if (routeKind.kind === "triggered") {
+    return "triggered";
+  }
+  return "invalid";
 }
 
 export function applyAgentResultToGraphState(
@@ -241,8 +262,8 @@ export function applyAgentResultToGraphState(
   decision: GraphRoutingDecision;
 } {
   const nextState = cloneGraphTaskState(state);
-  const resultMessageId = result.messageId;
   ensureRuntimeAgentStatuses(nextState);
+  unsetScheduledAgent(nextState, result.agentId);
   nextState.agentStatusesByName[result.agentId] = result.agentStatus;
   nextState.agentContextByName[result.agentId] = result.agentContextContent;
   nextState.forwardedAgentMessageByName[result.agentId] = result.forwardedAgentMessage;
@@ -260,16 +281,6 @@ export function applyAgentResultToGraphState(
     };
   }
 
-  const runtime = graphStateToSchedulerRuntime(nextState);
-  const effectiveTopology = buildEffectiveTopology(nextState);
-  const scheduler = new GatingScheduler(effectiveTopology, runtime);
-  const triggerRouteKind = resolveGraphAgentResultTriggerRouteKind(effectiveTopology, result);
-  const batchContinuation = scheduler.recordHandoffBatchResponse(
-    result.agentId,
-    triggerRouteKind === "action_required" ? "action_required" : "resolved",
-  );
-  applySchedulerRuntimeToGraphState(nextState, runtime);
-
   if (shouldFinishGraphTaskFromEndEdge(nextState, result)) {
     return {
       state: {
@@ -284,8 +295,7 @@ export function applyAgentResultToGraphState(
     };
   }
 
-  if (result.routingKind === "invalid") {
-    clearActionRequiredLoopCountsForDecisionAgent(nextState, result.agentId);
+  if (resolveGraphAgentResultTriggerRouteKind(buildEffectiveTopology(nextState), result) === "invalid") {
     nextState.taskStatus = "failed";
     return {
       state: nextState,
@@ -296,55 +306,27 @@ export function applyAgentResultToGraphState(
     };
   }
 
-  if (result.routingKind === "labeled" && triggerRouteKind === "action_required") {
-    const actionRequiredDecision = handleActionRequired(nextState, result, batchContinuation);
-    if (actionRequiredDecision.type === "finished") {
-      return {
-        state: {
-          ...nextState,
-          taskStatus: "finished",
-          finishReason: actionRequiredDecision.finishReason,
-        },
-        decision: actionRequiredDecision,
-      };
-    }
-    return {
-      state: nextState,
-      decision: actionRequiredDecision,
-    };
-  }
-
-  clearActionRequiredLoopCountsForDecisionAgent(nextState, result.agentId);
-
-  const primaryDecision = result.routingKind === "labeled"
-    ? triggerLabeledDownstream(
+  const primaryDecision = result.routingKind === "triggered"
+    ? triggerTriggeredDownstream(
         nextState,
         result.agentId,
-        resultMessageId,
+        result.messageId,
         result.agentContextContent,
         result.agentContextContent,
-        result.trigger!,
+        result.trigger,
+        new Set<string>(),
       )
     : triggerHandoffDownstream(nextState, result.agentId, result.agentContextContent);
   if (primaryDecision.type === "execute_batch") {
     markCompletedGroupActivationAsDispatchedIfReady(nextState, result.agentId);
     return { state: nextState, decision: primaryDecision };
   }
-
-  if (result.routingKind === "labeled") {
-    const resumedDebateDecision = resumeBlockedAllCompletedDebateIfNeeded(nextState, result);
-    if (resumedDebateDecision) {
-      return { state: nextState, decision: resumedDebateDecision };
-    }
+  if (primaryDecision.type === "failed") {
+    nextState.taskStatus = "failed";
+    return { state: nextState, decision: primaryDecision };
   }
-
-  const followUpDecision = resumeAfterHandoffBatchResponse(
-    nextState,
-    batchContinuation,
-  );
-  if (followUpDecision.type === "execute_batch") {
-    markCompletedGroupActivationAsDispatchedIfReady(nextState, result.agentId);
-    return { state: nextState, decision: followUpDecision };
+  if (primaryDecision.type === "finished" && primaryDecision.finishReason === "end_edge_triggered") {
+    return { state: nextState, decision: primaryDecision };
   }
 
   const groupFollowUpDecision = resumeCompletedGroupActivations(nextState, result.agentId);
@@ -383,273 +365,59 @@ export function applyAgentResultToGraphState(
   };
 }
 
-export function resolveRestrictedRepairTargetsForSource(
-  topology: TopologyRecord,
-  sourceAgentId: string,
-  requestedTargets: string[],
-): string[] {
-  const topologyIndex = compileTopology(topology);
-  const directHandoffTargets = new Set(topologyIndex.handoffTargetsBySource[sourceAgentId] ?? []);
-  if (directHandoffTargets.size === 0) {
-    return [];
-  }
-
-  return requestedTargets.filter((target) => directHandoffTargets.has(target));
-}
-
-function handleActionRequired(
-  state: GraphTaskState,
-  result: Extract<GraphAgentResult, { routingKind: "labeled"; status: "completed" }>,
-  continuation: GatingBatchContinuation | GatingRepairBatchContinuation | null,
-): GraphRoutingDecision {
-  const actionRequiredTargets = getActionRequiredTargetsForTrigger(state, result.agentId, result.trigger);
-  const currentRequest = actionRequiredTargets.length > 0
-    ? createActionRequiredRequest({
-        sourceMessageId: result.messageId,
-        trigger: result.trigger,
-        targetAgentIds: actionRequiredTargets,
-        opinion: result.opinion,
-        agentContextContent: result.agentContextContent,
-      })
-    : null;
-  const continuationAction = resolveActionRequiredRequestContinuationAction({ continuation });
-  if (currentRequest && continuationAction !== "ignore") {
-    state.pendingActionRequiredRequestsByAgent[result.agentId] = currentRequest;
-  }
-
-  if (continuationAction === "wait_pending_decision_agents") {
-    return {
-      type: "finished",
-      finishReason: "wait_pending_decision_agents",
-    };
-  }
-
-  if (continuationAction === "trigger_repair_decision") {
-    const repairContinuation = continuation as GatingRepairBatchContinuation;
-    const storedDecision = requirePendingActionRequiredRequest(state, repairContinuation.repairDecisionAgentId);
-    return dispatchActionRequiredRequest(state, repairContinuation.repairDecisionAgentId, storedDecision, {
-      consumePendingRequest: true,
-    });
-  }
-
-  if (continuationAction === "ignore") {
-    if (currentRequest) {
-      return dispatchActionRequiredRequest(
-        state,
-        result.agentId,
-        currentRequest,
-        {
-          consumePendingRequest: false,
-        },
-      );
-    }
-    state.taskStatus = "failed";
-    return {
-      type: "failed",
-      errorMessage: `${result.agentId} 返回了 action_required 路由，但没有可继续推进的 action_required 链路`,
-    };
-  }
-
-  return {
-    type: "finished",
-    finishReason: continuationAction,
-  };
-}
-
-function resumeAfterHandoffBatchResponse(
-  state: GraphTaskState,
-  continuation: GatingBatchContinuation | GatingRepairBatchContinuation | null,
-): GraphRoutingDecision {
-  const action = resolveActionRequiredRequestContinuationAction({ continuation });
-
-  if (action === "trigger_repair_decision") {
-    const repairContinuation = continuation as GatingRepairBatchContinuation;
-    const storedDecision = requirePendingActionRequiredRequest(state, repairContinuation.repairDecisionAgentId);
-    return dispatchActionRequiredRequest(state, repairContinuation.repairDecisionAgentId, storedDecision, {
-      consumePendingRequest: true,
-    });
-  }
-
-  if (action === "redispatch_decision_agents" && continuation && continuation.redispatchTargets.length > 0) {
-    return triggerHandoffDownstream(
-      state,
-      continuation.sourceAgentId,
-      continuation.sourceContent,
-      new Set(continuation.redispatchTargets),
-      false,
-    );
-  }
-
-  if (action === "wait_pending_decision_agents") {
-    return {
-      type: "finished",
-      finishReason: "wait_pending_decision_agents",
-    };
-  }
-
-  if (continuation?.sourceAgentId) {
-    const nextDecisionAgentId = findNextPendingRepairDecisionAgent(
-      state,
-      continuation.sourceAgentId,
-      new Set<string>(),
-    );
-    if (nextDecisionAgentId) {
-      const storedDecision = requirePendingActionRequiredRequest(state, nextDecisionAgentId);
-      return dispatchActionRequiredRequest(state, nextDecisionAgentId, storedDecision, {
-        consumePendingRequest: true,
-      });
-    }
-  }
-
-  return {
-    type: "finished",
-    finishReason: "no_followup",
-  };
-}
-
-function resolveRequiredActionRequiredDisplayContent(
-  decisionAgentId: string,
-  request: Pick<GraphActionRequiredRequest, "opinion" | "agentContextContent">,
-): string {
-  const content = request.opinion.trim() || request.agentContextContent.trim();
-  if (!content) {
-    throw new Error(`${decisionAgentId} 的 action_required 结果缺少可转发正文`);
-  }
-  return content;
-}
-
-function resolveRequiredActionRequiredGroupSourceContent(
-  decisionAgentId: string,
-  request: Pick<GraphActionRequiredRequest, "agentContextContent">,
-): string {
-  const content = request.agentContextContent.trim();
-  if (!content) {
-    throw new Error(`${decisionAgentId} 的 action_required 结果缺少可供 group 展开的 finding 正文`);
-  }
-  return content;
-}
-
-function triggerActionRequiredRequestDownstream(
-  state: GraphTaskState,
-  sourceAgentId: string,
-  request: GraphActionRequiredRequest,
-  restrictTargets?: Set<string>,
-): GraphRoutingDecision {
-  const targets = getActionRequiredTargetsForTrigger(state, sourceAgentId, request.trigger).filter(
-    (targetName) =>
-      targetName !== sourceAgentId
-      && (!restrictTargets || restrictTargets.has(targetName)),
-  );
-  if (targets.length === 0) {
-    return {
-      type: "failed",
-      errorMessage: `${sourceAgentId} 没有可用的 action_required 下游`,
-    };
-  }
-  const displayContent = resolveRequiredActionRequiredDisplayContent(sourceAgentId, request);
-  const normalSourceContent = displayContent;
-  const jobs: GraphActionRequiredDispatchJob[] = [];
-  const dispatchTargets: string[] = [];
-  try {
-    for (const targetName of targets) {
-      if (isGroupNode(state, targetName)) {
-        const groupSourceContent = resolveRequiredActionRequiredGroupSourceContent(sourceAgentId, request);
-        const runtimeTargets = materializeGroupNodeTargets(state, targetName, groupSourceContent, sourceAgentId);
-        dispatchTargets.push(...runtimeTargets);
-        jobs.push(...runtimeTargets.map((runtimeTarget) => ({
-          agentId: runtimeTarget,
-          sourceAgentId,
-          sourceMessageId: request.sourceMessageId,
-          sourceContent: groupSourceContent,
-          displayContent,
-          kind: "action_required_request" as const,
-        })));
-        continue;
-      }
-      dispatchTargets.push(targetName);
-      jobs.push({
-        agentId: targetName,
-        sourceAgentId,
-        sourceMessageId: request.sourceMessageId,
-        sourceContent: normalSourceContent,
-        displayContent,
-        kind: "action_required_request",
-      });
-    }
-  } catch (error) {
-    return {
-      type: "failed",
-      errorMessage: error instanceof Error ? error.message : `${sourceAgentId} 下游 group 展开失败`,
-    };
-  }
-  registerPendingRepairTargetsForDecision(state, sourceAgentId, dispatchTargets);
-
-  return {
-    type: "execute_batch",
-    batch: {
-      routingKind: "labeled",
-      sourceAgentId,
-      sourceContent: displayContent,
-      displayContent,
-      trigger: request.trigger,
-      triggerTargets: [...dispatchTargets],
-      jobs,
-    },
-  };
-}
-
 function triggerHandoffDownstream(
   state: GraphTaskState,
   sourceAgentId: string,
   sourceContent: string,
-  restrictTargets?: Set<string>,
-  advanceSourceRound = true,
+  options: HandoffOptions = { kind: "all_targets", advanceSourceRound: true },
 ): GraphRoutingDecision {
   const runtime = graphStateToSchedulerRuntime(state);
   const scheduler = new GatingScheduler(buildEffectiveTopology(state), runtime);
-  const pendingRepairTargets = state.pendingHandoffRepairTargetsBySource[sourceAgentId];
-  const effectiveRestrictTargets = pendingRepairTargets
-    ? new Set(pendingRepairTargets)
-    : restrictTargets;
   const plan = scheduler.planHandoffDispatch(
     sourceAgentId,
     sourceContent,
     buildGatingAgentStates(state),
-    {
-      ...(effectiveRestrictTargets ? { restrictTargets: effectiveRestrictTargets } : {}),
-      advanceSourceRound,
-    },
+    buildHandoffDispatchOptions(options),
   );
   applySchedulerRuntimeToGraphState(state, runtime);
-  if (pendingRepairTargets) {
-    delete state.pendingHandoffRepairTargetsBySource[sourceAgentId];
-  }
-  let nextPlan: GatingDispatchPlan | null;
+  delete state.activeHandoffBatchBySource[sourceAgentId];
+
+  let nextPlan: DispatchPlanResult;
   try {
-    nextPlan = materializeGroupTargetsInPlan(state, plan, sourceContent);
+    nextPlan = materializeGroupTargetsInPlan(state, createDispatchPlanResult(plan), sourceContent);
   } catch (error) {
     return {
       type: "failed",
       errorMessage: error instanceof Error ? error.message : `${sourceAgentId} 下游 group 展开失败`,
     };
   }
-  if (nextPlan) {
-    return createTransferBatchDecision(nextPlan);
-  }
-  return createTransferBatchDecision(plan);
+  return createTransferBatchDecision(state, nextPlan);
 }
 
-function triggerLabeledDownstream(
+function buildHandoffDispatchOptions(options: HandoffOptions) {
+  if (options.kind === "restricted") {
+    return {
+      restrictTargets: options.restrictTargets,
+      advanceSourceRound: options.advanceSourceRound,
+    };
+  }
+  return {
+    advanceSourceRound: options.advanceSourceRound,
+  };
+}
+
+function triggerTriggeredDownstream(
   state: GraphTaskState,
   sourceAgentId: string,
   sourceMessageId: string,
   sourceContent: string,
   displayContent: string,
   trigger: string,
+  attemptedTriggers: ReadonlySet<string>,
 ): GraphRoutingDecision {
   const runtime = graphStateToSchedulerRuntime(state);
   const scheduler = new GatingScheduler(buildEffectiveTopology(state), runtime);
-  const plan = scheduler.planLabeledDispatch(
+  const plan = scheduler.planTriggeredDispatch(
     sourceAgentId,
     sourceContent,
     buildGatingAgentStates(state),
@@ -658,29 +426,88 @@ function triggerLabeledDownstream(
       trigger,
     },
   );
+
+  if (plan) {
+    const effectiveTopology = buildEffectiveTopology(state);
+    for (const targetAgentId of plan.triggerTargets) {
+      const loopLimitDecision = enforceTriggeredLoopLimit(
+        state,
+        effectiveTopology,
+        sourceAgentId,
+        targetAgentId,
+        trigger,
+      );
+      if (loopLimitDecision.kind === "failed") {
+        const nextAttemptedTriggers = new Set([...attemptedTriggers, trigger]);
+        const escalation = resolveTriggeredLoopEscalation(
+          effectiveTopology,
+          sourceAgentId,
+          trigger,
+          nextAttemptedTriggers,
+        );
+        if (escalation.kind === "triggered") {
+          return triggerTriggeredDownstream(
+            state,
+            sourceAgentId,
+            sourceMessageId,
+            sourceContent,
+            buildTriggeredLoopEscalationDisplayContent(
+              sourceAgentId,
+              targetAgentId,
+              loopLimitDecision.maxTriggerRounds,
+            ),
+            escalation.trigger,
+            nextAttemptedTriggers,
+          );
+        }
+        if (escalation.kind === "end") {
+          delete state.activeHandoffBatchBySource[sourceAgentId];
+          state.taskStatus = "finished";
+          state.finishReason = "end_edge_triggered";
+          return {
+            type: "finished",
+            finishReason: "end_edge_triggered",
+          };
+        }
+        state.taskStatus = "failed";
+        return {
+          type: "failed",
+          errorMessage: loopLimitDecision.errorMessage,
+        };
+      }
+    }
+  }
+
   applySchedulerRuntimeToGraphState(state, runtime);
-  let nextPlan: GatingDispatchPlan | null;
+  delete state.activeHandoffBatchBySource[sourceAgentId];
+
+  let nextPlan: DispatchPlanResult;
   try {
-    nextPlan = materializeGroupTargetsInPlan(state, plan, sourceContent);
+    nextPlan = materializeGroupTargetsInPlan(state, createDispatchPlanResult(plan), sourceContent);
   } catch (error) {
     return {
       type: "failed",
       errorMessage: error instanceof Error ? error.message : `${sourceAgentId} 下游 group 展开失败`,
     };
   }
-  if (nextPlan) {
-    return createLabeledBatchDecision(nextPlan, sourceMessageId, trigger, displayContent);
-  }
-  return createLabeledBatchDecision(plan, sourceMessageId, trigger, displayContent);
+  return createTriggeredBatchDecision(
+    state,
+    nextPlan,
+    sourceMessageId,
+    trigger,
+    displayContent,
+  );
 }
 
 function createTransferBatchDecision(
-  plan: GatingDispatchPlan | null,
+  state: GraphTaskState,
+  plan: DispatchPlanResult,
 ): GraphRoutingDecision {
   return createExecuteBatchDecision({
+    state,
     plan,
     routingKind: "default",
-    displayContent: plan ? plan.sourceContent : "",
+    displayContent: plan.kind === "planned" ? plan.plan.sourceContent : "",
     createJob: (targetName, sourceAgentId, sourceContent, displayContent) => ({
       agentId: targetName,
       sourceAgentId,
@@ -691,15 +518,17 @@ function createTransferBatchDecision(
   });
 }
 
-function createLabeledBatchDecision(
-  plan: GatingDispatchPlan | null,
+function createTriggeredBatchDecision(
+  state: GraphTaskState,
+  plan: DispatchPlanResult,
   sourceMessageId: string,
   trigger: string,
   displayContent: string,
 ): GraphRoutingDecision {
   return createExecuteBatchDecision({
+    state,
     plan,
-    routingKind: "labeled",
+    routingKind: "triggered",
     trigger,
     displayContent,
     createJob: (targetName, sourceAgentId, sourceContent, batchDisplayContent) => ({
@@ -713,41 +542,54 @@ function createLabeledBatchDecision(
   });
 }
 
-function createExecuteBatchDecision(input: {
-  plan: GatingDispatchPlan | null;
-  routingKind: "default" | "labeled";
-  trigger?: string;
+type ExecuteBatchDecisionInputBase = {
+  state: GraphTaskState;
+  plan: DispatchPlanResult;
   displayContent: string;
   createJob: (
     targetName: string,
     sourceAgentId: string,
     sourceContent: string,
     displayContent: string,
-  ) => GraphDispatchJobEntry;
-}): GraphRoutingDecision {
-  if (!input.plan || input.plan.triggerTargets.length === 0) {
+  ) => GraphDispatchJob;
+};
+
+type ExecuteBatchDecisionInput =
+  | (ExecuteBatchDecisionInputBase & {
+      routingKind: "default";
+    })
+  | (ExecuteBatchDecisionInputBase & {
+      routingKind: "triggered";
+      trigger: string;
+    });
+
+function createExecuteBatchDecision(input: ExecuteBatchDecisionInput): GraphRoutingDecision {
+  const { plan } = input;
+  if (plan.kind === "empty" || plan.plan.triggerTargets.length === 0) {
     return {
       type: "finished",
       finishReason: "no_dispatch_targets",
     };
   }
-  const batchDisplayContent = input.displayContent ?? input.plan.sourceContent;
-  const dispatchTargets = [...input.plan.readyTargets, ...input.plan.queuedTargets];
+  const dispatchPlan = plan.plan;
+  const batchDisplayContent = input.displayContent || dispatchPlan.sourceContent;
+  const dispatchTargets = [...dispatchPlan.readyTargets, ...dispatchPlan.queuedTargets];
+  markAgentsScheduled(input.state, dispatchTargets);
   const batchBase = {
-    sourceAgentId: input.plan.sourceAgentId,
-    sourceContent: input.plan.sourceContent,
+    source: { kind: "agent" as const, agentId: dispatchPlan.sourceAgentId },
+    sourceContent: dispatchPlan.sourceContent,
     displayContent: batchDisplayContent,
-    triggerTargets: [...input.plan.triggerTargets],
+    triggerTargets: [...dispatchTargets],
     jobs: dispatchTargets.map((targetName) =>
-      input.createJob(targetName, input.plan!.sourceAgentId, input.plan!.sourceContent, batchDisplayContent)),
+      input.createJob(targetName, dispatchPlan.sourceAgentId, dispatchPlan.sourceContent, batchDisplayContent)),
   };
   return {
     type: "execute_batch",
-    batch: input.routingKind === "labeled"
+    batch: input.routingKind === "triggered"
       ? {
           ...batchBase,
-          routingKind: "labeled",
-          trigger: input.trigger!,
+          routingKind: "triggered",
+          trigger: input.trigger,
         }
       : {
           ...batchBase,
@@ -758,16 +600,17 @@ function createExecuteBatchDecision(input: {
 
 function materializeGroupTargetsInPlan(
   state: GraphTaskState,
-  plan: GatingDispatchPlan | null,
+  planResult: DispatchPlanResult,
   sourceContent: string,
-): GatingDispatchPlan | null {
-  if (!plan) {
-    return null;
+): DispatchPlanResult {
+  if (planResult.kind === "empty") {
+    return planResult;
   }
+  const plan = planResult.plan;
 
   const jobTargets = [...plan.readyTargets, ...plan.queuedTargets];
   if (jobTargets.length === 0) {
-    return plan;
+    return { kind: "planned", plan };
   }
 
   const nextReadyTargets: string[] = [];
@@ -784,19 +627,13 @@ function materializeGroupTargetsInPlan(
       continue;
     }
 
-    const groupRuleId = getGroupRuleIdForNode(state, targetName);
-    if (!groupRuleId) {
-      if (plan.readyTargets.includes(targetName)) {
-        nextReadyTargets.push(targetName);
-      } else {
-        nextQueuedTargets.push(targetName);
-      }
-      continue;
-    }
-
     changed = true;
-    const entryTargets = materializeGroupNodeTargets(state, targetName, sourceContent, plan.sourceAgentId);
-    replaceHandoffBatchTarget(state, plan.sourceAgentId, targetName, entryTargets);
+    const entryTargets = materializeGroupNodeTargets(
+      state,
+      targetName,
+      sourceContent,
+      { kind: "agent", agentId: plan.sourceAgentId },
+    );
     for (const entryTarget of entryTargets) {
       if (plan.readyTargets.includes(targetName)) {
         nextReadyTargets.push(entryTarget);
@@ -807,46 +644,27 @@ function materializeGroupTargetsInPlan(
   }
 
   if (!changed) {
-    return plan;
+    return { kind: "planned", plan };
   }
 
   return {
-    ...plan,
-    triggerTargets: [...nextReadyTargets, ...nextQueuedTargets],
-    readyTargets: nextReadyTargets,
-    queuedTargets: nextQueuedTargets,
+    kind: "planned",
+    plan: {
+      ...plan,
+      triggerTargets: [...nextReadyTargets, ...nextQueuedTargets],
+      readyTargets: nextReadyTargets,
+      queuedTargets: nextQueuedTargets,
+    },
   };
 }
 
-function replaceHandoffBatchTarget(
-  state: GraphTaskState,
-  sourceAgentId: string,
-  targetName: string,
-  replacementTargets: string[],
-): void {
-  const batch = state.activeHandoffBatchBySource[sourceAgentId];
-  if (!batch) {
-    return;
+function createDispatchPlanResult(
+  plan: ReturnType<GatingScheduler["planHandoffDispatch"]>,
+): DispatchPlanResult {
+  if (!plan) {
+    return { kind: "empty" };
   }
-
-  const replaceTargets = (targets: string[]) => uniqueTargetNames(
-    targets.flatMap((currentTarget) => (
-      currentTarget === targetName ? replacementTargets : [currentTarget]
-    )),
-  );
-
-  batch.targets = replaceTargets(batch.targets);
-  batch.pendingTargets = replaceTargets(batch.pendingTargets);
-  batch.respondedTargets = batch.respondedTargets.filter((currentTarget) => currentTarget !== targetName);
-  batch.failedTargets = batch.failedTargets.filter((currentTarget) => currentTarget !== targetName);
-
-  if (batch.targets.length === 0) {
-    delete state.activeHandoffBatchBySource[sourceAgentId];
-  }
-}
-
-function uniqueTargetNames(targets: string[]): string[] {
-  return [...new Set(targets)];
+  return { kind: "planned", plan };
 }
 
 function buildGroupActivationId(groupRuleId: string, sequence: number): string {
@@ -874,18 +692,19 @@ function buildGroupItemTitle(sourceContent: string): string {
   return firstLine;
 }
 
+type GroupMaterializeSource =
+  | { kind: "user" }
+  | { kind: "agent"; agentId: string };
+
 function materializeGroupNodeTargets(
   state: GraphTaskState,
   targetName: string,
   sourceContent: string,
-  sourceAgentId?: string,
+  source: GroupMaterializeSource,
 ): string[] {
   const groupRuleId = getGroupRuleIdForNode(state, targetName);
   if (!groupRuleId) {
     throw new Error(`${targetName} 缺少 groupRuleId`);
-  }
-  if (!getGroupRules(state.topology).some((candidate) => candidate.id === groupRuleId)) {
-    throw new Error(`group rule 不存在：${groupRuleId}`);
   }
   const groupRule = getGroupRules(state.topology).find((candidate) => candidate.id === groupRuleId);
   if (!groupRule) {
@@ -903,15 +722,15 @@ function materializeGroupNodeTargets(
     ...item,
     id: buildGroupActivationItemId(groupRuleId, sequence, index, itemsList.length),
   }));
-  const sourceRuntimeTemplateName = sourceAgentId
-    ? getRuntimeTemplateName(state, sourceAgentId) ?? sourceAgentId
+  const sourceRuntimeTemplateName = source.kind === "agent"
+    ? resolveRuntimeTemplateName(state, source.agentId)
     : "";
   const reportRuntimeNodeId = (
-    sourceAgentId
+    source.kind === "agent"
     && groupRule.report !== false
     && groupRule.report.templateName === sourceRuntimeTemplateName
   )
-    ? sourceAgentId
+    ? source.agentId
     : undefined;
 
   const bundles = materializeRuntimeGroupAgentsForItems({
@@ -919,9 +738,9 @@ function materializeGroupNodeTargets(
     groupRuleId,
     activationId,
     items,
-    ...(sourceAgentId
+    ...(source.kind === "agent"
       ? {
-          sourceRuntimeNodeId: sourceAgentId,
+          sourceRuntimeNodeId: source.agentId,
           sourceRuntimeTemplateName,
           ...(reportRuntimeNodeId ? { reportRuntimeNodeId } : {}),
         }
@@ -937,27 +756,8 @@ function materializeGroupNodeTargets(
     dispatched: false,
   });
 
-  return bundles.flatMap((bundle) => getGroupRuleEntryRuntimeNodeIds(state, bundle.groupId, groupRuleId));
-}
-
-function getActionRequiredTargetsForSource(
-  state: GraphTaskState,
-  sourceAgentId: string,
-): string[] {
-  const topology = buildEffectiveTopology(state);
-  const targets = compileTopology(topology).actionRequiredTargetsBySource[sourceAgentId] ?? [];
-  return targets.filter((targetName) =>
-    !isRuntimeNodeFromDispatchedGroupActivation(state, targetName)
-  );
-}
-
-function getActionRequiredTargetsForTrigger(
-  state: GraphTaskState,
-  sourceAgentId: string,
-  trigger: string,
-): string[] {
-  return getTriggeredTargetsForSource(state, sourceAgentId, trigger).filter((targetName) =>
-    !isRuntimeNodeFromDispatchedGroupActivation(state, targetName)
+  return bundles.flatMap((bundle) =>
+    getGroupRuleEntryRuntimeNodeIds(state, bundle.groupId, groupRuleId)
   );
 }
 
@@ -971,297 +771,34 @@ function getTriggeredTargetsForSource(
     effectiveTopology.edges
       .filter((edge) =>
         edge.source === sourceAgentId
-        && edge.trigger === trigger,
+        && edge.trigger === trigger
+        && !isCompletedGroupEntryRuntimeTarget(state, edge.target, sourceAgentId)
       )
       .map((edge) => edge.target),
   )];
 }
 
-function prepareActionRequiredDispatch(
+function resolveRuntimeTemplateName(state: GraphTaskState, agentId: string): string {
+  const templateName = getRuntimeTemplateName(state, agentId);
+  if (templateName) {
+    return templateName;
+  }
+  return agentId;
+}
+
+function isCompletedGroupEntryRuntimeTarget(
   state: GraphTaskState,
-  decisionAgentId: string,
-  request: GraphActionRequiredRequest,
-): {
-  dispatchTargetIds: string[];
-  limitedTargetIds: string[];
-  firstLoopLimitDecision: ActionRequiredLoopLimitDecision | null;
-} {
-  const dispatchTargetIds: string[] = [];
-  const limitedTargetIds: string[] = [];
-  let firstLoopLimitDecision: ActionRequiredLoopLimitDecision | null = null;
-
-  for (const targetAgentId of uniqueStringValues(request.targetAgentIds)) {
-    const loopLimitDecision = enforceActionRequiredLoopLimit(
-      state,
-      decisionAgentId,
-      targetAgentId,
-      request.trigger,
-    );
-    if (loopLimitDecision) {
-      limitedTargetIds.push(targetAgentId);
-      firstLoopLimitDecision ??= loopLimitDecision;
-      continue;
-    }
-    dispatchTargetIds.push(targetAgentId);
-  }
-
-  return {
-    dispatchTargetIds,
-    limitedTargetIds,
-    firstLoopLimitDecision,
-  };
-}
-
-function createActionRequiredRequest(input: {
-  sourceMessageId: string;
-  trigger: string;
-  targetAgentIds: string[];
-  opinion: string;
-  agentContextContent: string;
-}): GraphActionRequiredRequest {
-  return {
-    sourceMessageId: input.sourceMessageId,
-    trigger: input.trigger,
-    targetAgentIds: [...input.targetAgentIds],
-    opinion: input.opinion,
-    agentContextContent: input.agentContextContent,
-  };
-}
-
-function requirePendingActionRequiredRequest(
-  state: GraphTaskState,
-  decisionAgentId: string,
-): GraphActionRequiredRequest {
-  const request = state.pendingActionRequiredRequestsByAgent[decisionAgentId];
-  if (!request) {
-    throw new Error(`${decisionAgentId} 缺少待处理的 action_required 请求`);
-  }
-  return request;
-}
-
-function buildMissingActionRequiredTargetsError(decisionAgentId: string): string {
-  return `${decisionAgentId} 返回了 action_required 路由，但没有可继续推进的 action_required 链路`;
-}
-
-function dispatchActionRequiredRequest(
-  state: GraphTaskState,
-  decisionAgentId: string,
-  request: GraphActionRequiredRequest,
-  options: {
-    consumePendingRequest: boolean;
-  },
-): GraphRoutingDecision {
-  const preparedDispatch = prepareActionRequiredDispatch(
-    state,
-    decisionAgentId,
-    request,
-  );
-  if (preparedDispatch.dispatchTargetIds.length === 0 && preparedDispatch.firstLoopLimitDecision) {
-    return resolveActionRequiredLoopLimitTransition(
-      state,
-      decisionAgentId,
-      preparedDispatch.limitedTargetIds[0]!,
-      preparedDispatch.firstLoopLimitDecision,
-      request,
-    );
-  }
-  if (preparedDispatch.dispatchTargetIds.length === 0) {
-    state.taskStatus = "failed";
-    return {
-      type: "failed",
-      errorMessage: buildMissingActionRequiredTargetsError(decisionAgentId),
-    };
-  }
-  if (options.consumePendingRequest) {
-    delete state.pendingActionRequiredRequestsByAgent[decisionAgentId];
-  }
-  return triggerActionRequiredRequestDownstream(
-    state,
-    decisionAgentId,
-    request,
-    new Set(preparedDispatch.dispatchTargetIds),
-  );
-}
-
-function registerPendingRepairTargetsForDecision(
-  state: GraphTaskState,
-  decisionAgentId: string,
-  repairTargetAgentIds: string[],
-): void {
-  const effectiveTopology = buildEffectiveTopology(state);
-  for (const repairTargetAgentId of uniqueStringValues(repairTargetAgentIds)) {
-    const restrictedRepairTargets = resolveRestrictedRepairTargetsForSource(
-      effectiveTopology,
-      repairTargetAgentId,
-      [decisionAgentId],
-    );
-    if (restrictedRepairTargets.length > 0) {
-      state.pendingHandoffRepairTargetsBySource[repairTargetAgentId] = restrictedRepairTargets;
-    } else {
-      delete state.pendingHandoffRepairTargetsBySource[repairTargetAgentId];
-    }
-  }
-}
-
-function isRuntimeNodeFromDispatchedGroupActivation(
-  state: GraphTaskState,
-  targetName: string,
+  targetAgentId: string,
+  sourceAgentId: string,
 ): boolean {
-  const runtimeNode = state.runtimeNodes.find((node) => node.id === targetName);
-  if (!runtimeNode?.groupId) {
+  const runtimeNode = state.runtimeNodes.find((node) => node.id === targetAgentId);
+  if (!runtimeNode || runtimeNode.sourceNodeId !== sourceAgentId) {
     return false;
   }
-
-  return state.groupActivations.some((activation) =>
-    activation.dispatched
-    && activation.bundleGroupIds.includes(runtimeNode.groupId ?? "")
+  const activation = state.groupActivations.find((candidate) =>
+    candidate.bundleGroupIds.includes(runtimeNode.groupId)
   );
-}
-
-function resolveUniformActionRequiredTriggerForTargets(
-  state: GraphTaskState,
-  sourceAgentId: string,
-  targetNames: string[],
-): string {
-  const effectiveTopology = buildEffectiveTopology(state);
-  const triggers = [...new Set(
-    effectiveTopology.edges
-      .filter((edge) =>
-        edge.source === sourceAgentId
-        && targetNames.includes(edge.target)
-        && resolveTriggerRoutingKindForSource(effectiveTopology, sourceAgentId, edge.trigger) === "action_required",
-      )
-      .map((edge) => edge.trigger),
-  )];
-  if (triggers.length !== 1) {
-    throw new Error(
-      `${sourceAgentId} 的 action_required 下游 trigger 不唯一，无法继续派发：${targetNames.join(", ")}`,
-    );
-  }
-  return triggers[0]!;
-}
-
-function resumeBlockedAllCompletedDebateIfNeeded(
-  state: GraphTaskState,
-  result: Extract<GraphAgentResult, { routingKind: "labeled"; status: "completed" }>,
-): GraphRoutingDecision | null {
-  const pendingDebateTargets = resolvePendingAllCompletedDebateTargets(
-    state,
-    result.agentId,
-    result.trigger,
-  );
-  if (pendingDebateTargets.length === 0) {
-    return null;
-  }
-  const followUpTrigger = resolveUniformActionRequiredTriggerForTargets(
-    state,
-    result.agentId,
-    pendingDebateTargets,
-  );
-
-  return triggerActionRequiredRequestDownstream(
-    state,
-    result.agentId,
-    createActionRequiredRequest({
-      sourceMessageId: result.messageId,
-      trigger: followUpTrigger,
-      targetAgentIds: pendingDebateTargets,
-      opinion: result.opinion,
-      agentContextContent: result.agentContextContent,
-    }),
-    new Set(pendingDebateTargets),
-  );
-}
-
-function resolvePendingAllCompletedDebateTargets(
-  state: GraphTaskState,
-  sourceAgentId: string,
-  trigger: string,
-): string[] {
-  const topology = buildEffectiveTopology(state);
-  const actionRequiredTargets = getActionRequiredTargetsForSource(state, sourceAgentId).filter(
-    (targetName) =>
-      targetName !== sourceAgentId
-      && getAgentStatusById(state, targetName) === "idle",
-  );
-  if (actionRequiredTargets.length === 0) {
-    return [];
-  }
-
-  const sourceTemplateName = getTemplateNameForNode(topology, sourceAgentId);
-  if (!sourceTemplateName) {
-    return [];
-  }
-
-  const pendingTargetIds = new Set<string>();
-  for (const edge of topology.edges.filter((candidate) =>
-    candidate.source === sourceAgentId
-    && candidate.trigger === trigger
-  )) {
-    const summaryTemplateName = getTemplateNameForNode(topology, edge.target);
-    if (!summaryTemplateName) {
-      continue;
-    }
-
-    for (const rule of topology.groupRules ?? []) {
-      if (rule.exitWhen !== "all_completed") {
-        continue;
-      }
-
-      const matchingSummaryRoles = rule.members
-        .filter((agent) => agent.templateName === summaryTemplateName)
-        .map((agent) => agent.role);
-      if (matchingSummaryRoles.length === 0) {
-        continue;
-      }
-
-      for (const summaryRole of matchingSummaryRoles) {
-        const requiredSourceTemplateNames = uniqueStringValues(
-          rule.edges
-            .filter((ruleEdge) => ruleEdge.trigger === edge.trigger && ruleEdge.targetRole === summaryRole)
-            .map((ruleEdge) => getGroupRuleTemplateNameForRole(rule, ruleEdge.sourceRole))
-            .filter((value): value is string => Boolean(value)),
-        );
-        if (
-          requiredSourceTemplateNames.length <= 1
-          || !requiredSourceTemplateNames.includes(sourceTemplateName)
-        ) {
-          continue;
-        }
-
-        for (const actionRequiredTarget of actionRequiredTargets) {
-          const actionRequiredTargetTemplateName = getTemplateNameForNode(topology, actionRequiredTarget);
-          if (
-            actionRequiredTargetTemplateName
-            && requiredSourceTemplateNames.includes(actionRequiredTargetTemplateName)
-          ) {
-            pendingTargetIds.add(actionRequiredTarget);
-          }
-        }
-      }
-    }
-  }
-
-  return [...pendingTargetIds];
-}
-
-function getTemplateNameForNode(topology: TopologyRecord, nodeId: string): string | null {
-  return getTopologyNodeRecords(topology).find((node) => node.id === nodeId)?.templateName ?? nodeId;
-}
-
-function getGroupRuleTemplateNameForRole(
-  rule: NonNullable<TopologyRecord["groupRules"]>[number],
-  role: string,
-): string | null {
-  return rule.members.find((agent) => agent.role === role)?.templateName ?? null;
-}
-
-function uniqueStringValues(values: string[]): string[] {
-  return [...new Set(values)];
-}
-
-function getAgentStatusById(state: GraphTaskState, agentId: string): AgentStatus | undefined {
-  return state.agentStatusesByName[agentId];
+  return Boolean(activation && activation.dispatched);
 }
 
 function resumeCompletedGroupActivations(
@@ -1269,7 +806,7 @@ function resumeCompletedGroupActivations(
   completedAgentId: string,
 ): GraphRoutingDecision {
   const bundle = state.groupBundles.find((candidate) =>
-    candidate.nodes.some((node) => node.id === completedAgentId),
+    candidate.nodes.some((node) => node.id === completedAgentId)
   );
   if (!bundle) {
     return {
@@ -1293,14 +830,14 @@ function resumeCompletedGroupActivations(
     };
   }
 
-  const aggregatedContent = finalizeGroupActivationIfReady(state, activation.id, bundle.groupId);
-  if (!aggregatedContent) {
+  const activationResult = finalizeGroupActivationIfReady(state, activation.id, bundle.groupId);
+  if (activationResult.kind === "not_ready") {
     return {
       type: "finished",
       finishReason: "group_activation_pending",
     };
   }
-  return triggerHandoffDownstream(state, activation.groupNodeName, aggregatedContent);
+  return triggerHandoffDownstream(state, activation.groupNodeName, activationResult.content);
 }
 
 function buildGroupActivationContent(
@@ -1311,7 +848,7 @@ function buildGroupActivationContent(
   const sections = bundles.map((bundle) => {
     const terminalNodeIds = findBundleTerminalNodeIds(bundle);
     const outputs = terminalNodeIds
-      .map((nodeId) => state.agentContextByName[nodeId]?.trim() ?? "")
+      .map((nodeId) => resolveAgentContextContent(state, nodeId).trim())
       .filter(Boolean);
     if (outputs.length === 0) {
       throw new Error(`group activation ${activationId} 的条目 ${bundle.item.title} 缺少终局输出`);
@@ -1325,27 +862,27 @@ function buildGroupActivationContent(
   return sections.join("\n\n").trim();
 }
 
+function resolveAgentContextContent(state: GraphTaskState, agentId: string): string {
+  const content = state.agentContextByName[agentId];
+  if (content) {
+    return content;
+  }
+  return "";
+}
+
 function markCompletedGroupActivationAsDispatchedIfReady(
   state: GraphTaskState,
   completedAgentId: string,
 ): void {
   const bundle = state.groupBundles.find((candidate) =>
-    candidate.nodes.some((node) => node.id === completedAgentId),
+    candidate.nodes.some((node) => node.id === completedAgentId)
   );
   if (!bundle) {
     return;
   }
 
   const activation = state.groupActivations.find((candidate) => candidate.id === bundle.activationId);
-  if (!activation) {
-    return;
-  }
-
-  if (activation.dispatched) {
-    return;
-  }
-
-  if (!isGroupBundleReady(state, bundle)) {
+  if (!activation || activation.dispatched || !isGroupBundleReady(state, bundle)) {
     return;
   }
   finalizeGroupActivationIfReady(state, activation.id, bundle.groupId);
@@ -1355,22 +892,22 @@ function finalizeGroupActivationIfReady(
   state: GraphTaskState,
   activationId: string,
   completedBundleGroupId: string,
-): string | null {
+): GroupActivationResult {
   const activation = state.groupActivations.find((candidate) => candidate.id === activationId);
   if (!activation) {
-    return null;
+    return { kind: "not_ready" };
   }
   if (!activation.completedBundleGroupIds.includes(completedBundleGroupId)) {
     activation.completedBundleGroupIds.push(completedBundleGroupId);
   }
   if (activation.dispatched || activation.completedBundleGroupIds.length < activation.bundleGroupIds.length) {
-    return null;
+    return { kind: "not_ready" };
   }
   const aggregatedContent = buildGroupActivationContent(state, activation.id);
   activation.dispatched = true;
   state.agentStatusesByName[activation.groupNodeName] = "completed";
   state.agentContextByName[activation.groupNodeName] = aggregatedContent;
-  return aggregatedContent;
+  return { kind: "activated", content: aggregatedContent };
 }
 
 function findBundleTerminalNodeIds(bundle: GraphTaskState["groupBundles"][number]): string[] {
@@ -1396,205 +933,161 @@ function isGroupBundleReady(
   return bundle.edges.some((edge) =>
     bundleNodeIds.has(edge.source)
     && !bundleNodeIds.has(edge.target)
-    && state.agentStatusesByName[edge.source] === "completed",
+    && state.agentStatusesByName[edge.source] === "completed"
   );
 }
 
 function buildGatingAgentStates(state: GraphTaskState): GatingAgentState[] {
   return buildEffectiveTopology(state).nodes.map((id) => ({
     id,
-    status: state.agentStatusesByName[id] ?? "idle",
+    status: resolveAgentStatus(state, id),
   }));
 }
 
-function enforceActionRequiredLoopLimit(
+function resolveAgentStatus(state: GraphTaskState, agentId: string): AgentStatus {
+  const status = state.agentStatusesByName[agentId];
+  if (status) {
+    return status;
+  }
+  return "idle";
+}
+
+function buildTriggeredLoopEdgeKey(sourceAgentId: string, targetAgentId: string, trigger: string): string {
+  return `${sourceAgentId}->${targetAgentId}->${trigger}`;
+}
+
+type TriggerLoopLimitDecision =
+  | { kind: "allowed" }
+  | {
+      kind: "failed";
+      errorMessage: string;
+      maxTriggerRounds: number;
+    };
+
+function enforceTriggeredLoopLimit(
   state: GraphTaskState,
+  topology: TopologyRecord,
   sourceAgentId: string,
   targetAgentId: string,
   trigger: string,
-): ActionRequiredLoopLimitDecision | null {
-  const maxTriggerRounds = getActionRequiredEdgeLoopLimit(
-    buildEffectiveTopology(state),
+): TriggerLoopLimitDecision {
+  const maxTriggerRounds = getTriggerEdgeLoopLimit(
+    topology,
     sourceAgentId,
     targetAgentId,
     trigger,
   );
-  const edgeKey = buildActionRequiredLoopEdgeKey(sourceAgentId, targetAgentId, trigger);
-  const nextCount = (state.actionRequiredLoopCountByEdge[edgeKey] ?? 0) + 1;
-  state.actionRequiredLoopCountByEdge[edgeKey] = nextCount;
-  if (nextCount <= maxTriggerRounds) {
-    return null;
+  if (maxTriggerRounds === -1) {
+    return { kind: "allowed" };
   }
-
-  const normalizedMaxTriggerRounds = maxTriggerRounds || DEFAULT_ACTION_REQUIRED_MAX_ROUNDS;
-  return {
-    errorMessage: `${sourceAgentId} -> ${targetAgentId} 已连续交流 ${normalizedMaxTriggerRounds} 次，任务已结束`,
-    maxTriggerRounds: normalizedMaxTriggerRounds,
-  };
-}
-
-function buildActionRequiredLoopEdgeKey(sourceAgentId: string, targetAgentId: string, trigger: string): string {
-  return `${sourceAgentId}->${targetAgentId}->${trigger}`;
-}
-
-function clearActionRequiredLoopCountsForDecisionAgent(state: GraphTaskState, decisionAgentId: string): void {
-  for (const edgeKey of Object.keys(state.actionRequiredLoopCountByEdge)) {
-    if (edgeKey.startsWith(`${decisionAgentId}->`)) {
-      delete state.actionRequiredLoopCountByEdge[edgeKey];
-    }
-  }
-}
-
-function resolveActionRequiredLoopLimitTransition(
-  state: GraphTaskState,
-  decisionAgentId: string,
-  repairTargetAgentId: string,
-  loopLimitDecision: ActionRequiredLoopLimitDecision,
-  decisionRequest: GraphActionRequiredRequest,
-): GraphRoutingDecision {
-  state.agentStatusesByName[decisionAgentId] = "failed";
-  delete state.pendingActionRequiredRequestsByAgent[decisionAgentId];
-
-  const nextDecisionAgentId = findNextPendingRepairDecisionAgent(
-    state,
-    repairTargetAgentId,
-    new Set([decisionAgentId]),
-  );
-  if (nextDecisionAgentId) {
-    const storedDecision = requirePendingActionRequiredRequest(state, nextDecisionAgentId);
-    return dispatchActionRequiredRequest(state, nextDecisionAgentId, storedDecision, {
-      consumePendingRequest: true,
-    });
-  }
-
-  const loopLimitEscalationTrigger = resolveLoopLimitEscalationTrigger(
-    state,
-    decisionAgentId,
-    repairTargetAgentId,
-  );
-  if (loopLimitEscalationTrigger.kind === "none") {
-    state.taskStatus = "failed";
+  const edgeKey = buildTriggeredLoopEdgeKey(sourceAgentId, targetAgentId, trigger);
+  const nextCount = resolveTriggerLoopCount(state, edgeKey) + 1;
+  if (nextCount > maxTriggerRounds) {
     return {
-      type: "failed",
-      errorMessage: loopLimitDecision.errorMessage,
+      kind: "failed",
+      errorMessage: `${sourceAgentId} -> ${targetAgentId} 已连续交流 ${maxTriggerRounds} 次，任务已结束`,
+      maxTriggerRounds,
     };
   }
-
-  const loopLimitEscalationDecision = triggerLabeledDownstream(
-    state,
-    decisionAgentId,
-    decisionRequest.sourceMessageId,
-    buildActionRequiredLoopLimitEscalationForwardContent({
-      decisionAgentId,
-      decisionRequest,
-    }),
-    buildActionRequiredLoopLimitEscalationDisplayContent({
-      decisionAgentId,
-      repairTargetAgentId,
-      maxTriggerRounds: loopLimitDecision.maxTriggerRounds,
-    }),
-    loopLimitEscalationTrigger.trigger,
-  );
-  if (loopLimitEscalationDecision.type === "execute_batch") {
-    return loopLimitEscalationDecision;
-  }
-
-  state.taskStatus = "failed";
-  return {
-    type: "failed",
-    errorMessage: loopLimitDecision.errorMessage,
-  };
+  state.triggerLoopCountByEdge[edgeKey] = nextCount;
+  return { kind: "allowed" };
 }
 
-function resolveLoopLimitEscalationTrigger(
-  state: GraphTaskState,
-  decisionAgentId: string,
-  repairTargetAgentId: string,
-): {
-  kind: "labeled";
-  trigger: string;
-} | {
-  kind: "none";
-} {
-  const topology = buildEffectiveTopology(state);
-  const candidateTriggers = new Set<string>();
-  for (const edge of topology.edges) {
-    if (
-      edge.source === decisionAgentId
-      && edge.target !== repairTargetAgentId
-      && edge.trigger !== DEFAULT_TOPOLOGY_TRIGGER
-      && resolveTriggerRoutingKindForSource(topology, decisionAgentId, edge.trigger) === "labeled"
-    ) {
-      candidateTriggers.add(edge.trigger);
-    }
+function resolveTriggerLoopCount(state: GraphTaskState, edgeKey: string): number {
+  const count = state.triggerLoopCountByEdge[edgeKey];
+  if (count) {
+    return count;
   }
-  for (const edge of topology.langgraph?.end?.incoming ?? []) {
-    if (
-      edge.source === decisionAgentId
-      && edge.trigger !== DEFAULT_TOPOLOGY_TRIGGER
-      && resolveTriggerRoutingKindForSource(topology, decisionAgentId, edge.trigger) === "labeled"
-    ) {
-      candidateTriggers.add(edge.trigger);
+  return 0;
+}
+
+type TriggerLoopEscalation =
+  | {
+      kind: "triggered";
+      trigger: string;
     }
-  }
-  if (candidateTriggers.size === 1) {
-    return {
-      kind: "labeled",
-      trigger: [...candidateTriggers][0]!,
+  | {
+      kind: "end";
+      trigger: string;
+    }
+  | {
+      kind: "none";
     };
+
+function resolveTriggeredLoopEscalation(
+  topology: TopologyRecord,
+  sourceAgentId: string,
+  currentTrigger: string,
+  attemptedTriggers: ReadonlySet<string>,
+): TriggerLoopEscalation {
+  const edgeCandidates = topology.edges
+    .filter((edge) =>
+      edge.source === sourceAgentId
+      && !isDefaultTopologyTrigger(normalizeTopologyEdgeTrigger(edge.trigger))
+      && normalizeTopologyEdgeTrigger(edge.trigger) !== currentTrigger
+      && !attemptedTriggers.has(normalizeTopologyEdgeTrigger(edge.trigger))
+      && resolveTriggerRoutingKindForSource(topology, sourceAgentId, edge.trigger).kind === "triggered"
+    )
+    .map((edge) => ({
+      kind: "triggered" as const,
+      trigger: normalizeTopologyEdgeTrigger(edge.trigger),
+    }));
+  const endCandidates = getTopologyEndIncoming(topology)
+    .filter((edge) =>
+      edge.source === sourceAgentId
+      && !isDefaultTopologyTrigger(normalizeTopologyEdgeTrigger(edge.trigger))
+      && normalizeTopologyEdgeTrigger(edge.trigger) !== currentTrigger
+      && !attemptedTriggers.has(normalizeTopologyEdgeTrigger(edge.trigger))
+      && resolveTriggerRoutingKindForSource(topology, sourceAgentId, edge.trigger).kind === "triggered"
+    )
+    .map((edge) => ({
+      kind: "end" as const,
+      trigger: normalizeTopologyEdgeTrigger(edge.trigger),
+    }));
+  const candidateMap = new Map<string, TriggerLoopEscalation>();
+  for (const candidate of [...edgeCandidates, ...endCandidates]) {
+    candidateMap.set(`${candidate.kind}:${candidate.trigger}`, candidate);
   }
-  if (candidateTriggers.size > 1) {
+  const candidates = [...candidateMap.values()];
+
+  if (candidates.length === 0) {
+    return { kind: "none" };
+  }
+  if (candidates.length > 1) {
     throw new Error(
-      `${decisionAgentId} 在回流超限后存在多个可升级 trigger，无法唯一决定：${[...candidateTriggers].join(" / ")}`,
+      `${sourceAgentId} 在回流超限后存在多个可升级 trigger，无法唯一决定：${candidates.map((candidate) => candidate.kind === "none" ? "none" : `${candidate.kind}:${candidate.trigger}`).join(" / ")}`,
     );
   }
-  return {
-    kind: "none",
-  };
+  return requireSingleTriggerLoopEscalation(candidates, sourceAgentId);
 }
 
-function buildActionRequiredLoopLimitEscalationForwardContent(input: {
-  decisionAgentId: string;
-  decisionRequest: GraphActionRequiredRequest;
-}): string {
-  return resolveRequiredActionRequiredDisplayContent(input.decisionAgentId, input.decisionRequest);
-}
-
-function buildActionRequiredLoopLimitEscalationDisplayContent(input: {
-  decisionAgentId: string;
-  repairTargetAgentId: string;
-  maxTriggerRounds: number;
-}): string {
-  return `${input.decisionAgentId} -> ${input.repairTargetAgentId} 已连续交流 ${input.maxTriggerRounds} 次`;
-}
-
-function findNextPendingRepairDecisionAgent(
-  state: GraphTaskState,
-  repairTargetAgentId: string,
-  excludedDecisionAgentIds: ReadonlySet<string>,
-): string | null {
-  const effectiveTopology = buildEffectiveTopology(state);
-  for (const edge of effectiveTopology.edges) {
-    if (
-      isActionRequiredTopologyTrigger(edge.trigger, edge.maxTriggerRounds)
-      && edge.target === repairTargetAgentId
-      && !excludedDecisionAgentIds.has(edge.source)
-      && state.pendingActionRequiredRequestsByAgent[edge.source]
-    ) {
-      return edge.source;
-    }
+function requireSingleTriggerLoopEscalation(
+  candidates: TriggerLoopEscalation[],
+  sourceAgentId: string,
+): TriggerLoopEscalation {
+  const candidate = candidates[0];
+  if (!candidate) {
+    throw new Error(`${sourceAgentId} 没有可用的超限转派 trigger`);
   }
+  return candidate;
+}
 
-  return null;
+function getTopologyEndIncoming(topology: TopologyRecord): TopologyLangGraphEndIncoming[] {
+  if (!topology.langgraph || !topology.langgraph.end) {
+    return [];
+  }
+  return topology.langgraph.end.incoming;
+}
+
+function buildTriggeredLoopEscalationDisplayContent(
+  sourceAgentId: string,
+  targetAgentId: string,
+  maxTriggerRounds: number,
+): string {
+  return `${sourceAgentId} -> ${targetAgentId} 已连续交流 ${maxTriggerRounds} 次`;
 }
 
 function shouldFinishGraphTask(state: GraphTaskState): boolean {
-  if (Object.keys(state.pendingActionRequiredRequestsByAgent).length > 0) {
-    return false;
-  }
-  if (Object.keys(state.activeHandoffBatchBySource).length > 0) {
-    return false;
-  }
   if (state.groupActivations.some((activation) => !activation.dispatched)) {
     return false;
   }
@@ -1631,46 +1124,31 @@ function shouldFinishGraphTask(state: GraphTaskState): boolean {
 
 function shouldFinishGraphTaskFromEndEdge(
   state: GraphTaskState,
-  result: Pick<GraphAgentResult, "agentId" | "signalDone" | "decisionAgent" | "routingKind" | "trigger">,
+  result: GraphAgentResult,
 ): boolean {
-  const endNode = state.topology.langgraph?.end;
-  const endSources = endNode?.sources ?? [];
-  if (!endSources.includes(result.agentId)) {
-    return false;
-  }
-  const incoming = (endNode?.incoming ?? []).filter((edge) => edge.source === result.agentId);
+  const incoming = getTopologyEndIncoming(state.topology).filter((edge) => edge.source === result.agentId);
   if (incoming.length === 0) {
     return false;
   }
   if (!incoming.some((edge) => endTriggerMatchesResult(edge, result))) {
     return false;
   }
-  if (Object.keys(state.pendingActionRequiredRequestsByAgent).length > 0) {
-    return false;
-  }
-  if (Object.keys(state.activeHandoffBatchBySource).length > 0) {
-    return false;
-  }
   if (state.groupActivations.some((activation) => !activation.dispatched)) {
     return false;
   }
-  if (state.runningAgents.length > 0 || state.queuedAgents.length > 0) {
-    return false;
-  }
-
-  return true;
+  return state.runningAgents.length === 0 && state.queuedAgents.length === 0;
 }
 
 function endTriggerMatchesResult(
   edge: { trigger: string },
-  result: Pick<GraphAgentResult, "decisionAgent" | "routingKind" | "trigger">,
+  result: GraphAgentResult,
 ): boolean {
   const edgeTrigger = normalizeTopologyEdgeTrigger(edge.trigger);
   if (isDefaultTopologyTrigger(edgeTrigger)) {
     return !result.decisionAgent;
   }
   return result.decisionAgent
-    && result.routingKind === "labeled"
+    && result.routingKind === "triggered"
     && result.trigger === edgeTrigger;
 }
 
@@ -1695,4 +1173,22 @@ function collectReachableNodeNames(
   }
 
   return visited;
+}
+
+function markAgentsScheduled(state: GraphTaskState, agentIds: string[]): void {
+  for (const agentId of agentIds) {
+    if (!state.runningAgents.includes(agentId)) {
+      state.runningAgents.push(agentId);
+    }
+    state.agentStatusesByName[agentId] = "running";
+  }
+}
+
+function unsetScheduledAgent(state: GraphTaskState, agentId: string): void {
+  state.runningAgents = state.runningAgents.filter((current) => current !== agentId);
+  state.queuedAgents = state.queuedAgents.filter((current) => current !== agentId);
+}
+
+function buildGroupItemId(groupRuleId: string, sequence: number): string {
+  return `${groupRuleId}-${String(sequence).padStart(4, "0")}`;
 }

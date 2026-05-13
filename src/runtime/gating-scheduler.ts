@@ -15,7 +15,7 @@ import type {
 
 export interface GatingAgentState {
   id: string;
-  status: "idle" | "running" | "completed" | "failed" | "action_required";
+  status: "idle" | "running" | "completed" | "failed";
 }
 
 export interface GatingDispatchPlan {
@@ -26,35 +26,6 @@ export interface GatingDispatchPlan {
   readyTargets: string[];
   queuedTargets: string[];
 }
-
-interface GatingBatchContinuationBase {
-  sourceAgentId: string;
-  sourceContent: string;
-}
-
-export type GatingBatchContinuation =
-  | (GatingBatchContinuationBase & {
-      kind: "pending_targets";
-      pendingTargets: string[];
-      redispatchTargets: [];
-    })
-  | (GatingBatchContinuationBase & {
-      kind: "redispatch";
-      pendingTargets: [];
-      redispatchTargets: string[];
-    })
-  | (GatingBatchContinuationBase & {
-      kind: "settled";
-      pendingTargets: [];
-      redispatchTargets: [];
-    });
-
-export type GatingRepairBatchContinuation = GatingBatchContinuationBase & {
-  kind: "repair";
-  pendingTargets: [];
-  redispatchTargets: [];
-  repairDecisionAgentId: string;
-};
 
 export function createGatingSchedulerRuntimeState(): GatingSchedulerRuntimeState {
   return {
@@ -159,7 +130,7 @@ export class GatingScheduler {
     };
   }
 
-  planLabeledDispatch(
+  planTriggeredDispatch(
     sourceAgentId: string,
     sourceContent: string,
     agentStates: GatingAgentState[],
@@ -169,8 +140,8 @@ export class GatingScheduler {
     },
   ): GatingDispatchPlan | null {
     const restrictTargets = options.restrictTargets;
-    const labeledTrigger = options.trigger;
-    const outgoing = this.getOutgoingEdges(sourceAgentId, labeledTrigger).filter(
+    const trigger = options.trigger;
+    const outgoing = this.getOutgoingEdges(sourceAgentId, trigger).filter(
       (edge) => !restrictTargets || restrictTargets.has(edge.target),
     );
     const completed = new Set(this.runtime.completedEdges);
@@ -184,7 +155,7 @@ export class GatingScheduler {
 
     const readyTargets: string[] = [];
     for (const edge of outgoing) {
-      if (this.canScheduleTarget(completed, edge.target, agentStates, labeledTrigger)) {
+      if (this.canScheduleTarget(completed, edge.target, agentStates, trigger)) {
         readyTargets.push(edge.target);
         this.runtime.lastSignatureByAgent.set(
           edge.target,
@@ -196,7 +167,7 @@ export class GatingScheduler {
     if (readyTargets.length > 0) {
       const sourceState = this.getOrCreateSourceRoundState(sourceAgentId);
       const batch: GatingHandoffDispatchBatchState = {
-        dispatchKind: "labeled",
+        dispatchKind: "triggered",
         sourceAgentId,
         sourceContent,
         targets: [...readyTargets],
@@ -218,86 +189,6 @@ export class GatingScheduler {
           queuedTargets: [],
         }
       : null;
-  }
-
-  recordHandoffBatchResponse(
-    responderAgentId: string,
-    outcome: "resolved" | "action_required",
-  ): GatingBatchContinuation | GatingRepairBatchContinuation | null {
-    for (const [sourceAgentId, batch] of this.runtime.activeHandoffBatchBySource.entries()) {
-      if (!batch.pendingTargets.includes(responderAgentId)) {
-        continue;
-      }
-
-      const sourceState = this.getOrCreateSourceRoundState(sourceAgentId);
-      if (outcome === "resolved") {
-        sourceState.decisionPassRound.set(responderAgentId, batch.sourceRound);
-      } else if (!batch.failedTargets.includes(responderAgentId)) {
-        batch.failedTargets.push(responderAgentId);
-      }
-      batch.pendingTargets = batch.pendingTargets.filter((targetName) => targetName !== responderAgentId);
-      if (!batch.respondedTargets.includes(responderAgentId)) {
-        batch.respondedTargets.push(responderAgentId);
-      }
-
-      if (batch.pendingTargets.length > 0) {
-        return {
-          sourceAgentId,
-          sourceContent: batch.sourceContent,
-          kind: "pending_targets",
-          pendingTargets: [...batch.pendingTargets],
-          redispatchTargets: [],
-        };
-      }
-
-      this.runtime.activeHandoffBatchBySource.delete(sourceAgentId);
-      if (batch.failedTargets.length > 0) {
-        const repairDecisionAgentId = batch.targets.find((targetName) => batch.failedTargets.includes(targetName));
-        if (!repairDecisionAgentId) {
-          throw new Error(`${sourceAgentId} 缺少待修复的 decision agent`);
-        }
-        return {
-          sourceAgentId,
-          sourceContent: batch.sourceContent,
-          kind: "repair",
-          pendingTargets: [],
-          repairDecisionAgentId,
-          redispatchTargets: [],
-        };
-      }
-
-      if (batch.dispatchKind === "handoff" && batch.targets.length === 1) {
-        const staleTargets = this.getHandoffTargetsForBatch(sourceAgentId, batch).filter(
-          (targetName) => sourceState.decisionPassRound.get(targetName) !== batch.sourceRound,
-        );
-        if (staleTargets.length === 0) {
-          return {
-            sourceAgentId,
-            sourceContent: batch.sourceContent,
-            kind: "settled",
-            pendingTargets: [],
-            redispatchTargets: [],
-          };
-        }
-        return {
-          sourceAgentId,
-          sourceContent: batch.sourceContent,
-          kind: "redispatch",
-          pendingTargets: [],
-          redispatchTargets: staleTargets,
-        };
-      }
-
-      return {
-        sourceAgentId,
-        sourceContent: batch.sourceContent,
-        kind: "settled",
-        pendingTargets: [],
-        redispatchTargets: [],
-      };
-    }
-
-    return null;
   }
 
   hasSatisfiedIncomingHandoff(agentId: string): boolean {
@@ -359,36 +250,6 @@ export class GatingScheduler {
     return state;
   }
 
-  private getHandoffTargets(sourceAgentId: string): string[] {
-    return this.uniqueTargetNames(this.getOutgoingEdges(sourceAgentId, DEFAULT_TOPOLOGY_TRIGGER));
-  }
-
-  private getHandoffTargetsForBatch(
-    sourceAgentId: string,
-    batch: GatingHandoffDispatchBatchState,
-  ): string[] {
-    const outgoingTargets = this.getHandoffTargets(sourceAgentId);
-    if (outgoingTargets.length === 0) {
-      return [];
-    }
-
-    const groupNodeIds = new Set(
-      getTopologyNodeRecords(this.topology)
-        .filter((node) => node.kind === "group")
-        .map((node) => node.id),
-    );
-    const hasGroupTarget = outgoingTargets.some((targetName) => groupNodeIds.has(targetName));
-    if (!hasGroupTarget) {
-      return [...batch.targets];
-    }
-
-    return this.uniqueTargetNames(
-      outgoingTargets.flatMap((targetName) => (
-        groupNodeIds.has(targetName) ? batch.targets : [targetName]
-      )).map((target) => ({ target })),
-    );
-  }
-
   private canScheduleTarget(
     completedEdges: Set<string>,
     targetName: string,
@@ -405,11 +266,11 @@ export class GatingScheduler {
       return false;
     }
 
-    const allIncomingLabeledEdges = this.topology.edges.filter((edge) =>
+    const allIncomingTriggeredEdges = this.topology.edges.filter((edge) =>
       edge.target === targetName
-      && resolveTriggerRoutingKindForSource(this.topology, edge.source, edge.trigger) === "labeled"
+      && resolveTriggerRoutingKindForSource(this.topology, edge.source, edge.trigger).kind === "triggered"
     );
-    const incomingLabeledEdges = triggerKind === DEFAULT_TOPOLOGY_TRIGGER
+    const incomingTriggeredEdges = triggerKind === DEFAULT_TOPOLOGY_TRIGGER
       ? []
       : this.topology.edges.filter((edge) =>
           edge.target === targetName
@@ -417,7 +278,7 @@ export class GatingScheduler {
         );
     if (
       triggerKind === DEFAULT_TOPOLOGY_TRIGGER
-      && allIncomingLabeledEdges.some((edge) =>
+      && allIncomingTriggeredEdges.some((edge) =>
         this.hasSettledAgentState(edge.source, agentStates)
         && !this.isIncomingEdgeSatisfied(edge, completedEdges)
       )
@@ -426,47 +287,42 @@ export class GatingScheduler {
     }
     if (
       triggerKind !== DEFAULT_TOPOLOGY_TRIGGER
-      && incomingLabeledEdges.length > 0
-      && !this.hasSatisfiedLabeledEdgesForTarget(targetName, incomingLabeledEdges, completedEdges, agentStates)
+      && incomingTriggeredEdges.length > 0
+      && !this.hasSatisfiedTriggeredEdgesForTarget(targetName, incomingTriggeredEdges, completedEdges, agentStates)
     ) {
       return false;
     }
 
     const signature = this.buildTriggerSignature(completedEdges, targetName);
-    if (
-      this.runtime.lastSignatureByAgent.get(targetName) === signature &&
-      agent.status !== "failed" &&
-      agent.status !== "action_required"
-    ) {
-      return false;
-    }
+    return !(this.runtime.lastSignatureByAgent.get(targetName) === signature &&
+      agent.status !== "failed");
 
-    return true;
+
   }
 
-  private hasSatisfiedLabeledEdgesForTarget(
+  private hasSatisfiedTriggeredEdgesForTarget(
     targetName: string,
-    incomingLabeledEdges: TopologyEdge[],
+    incomingTriggeredEdges: TopologyEdge[],
     completedEdges: Set<string>,
     agentStates: GatingAgentState[],
   ): boolean {
-    if (incomingLabeledEdges.length === 0) {
+    if (incomingTriggeredEdges.length === 0) {
       return true;
     }
 
-    if (this.requiresAllLabeledIncomingEdges(targetName, incomingLabeledEdges)) {
-      return incomingLabeledEdges.some((edge) => this.isIncomingEdgeSatisfied(edge, completedEdges))
-        && incomingLabeledEdges.every((edge) => this.hasSettledAgentState(edge.source, agentStates));
+    if (this.requiresAllTriggeredIncomingEdges(targetName, incomingTriggeredEdges)) {
+      return incomingTriggeredEdges.some((edge) => this.isIncomingEdgeSatisfied(edge, completedEdges))
+        && incomingTriggeredEdges.every((edge) => this.hasSettledAgentState(edge.source, agentStates));
     }
 
-    return incomingLabeledEdges.some((edge) => this.isIncomingEdgeSatisfied(edge, completedEdges));
+    return incomingTriggeredEdges.some((edge) => this.isIncomingEdgeSatisfied(edge, completedEdges));
   }
 
-  private requiresAllLabeledIncomingEdges(
+  private requiresAllTriggeredIncomingEdges(
     targetName: string,
-    incomingLabeledEdges: TopologyEdge[],
+    incomingTriggeredEdges: TopologyEdge[],
   ): boolean {
-    if (incomingLabeledEdges.length <= 1) {
+    if (incomingTriggeredEdges.length <= 1) {
       return false;
     }
 
@@ -475,9 +331,9 @@ export class GatingScheduler {
       return false;
     }
     const actualSourceTemplateNames = this.uniqueValues(
-      incomingLabeledEdges.map((edge) => this.getTemplateName(edge.source)).filter((value): value is string => Boolean(value)),
+      incomingTriggeredEdges.map((edge) => this.getTemplateName(edge.source)).filter((value): value is string => Boolean(value)),
     );
-    if (actualSourceTemplateNames.length !== incomingLabeledEdges.length) {
+    if (actualSourceTemplateNames.length !== incomingTriggeredEdges.length) {
       return false;
     }
 
@@ -493,9 +349,10 @@ export class GatingScheduler {
         return false;
       }
 
+      const incomingTrigger = this.requireIncomingTriggeredEdge(incomingTriggeredEdges).trigger;
       return targetRoles.some((targetRole) => {
         const requiredEdges = rule.edges.filter(
-          (edge) => edge.trigger === incomingLabeledEdges[0]?.trigger && edge.targetRole === targetRole,
+          (edge) => edge.trigger === incomingTrigger && edge.targetRole === targetRole,
         );
         if (requiredEdges.length <= 1) {
           return false;
@@ -513,6 +370,16 @@ export class GatingScheduler {
   private getTemplateName(nodeId: string): string | null {
     const nodeRecord = getTopologyNodeRecords(this.topology).find((node) => node.id === nodeId);
     return nodeRecord?.templateName ?? nodeId;
+  }
+
+  private requireIncomingTriggeredEdge(
+    incomingTriggeredEdges: TopologyRecord["edges"],
+  ): TopologyRecord["edges"][number] {
+    const edge = incomingTriggeredEdges[0];
+    if (!edge) {
+      throw new Error("incoming triggered edge 缺失");
+    }
+    return edge;
   }
 
   private getGroupMemberTemplateName(

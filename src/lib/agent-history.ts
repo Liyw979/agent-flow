@@ -14,7 +14,6 @@ import {
 } from "@shared/types";
 import { stripDecisionResponseMarkup } from "@shared/decision-response";
 import { normalizeDecisionDisplayContent } from "../runtime/decision-parser";
-import { getLoopLimitFailedDecisionAgentName } from "./decision-loop-limit";
 
 export interface AgentHistoryItem {
   id: string;
@@ -37,12 +36,6 @@ const EMPTY_AGENT_HISTORY_DETAIL = "暂无详细记录";
 interface AgentHistoryRange {
   startedAt?: UtcIsoTimestamp;
   endedAt?: UtcIsoTimestamp;
-}
-
-function hasActionRequiredFollowUp(messages: MessageRecord[], finalMessageId: string): boolean {
-  return messages.some((message) =>
-    message.kind === "action-required-request" && message.followUpMessageId === finalMessageId
-  );
 }
 
 function getAgentAllowedTriggers(
@@ -200,32 +193,17 @@ function getRuntimeItemPresentation(kind: AgentProgressMessageRecord["activityKi
 }
 
 function getFinalItemPresentation(input: {
-  decisionAgent: boolean;
-  status: string;
+  status: AgentFinalMessageRecord["status"];
 }) {
-  if (input.status === "final_failed_decision") {
+  if (input.status === "error") {
     return {
-      label: "继续处理，最后一次",
-      tone: "failure" as const,
-    };
-  }
-
-  if (input.status === "action_required") {
-    return {
-      label: "继续处理",
-      tone: "failure" as const,
-    };
-  }
-
-  if (input.status === "failed") {
-    return {
-      label: input.decisionAgent ? "继续处理" : "执行失败",
+      label: "执行失败",
       tone: "failure" as const,
     };
   }
 
   return {
-    label: input.decisionAgent ? "已完成判定" : "已完成",
+    label: "已完成",
     tone: "success" as const,
   };
 }
@@ -250,18 +228,10 @@ function mapAgentFinalHistoryItem(input: {
   message: AgentFinalMessageRecord;
 }) {
   const decisionAgent = isHistoryDecisionAgent(input.topology, input.agentId);
-  const finalLoopDecisionAgentName = getLoopLimitFailedDecisionAgentName(input.messages);
   const allowedTriggers = decisionAgent ? getAgentAllowedTriggers(input.topology, input.agentId) : [];
 
-  const status =
-    hasActionRequiredFollowUp(input.messages, input.message.id)
-      ? "action_required"
-      : decisionAgent && input.message.status === "error" && finalLoopDecisionAgentName === input.agentId
-        ? "final_failed_decision"
-        : input.message.status;
   const presentation = getFinalItemPresentation({
-    decisionAgent,
-    status,
+    status: input.message.status,
   });
   const detail = decisionAgent
     ? normalizeDecisionDisplayContent(

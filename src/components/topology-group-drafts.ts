@@ -8,6 +8,7 @@ import {
 
 const DEBATE_TURN_TRIGGER = "<respond>";
 const DEBATE_SUMMARY_TRIGGER = "<finalize>";
+const REQUIRED_MAX_TRIGGER_ROUNDS = 4;
 
 interface DebateGroupDraftInput {
   teamName: string;
@@ -144,10 +145,10 @@ export function upsertDebateGroupDraft(
       { role: "summary", templateName: input.summaryTemplateName },
     ],
     edges: [
-      { sourceRole: "pro", targetRole: "con", trigger: DEBATE_TURN_TRIGGER, messageMode: "last" },
-      { sourceRole: "con", targetRole: "pro", trigger: DEBATE_TURN_TRIGGER, messageMode: "last" },
-      { sourceRole: "pro", targetRole: "summary", trigger: DEBATE_SUMMARY_TRIGGER, messageMode: "last" },
-      { sourceRole: "con", targetRole: "summary", trigger: DEBATE_SUMMARY_TRIGGER, messageMode: "last" },
+      { sourceRole: "pro", targetRole: "con", trigger: DEBATE_TURN_TRIGGER, messageMode: "last", maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS },
+      { sourceRole: "con", targetRole: "pro", trigger: DEBATE_TURN_TRIGGER, messageMode: "last", maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS },
+      { sourceRole: "pro", targetRole: "summary", trigger: DEBATE_SUMMARY_TRIGGER, messageMode: "last", maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS },
+      { sourceRole: "con", targetRole: "summary", trigger: DEBATE_SUMMARY_TRIGGER, messageMode: "last", maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS },
     ],
     exitWhen: "one_side_agrees",
     report: {
@@ -155,7 +156,7 @@ export function upsertDebateGroupDraft(
       templateName: input.reportToTemplateName,
       trigger: DEFAULT_TOPOLOGY_TRIGGER,
       messageMode: "last",
-      maxTriggerRounds: false,
+      maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS,
     },
   };
 
@@ -166,6 +167,7 @@ export function upsertDebateGroupDraft(
     target: groupNodeId,
     trigger: DEFAULT_TOPOLOGY_TRIGGER,
     messageMode: "last" as const,
+    maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS,
   });
 
   const nextGroupRules = (topology.groupRules ?? []).filter((rule) => rule.id !== groupRuleId).concat(groupRule);

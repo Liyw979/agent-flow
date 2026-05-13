@@ -67,8 +67,7 @@ type ChatFeedItem = ChatFeedMessageItem | ChatFeedExecutionItem;
 function isVisibleChatExecutionTrigger(message: MessageRecord) {
   return (
     message.kind === "user" ||
-    message.kind === "agent-dispatch" ||
-    message.kind === "action-required-request"
+    message.kind === "agent-dispatch"
   );
 }
 

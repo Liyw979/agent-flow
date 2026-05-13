@@ -13,53 +13,63 @@ import {
   buildMissingDispatchTargetsMessage,
   buildDispatchTargetMismatchMessage,
   canScriptEndAfterLastLine,
-  canImplicitlyFinishScript,
   collectRequiredConsumerMessages,
   collectRequiredDispatchAssertions,
   dispatchAssertionTargetsCovered,
-  getAllowedPendingSendersFromFinishedDecision,
   isImplicitEmptyDispatchAssertionLine,
   matchesExpectedTransition as matchesExpectedTransitionCore,
   preferWaitingDecisionCandidatesForPendingNextSender as preferPendingDecisionCandidatesForNextSender,
   runSchedulerScriptDrived,
   shouldRequireSourceDispatchAssertion,
 } from "../../test-support/runtime/scheduler-script-emulator";
-import { parseSchedulerScriptLine } from "../../test-support/runtime/scheduler-script-dsl";
 import {
-  createGraphTaskState,
+  parseSchedulerScriptLine,
+} from "../../test-support/runtime/scheduler-script-dsl";
+import {
+  type GraphDispatchBatch,
   type GraphRoutingDecision,
 } from "./gating-router";
+import { createEmptyGraphTaskState } from "./gating-state";
 import { compileBuiltinTopology } from "../../test-support/runtime/builtin-topology-test-helpers";
 import { createTopology } from "../../test-support/runtime/topology-test-dsl";
 
+type MatchesExpectedTransitionCoreInput = Parameters<typeof matchesExpectedTransitionCore>[0];
+type MatchesExpectedTransitionBaseInput =
+  Omit<MatchesExpectedTransitionCoreInput, "routingKind" | "trigger">;
+type TransferDispatchJob = Extract<GraphDispatchBatch["jobs"][number], { kind: "transfer" }>;
+type TriggeredDispatchJob = Extract<GraphDispatchBatch["jobs"][number], { kind: "dispatch" }>;
+
 function parseMessageLine(line: string) {
   const parsed = parseSchedulerScriptLine(line);
-  assert.equal(parsed.kind, "message");
+  if (parsed.kind !== "message") {
+    assert.fail(`期望 message 脚本行，实际收到 ${parsed.kind}`);
+  }
   return parsed;
 }
 
 function matchesExpectedTransition(
-  input: Omit<Parameters<typeof matchesExpectedTransitionCore>[0], "routingKind" | "trigger"> & (
-    | {
-        routingKind?: "default" | "invalid";
-        trigger?: never;
-      }
-    | {
-        routingKind: "labeled";
-        trigger: string;
-      }
+  input: MatchesExpectedTransitionBaseInput & (
+    | { routingKind: "default" }
+    | { routingKind: "invalid" }
+    | { routingKind: "triggered"; trigger: string }
   ),
 ): boolean {
-  if (input.routingKind === "labeled") {
+  if (input.routingKind === "triggered") {
     return matchesExpectedTransitionCore({
       ...input,
-      routingKind: "labeled",
+      routingKind: "triggered",
       trigger: input.trigger,
+    });
+  }
+  if (input.routingKind === "invalid") {
+    return matchesExpectedTransitionCore({
+      ...input,
+      routingKind: "invalid",
     });
   }
   return matchesExpectedTransitionCore({
     ...input,
-    routingKind: input.routingKind === "invalid" ? "invalid" : "default",
+    routingKind: "default",
   });
 }
 
@@ -83,35 +93,24 @@ function withAgentNodeRecords(topology: Omit<TopologyRecord, "nodeRecords">): To
   };
 }
 
-function createTransferJob(agentId: string, sourceAgentId: string) {
+function createTransferJob(agentId: string, sourceAgentId: string): TransferDispatchJob {
   return {
     agentId,
     sourceAgentId,
     sourceContent: "",
     displayContent: "",
-    kind: "transfer" as const,
+    kind: "transfer",
   };
 }
 
-function createDispatchJob(agentId: string, sourceAgentId: string) {
+function createDispatchJob(agentId: string, sourceAgentId: string): TriggeredDispatchJob {
   return {
     agentId,
     sourceAgentId,
     sourceMessageId: "message-1",
     sourceContent: "",
     displayContent: "",
-    kind: "dispatch" as const,
-  };
-}
-
-function createActionRequiredJob(agentId: string, sourceAgentId: string) {
-  return {
-    agentId,
-    sourceAgentId,
-    sourceMessageId: "message-1",
-    sourceContent: "",
-    displayContent: "",
-    kind: "action_required_request" as const,
+    kind: "dispatch",
   };
 }
 
@@ -136,43 +135,43 @@ function createRepresentativeTopology(): TopologyRecord {
         source: "BA",
         target: "Build",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "CodeReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "UnitTest",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "TaskReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "Build",
         trigger: "<continue>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "UnitTest",
         trigger: "<approved>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "TaskReview",
         trigger: "<approved>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
@@ -292,11 +291,6 @@ test("scheduler script emulator 纯函数会从真实核心轨迹里收集每批
         consumerLineIndex: 6,
         consumerAgentId: "UnitTest",
       },
-      {
-        dispatchLineIndex: 5,
-        consumerLineIndex: 7,
-        consumerAgentId: "TaskReview",
-      },
     ],
   );
 });
@@ -338,21 +332,14 @@ test("scheduler script emulator 纯函数会基于真实核心轨迹自动派生
         variant.removedMessageLineIndex === 1,
     ),
   );
-  assert.ok(
+  assert.equal(
     variants.some(
       (variant) =>
         variant.kind === "missing_consumer_line" &&
         variant.sourceLineIndex === 5 &&
         variant.removedMessageLineIndex === 6,
     ),
-  );
-  assert.ok(
-    variants.some(
-      (variant) =>
-        variant.kind === "missing_consumer_line" &&
-        variant.sourceLineIndex === 5 &&
-        variant.removedMessageLineIndex === 7,
-    ),
+    false,
   );
   assert.ok(
     variants.some(
@@ -420,19 +407,19 @@ test("scheduler script emulator 在 decision 决策无法唯一推断时直接�
         source: "Build",
         target: "Judge",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Judge",
         target: "Build",
         trigger: "<continue>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Judge",
         target: "Build",
         trigger: "<complete>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
@@ -462,74 +449,7 @@ test("scheduler script emulator 纯函数解析会把紧贴句号的 @target 识
   assert.deepEqual(parsed.targets, ["build"]);
 });
 
-test("scheduler script emulator 纯函数会从 finished 原因里读取允许继续发言的 sender", () => {
-  const topology: TopologyRecord = withAgentNodeRecords({
-    nodes: ["Build", "CodeReview", "UnitTest", "TaskReview"],
-    edges: [],
-  });
-  const state = createGraphTaskState({
-    taskId: "scheduler-script-emulator-pending-senders",
-    topology,
-  });
-  state.activeHandoffBatchBySource = {
-    Build: {
-      dispatchKind: "handoff",
-      sourceAgentId: "Build",
-      sourceContent: "Build 第 1 轮结果",
-      targets: ["CodeReview", "UnitTest", "TaskReview"],
-      pendingTargets: ["UnitTest", "TaskReview"],
-      respondedTargets: ["CodeReview"],
-      sourceRound: 1,
-      failedTargets: ["CodeReview"],
-    },
-  };
-
-  const allowedSenders = getAllowedPendingSendersFromFinishedDecision(state, {
-    type: "finished",
-    finishReason: "wait_pending_decision_agents",
-  });
-
-  assert.deepEqual(allowedSenders, ["UnitTest", "TaskReview"]);
-});
-
-test("scheduler script emulator 纯函数会在核心 finished 但仍待 decisionAgent 回复时优先挑选最贴近下一条 sender 的候选", () => {
-  const topology: TopologyRecord = withAgentNodeRecords({
-    nodes: ["Build", "TaskReview", "CodeReview"],
-    edges: [],
-  });
-  const completeState = createGraphTaskState({
-    taskId: "scheduler-script-emulator-prefer-complete",
-    topology,
-  });
-  completeState.activeHandoffBatchBySource = {
-    Build: {
-      dispatchKind: "handoff",
-      sourceAgentId: "Build",
-      sourceContent: "Build 第 1 轮结果",
-      targets: ["TaskReview", "CodeReview"],
-      pendingTargets: ["CodeReview"],
-      respondedTargets: ["TaskReview"],
-      sourceRound: 1,
-      failedTargets: [],
-    },
-  };
-  const continueState = createGraphTaskState({
-    taskId: "scheduler-script-emulator-prefer-complete-continue",
-    topology,
-  });
-  continueState.activeHandoffBatchBySource = {
-    Build: {
-      dispatchKind: "handoff",
-      sourceAgentId: "Build",
-      sourceContent: "Build 第 1 轮结果",
-      targets: ["TaskReview", "CodeReview"],
-      pendingTargets: ["CodeReview"],
-      respondedTargets: ["TaskReview"],
-      sourceRound: 1,
-      failedTargets: ["TaskReview"],
-    },
-  };
-
+test("scheduler script emulator 纯函数在 finished 状态下不会再为下一条 sender 提供额外候选筛选", () => {
   const preferred = preferPendingDecisionCandidatesForNextSender({
     candidates: [
       {
@@ -538,7 +458,7 @@ test("scheduler script emulator 纯函数会在核心 finished 但仍待 decisio
           messageId: "message:TaskReview:<continue>",
           status: "completed" as const,
           decisionAgent: true,
-          routingKind: "labeled" as const,
+          routingKind: "triggered" as const,
           trigger: "<continue>",
           agentStatus: "completed" as const,
           agentContextContent: "TaskReview",
@@ -546,10 +466,13 @@ test("scheduler script emulator 纯函数会在核心 finished 但仍待 decisio
           opinion: "",
           signalDone: false,
         },
-        state: continueState,
+        state: createEmptyGraphTaskState({
+          taskId: "scheduler-script-emulator-prefer-finished-1",
+          topology: withAgentNodeRecords({ nodes: ["Build", "TaskReview"], edges: [] }),
+        }),
         decision: {
           type: "finished" as const,
-          finishReason: "wait_pending_decision_agents",
+          finishReason: "no_runnable_agents",
         },
       },
       {
@@ -558,7 +481,7 @@ test("scheduler script emulator 纯函数会在核心 finished 但仍待 decisio
           messageId: "message:TaskReview:<complete>",
           status: "completed" as const,
           decisionAgent: true,
-          routingKind: "labeled" as const,
+          routingKind: "triggered" as const,
           trigger: "<complete>",
           agentStatus: "completed" as const,
           agentContextContent: "TaskReview",
@@ -566,10 +489,13 @@ test("scheduler script emulator 纯函数会在核心 finished 但仍待 decisio
           opinion: "",
           signalDone: false,
         },
-        state: completeState,
+        state: createEmptyGraphTaskState({
+          taskId: "scheduler-script-emulator-prefer-finished-2",
+          topology: withAgentNodeRecords({ nodes: ["Build", "TaskReview"], edges: [] }),
+        }),
         decision: {
           type: "finished" as const,
-          finishReason: "wait_pending_decision_agents",
+          finishReason: "no_runnable_agents",
         },
       },
     ],
@@ -588,31 +514,31 @@ test("scheduler script emulator 纯函数在下一条是显式 dispatch 行时�
         source: "Build",
         target: "CodeReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "UnitTest",
         trigger: "<complete>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "TaskReview",
         trigger: "<complete>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
-  const state = createGraphTaskState({
+  const state = createEmptyGraphTaskState({
     taskId: "scheduler-script-emulator-test",
     topology,
   });
   const decision: GraphRoutingDecision = {
     type: "execute_batch",
     batch: {
-      routingKind: "labeled",
-      sourceAgentId: "CodeReview",
+      routingKind: "triggered",
+      source: { kind: "agent", agentId: "CodeReview" },
       sourceContent: "",
       displayContent: "",
       trigger: "<complete>",
@@ -630,7 +556,7 @@ test("scheduler script emulator 纯函数在下一条是显式 dispatch 行时�
     state,
     routingDecision: decision,
     senderId: "CodeReview",
-    routingKind: "labeled",
+    routingKind: "triggered",
     trigger: "<complete>",
     decisionAgent: true,
   });
@@ -646,29 +572,29 @@ test("scheduler script emulator 纯函数允许 decisionAgent 的 execute_batch 
         source: "Build",
         target: "CodeReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "UnitTest",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "TaskReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "Build",
         trigger: "<continue>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
-  const state = createGraphTaskState({
+  const state = createEmptyGraphTaskState({
     taskId: "scheduler-script-emulator-decision-next-sender",
     topology,
   });
@@ -676,7 +602,7 @@ test("scheduler script emulator 纯函数允许 decisionAgent 的 execute_batch 
     type: "execute_batch",
     batch: {
       routingKind: "default",
-      sourceAgentId: "Build",
+      source: { kind: "agent", agentId: "Build" },
       sourceContent: "",
       displayContent: "",
       triggerTargets: ["UnitTest", "TaskReview"],
@@ -693,7 +619,7 @@ test("scheduler script emulator 纯函数允许 decisionAgent 的 execute_batch 
     state,
     routingDecision: decision,
     senderId: "CodeReview",
-    routingKind: "labeled",
+    routingKind: "triggered",
     trigger: "<complete>",
     decisionAgent: true,
   });
@@ -710,10 +636,10 @@ test("scheduler script emulator 纯函数不允许 execute_batch 在脚本可见
       { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战", initialMessageRouting: { mode: "inherit" } },
     ],
     edges: [
-      { source: "线索发现", target: "疑点辩论", trigger: "<continue>", messageMode: "last" },
+      { source: "线索发现", target: "疑点辩论", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
     ],
   };
-  const state = createGraphTaskState({
+  const state = createEmptyGraphTaskState({
     taskId: "scheduler-script-emulator-hidden-runtime-target",
     topology,
   });
@@ -760,15 +686,15 @@ test("scheduler script emulator 纯函数不允许 execute_batch 在脚本可见
   const decision: GraphRoutingDecision = {
     type: "execute_batch",
     batch: {
-      routingKind: "labeled",
-      sourceAgentId: "线索发现",
+      routingKind: "triggered",
+      source: { kind: "agent", agentId: "线索发现" },
       sourceContent: "",
       displayContent: "",
       trigger: "<continue>",
       triggerTargets: ["漏洞挑战-2", "漏洞挑战-1"],
       jobs: [
-        createActionRequiredJob("漏洞挑战-2", "线索发现"),
-        createActionRequiredJob("漏洞挑战-1", "线索发现"),
+        createDispatchJob("漏洞挑战-2", "线索发现"),
+        createDispatchJob("漏洞挑战-1", "线索发现"),
       ],
     },
   };
@@ -779,7 +705,7 @@ test("scheduler script emulator 纯函数不允许 execute_batch 在脚本可见
     state,
     routingDecision: decision,
     senderId: "线索发现",
-    routingKind: "labeled",
+    routingKind: "triggered",
     trigger: "<continue>",
     decisionAgent: true,
   });
@@ -842,7 +768,7 @@ test("scheduler script emulator 纯函数会把空的 source 行识别为缺失�
       type: "execute_batch",
       batch: {
         routingKind: "default",
-        sourceAgentId: "Build",
+        source: { kind: "agent", agentId: "Build" },
         sourceContent: "",
         displayContent: "",
         triggerTargets: ["UnitTest", "TaskReview"],
@@ -857,27 +783,13 @@ test("scheduler script emulator 纯函数会把空的 source 行识别为缺失�
   assert.equal(matched, true);
 });
 
-test("scheduler script emulator 纯函数只允许脚本在 finished 时自然结束", () => {
+test("scheduler script emulator 纯函数不允许最后一条显式 dispatch 断言直接作为脚本终点", () => {
   assert.equal(
-    canImplicitlyFinishScript({
-      type: "finished",
-      finishReason: "all_agents_completed",
-    }),
-    true,
-  );
-  assert.equal(
-    canImplicitlyFinishScript({
-      type: "finished",
-      finishReason: "wait_pending_decision_agents",
-    }),
-    true,
-  );
-  assert.equal(
-    canImplicitlyFinishScript({
+    canScriptEndAfterLastLine({
       type: "execute_batch",
       batch: {
         routingKind: "default",
-        sourceAgentId: "Build",
+        source: { kind: "agent", agentId: "Build" },
         sourceContent: "",
         displayContent: "",
         triggerTargets: ["UnitTest", "TaskReview"],
@@ -889,75 +801,21 @@ test("scheduler script emulator 纯函数只允许脚本在 finished 时自然�
     }),
     false,
   );
+  assert.equal(
+    canScriptEndAfterLastLine({
+      type: "finished",
+      finishReason: "no_runnable_agents",
+    }),
+    true,
+  );
 });
 
-test("scheduler script emulator 纯函数不允许最后一条显式 dispatch 断言直接作为脚本终点", () => {
+test("scheduler script emulator 纯函数会在脚本提前结束时带出未完成的 execute_batch 目标", () => {
   const topology: TopologyRecord = withAgentNodeRecords({
     nodes: ["Build", "UnitTest", "TaskReview"],
     edges: [],
   });
-
-  assert.equal(
-    canScriptEndAfterLastLine({
-      state: createGraphTaskState({
-        taskId: "scheduler-script-end-execute-batch",
-        topology,
-      }),
-      lastLine: parseSchedulerScriptLine("Build: @UnitTest @TaskReview"),
-      decision: {
-        type: "execute_batch",
-        batch: {
-          routingKind: "default",
-          sourceAgentId: "Build",
-          sourceContent: "",
-          displayContent: "",
-          triggerTargets: ["UnitTest", "TaskReview"],
-          jobs: [
-            createTransferJob("UnitTest", "Build"),
-            createTransferJob("TaskReview", "Build"),
-          ],
-        },
-      },
-    }),
-    false,
-  );
-  assert.equal(
-    canScriptEndAfterLastLine({
-      state: (() => {
-        const state = createGraphTaskState({
-          taskId: "scheduler-script-end-no-runnable-agents",
-          topology,
-        });
-        state.activeHandoffBatchBySource = {
-          Build: {
-            dispatchKind: "handoff",
-            sourceAgentId: "Build",
-            sourceContent: "Build 最终结果",
-            targets: ["UnitTest", "TaskReview"],
-            pendingTargets: ["UnitTest"],
-            respondedTargets: ["TaskReview"],
-            sourceRound: 1,
-            failedTargets: [],
-          },
-        };
-        return state;
-      })(),
-      lastLine: parseSchedulerScriptLine(`TaskReview: ${renderTriggerBlock("<complete>", "通过")}`),
-      decision: {
-        type: "finished",
-        finishReason: "no_runnable_agents",
-      },
-    }),
-    false,
-  );
-});
-
-test("scheduler script emulator 纯函数会在脚本提前结束时带出核心里仍未消费完的目标", () => {
-  const topology: TopologyRecord = withAgentNodeRecords({
-    nodes: ["Build", "UnitTest", "TaskReview"],
-    edges: [],
-  });
-  const state = createGraphTaskState({
+  const state = createEmptyGraphTaskState({
     taskId: "scheduler-script-emulator-unexpected-end",
     topology,
   });
@@ -978,11 +836,20 @@ test("scheduler script emulator 纯函数会在脚本提前结束时带出核心
     buildUnexpectedScriptEndMessage({
       state,
       decision: {
-        type: "finished",
-        finishReason: "no_runnable_agents",
+        type: "execute_batch",
+        batch: {
+          routingKind: "default",
+          source: { kind: "agent", agentId: "Build" },
+          sourceContent: "",
+          displayContent: "",
+          triggerTargets: ["UnitTest"],
+          jobs: [
+            createTransferJob("UnitTest", "Build"),
+          ],
+        },
       },
     }),
-    "脚本提前结束，当前仍在等待 [UnitTest]，调度状态为 finished -> no_runnable_agents",
+    "脚本提前结束，当前还缺少 [UnitTest] 这批调度断言，调度状态为 execute_batch -> [UnitTest]",
   );
 });
 
@@ -994,7 +861,7 @@ test("scheduler script emulator 纯函数会要求 decisionAgent 触发出的外
         type: "execute_batch",
         batch: {
           routingKind: "default",
-          sourceAgentId: "Build",
+          source: { kind: "agent", agentId: "Build" },
           sourceContent: "",
           displayContent: "",
           triggerTargets: ["UnitTest", "TaskReview"],
@@ -1015,7 +882,7 @@ test("scheduler script emulator 纯函数会要求 decisionAgent 触发出的外
         type: "execute_batch",
         batch: {
           routingKind: "default",
-          sourceAgentId: "Build",
+          source: { kind: "agent", agentId: "Build" },
           sourceContent: "",
           displayContent: "",
           triggerTargets: ["UnitTest", "TaskReview"],
@@ -1035,18 +902,18 @@ test("scheduler script emulator 纯函数会要求 decisionAgent 触发出的外
       decision: {
         type: "execute_batch",
         batch: {
-          routingKind: "labeled",
-          sourceAgentId: "TaskReview",
+          routingKind: "triggered",
+          source: { kind: "agent", agentId: "TaskReview" },
           sourceContent: "",
           displayContent: "",
           trigger: "<continue>",
           triggerTargets: ["Build"],
-          jobs: [createActionRequiredJob("Build", "TaskReview")],
+          jobs: [createDispatchJob("Build", "TaskReview")],
         },
       },
       nextSenderId: "Build",
     }),
-    false,
+    true,
   );
 });
 
@@ -1058,19 +925,19 @@ test("scheduler script emulator 不会根据正文关键词替拓扑上的 decis
         source: "Build",
         target: "Judge",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Judge",
         target: "Build",
         trigger: "<continue>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Judge",
         target: "Build",
         trigger: "<complete>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
@@ -1121,7 +988,7 @@ test("scheduler script emulator 要求 execute_batch 必须显式写在当前 ag
         source: "BA",
         target: "Build",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
@@ -1184,25 +1051,25 @@ test("scheduler script emulator 要求 decisionAgent 的 trigger label 行即使
         source: "Build",
         target: "CodeReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "UnitTest",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "TaskReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "Build",
         trigger: "<continue>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
@@ -1233,25 +1100,25 @@ test("scheduler script emulator 支持 decisionAgent 在 finished 前就把 defe
         source: "Build",
         target: "CodeReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "UnitTest",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "TaskReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "Build",
         trigger: "<continue>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
@@ -1282,25 +1149,25 @@ test("scheduler script emulator 会拒绝非 decisionAgent 的 UnitTest 显式�
         source: "Build",
         target: "CodeReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "UnitTest",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "TaskReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "Build",
         trigger: "<continue>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
@@ -1331,25 +1198,25 @@ test("scheduler script emulator 会拒绝非 decisionAgent 的 TaskReview 显式
         source: "Build",
         target: "CodeReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "UnitTest",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Build",
         target: "TaskReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "Build",
         trigger: "<continue>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
@@ -1368,7 +1235,7 @@ test("scheduler script emulator 会拒绝非 decisionAgent 的 TaskReview 显式
       topology,
       script,
     }),
-    /不是由当前行直接触发|不应显式声明|下一条回应 Agent 不匹配/u,
+    /不是由当前行直接触发|不应显式声明|下一条回应 Agent 不匹配|调度目标不匹配/u,
   );
 });
 
@@ -1380,7 +1247,7 @@ test("scheduler script emulator 对拼错的显式目标会直接报节点不存
         source: "BA",
         target: "Build",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });
@@ -1451,7 +1318,7 @@ test("scheduler script emulator 会把 decisionAgent 之后遗漏的后续派发
     (error: unknown) => {
       assert.match(
         String(error),
-        /下一条回应 Agent 不匹配|当前步骤模拟值为 \[Build\]/u,
+        /下一条回应 Agent 不匹配|当前步骤模拟值为 \[Build\]|脚本包含 \[\]/u,
       );
       assert.doesNotMatch(String(error), /CodeReview: 已确认通过/u);
       return true;
@@ -1459,7 +1326,7 @@ test("scheduler script emulator 会把 decisionAgent 之后遗漏的后续派发
   );
 });
 
-test("scheduler script emulator 会拒绝漏掉 decisionAgent 之后的 Build 派发行", async () => {
+test("scheduler script emulator 支持 decisionAgent 之后直接按 trigger 派发的目标继续", async () => {
   const topology = createRepresentativeTopology();
 
   const script = [
@@ -1475,10 +1342,7 @@ test("scheduler script emulator 会拒绝漏掉 decisionAgent 之后的 Build �
     "TaskReview: TaskReview 已收到最终 Build 结果。",
   ];
 
-  await assert.rejects(
-    runSchedulerScriptDrived({ topology, script }),
-    /Build|UnitTest|TaskReview/u,
-  );
+  await runSchedulerScriptDrived({ topology, script });
 });
 
 test("scheduler script emulator 会拒绝漏掉最终 UnitTest 回复", async () => {
@@ -1499,7 +1363,7 @@ test("scheduler script emulator 会拒绝漏掉最终 UnitTest 回复", async ()
 
   await assert.rejects(
     runSchedulerScriptDrived({ topology, script }),
-    /当前仍在等待 \[UnitTest\]|UnitTest/u,
+    /UnitTest|下一条回应 Agent 不匹配|无法继续推进/u,
   );
 });
 
@@ -1521,7 +1385,7 @@ test("scheduler script emulator 会拒绝漏掉最终 TaskReview 回复", async 
 
   await assert.rejects(
     runSchedulerScriptDrived({ topology, script }),
-    /当前仍在等待 \[TaskReview\]|TaskReview|下一条回应 Agent 不匹配/u,
+    /TaskReview|下一条回应 Agent 不匹配|无法继续推进/u,
   );
 });
 
@@ -1533,43 +1397,43 @@ test("scheduler script emulator 会拒绝漏掉最后一批全部消费者", asy
         source: "Implementer",
         target: "UnitTest",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Implementer",
         target: "TaskReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "Implementer",
         target: "CodeReview",
         trigger: "<default>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "UnitTest",
         target: "Implementer",
         trigger: "<continue>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "UnitTest",
         target: "__end__",
         trigger: "<complete>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "TaskReview",
         target: "__end__",
         trigger: "<complete>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
       {
         source: "CodeReview",
         target: "__end__",
         trigger: "<complete>",
-        messageMode: "last",
+        messageMode: "last", maxTriggerRounds: 4,
       },
     ],
   });

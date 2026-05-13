@@ -23,13 +23,7 @@ function stripLeadingMentions(content: string): string {
   return trimmed.replace(/^(?:@\S+\s+)+/u, "").trim();
 }
 
-export function formatAgentDispatchContent(_content: string, targetAgentIds: string[]): string {
-  const body = stripLeadingMentions(_content);
-  const mentionSuffix = buildMentionSuffix(targetAgentIds);
-  return [body, mentionSuffix].filter(Boolean).join("\n\n").trim();
-}
-
-export function formatActionRequiredRequestContent(content: string, targetAgentIds: string[]): string {
+export function formatAgentDispatchContent(content: string, targetAgentIds: string[]): string {
   const body = stripLeadingMentions(content);
   const mentionSuffix = buildMentionSuffix(parseTargetAgentIds(targetAgentIds));
   return [body, mentionSuffix].filter(Boolean).join("\n\n").trim();
