@@ -340,6 +340,7 @@ export class OpenCodeClient {
         if (!(error instanceof RetryableSubmitMessageError)) {
           throw error;
         }
+        this.logRetriedMessageResend(normalized, sessionId, opencodeAgent, error.message);
         if (immediateRetryUsed) {
           await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
         }
@@ -411,6 +412,12 @@ export class OpenCodeClient {
           return result;
         }
 
+        this.logRetriedMessageResend(
+          normalized,
+          sessionId,
+          agentId,
+          `OpenCode 未返回需要的 trigger: ${allowedDecisionTriggers.join(" / ")}`,
+        );
         if (immediateRetryUsed) {
           await new Promise((resolve) => setTimeout(resolve, RETRYABLE_CLIENT_INTERVAL_MS));
         }
@@ -514,6 +521,18 @@ export class OpenCodeClient {
       };
     }
     return this.buildRuntimeSnapshot(sessionId, list);
+  }
+
+  private logRetriedMessageResend(cwd: string, sessionId: string, agent: string, reason: string) {
+    const message = `${reason}异常，已重新发送消息`;
+    appendAppLog("warn", "opencode.submit_message_retried", {
+      cwd,
+      sessionId,
+      agent,
+      reason,
+      message,
+    });
+    process.stdout.write(`${message}\n`);
   }
 
   async shutdown(cwd: string): Promise<OpenCodeShutdownReport> {

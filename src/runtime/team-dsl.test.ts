@@ -368,8 +368,8 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出 group 辩论拓扑", (
   assert.deepEqual(firstRule.edges, [
     { sourceRole: "漏洞论证", targetRole: "漏洞挑战", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
     { sourceRole: "漏洞挑战", targetRole: "漏洞论证", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
-    { sourceRole: "漏洞论证", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last", maxTriggerRounds: 4 },
-    { sourceRole: "漏洞挑战", targetRole: "讨论总结", trigger: "<complete>", messageMode: "last", maxTriggerRounds: 4 },
+    { sourceRole: "漏洞论证", targetRole: "讨论总结", trigger: "<agree>", messageMode: "last", maxTriggerRounds: 4 },
+    { sourceRole: "漏洞挑战", targetRole: "讨论总结", trigger: "<agree>", messageMode: "last", maxTriggerRounds: 4 },
   ]);
 });
 
