@@ -739,9 +739,7 @@ export class OpenCodeClient {
     if (Object.keys(config.agent).length > 0) {
       serverEnv["OPENCODE_CONFIG_CONTENT"] = JSON.stringify(config);
     }
-    appendAppLog("info", "opencode.serve_starting", {
-      cwd,
-    });
+    appendAppLog("info", "opencode.serve_starting", { spawnCwd: cwd });
     const launchArgs = ["serve"];
     const spawnSpec = process.platform === "win32"
       ? {
@@ -761,6 +759,7 @@ export class OpenCodeClient {
       spawnSpec.command,
       spawnSpec.args,
       {
+        cwd,
         env: serverEnv,
         stdio: "pipe",
       },
@@ -783,7 +782,8 @@ export class OpenCodeClient {
     const baseUrl = await this.waitForServeBaseUrl(childProcess, stdoutChunks, stderrChunks).catch(async (error) => {
       await this.killChildProcessTree(childProcess).catch(() => "");
       appendAppLog("error", "opencode.serve_start_failed", {
-        cwd,
+        spawnCwd: cwd,
+        pid: childProcess.pid,
         command: spawnSpec.command,
         args: spawnSpec.args,
         message: error instanceof Error ? error.message : String(error),
@@ -800,7 +800,8 @@ export class OpenCodeClient {
           : `OpenCode serve 健康检查失败: ${baseUrl}/global/health 未在预期时间内返回成功`;
       await this.killChildProcessTree(childProcess).catch(() => "");
       appendAppLog("error", "opencode.serve_start_failed", {
-        cwd,
+        spawnCwd: cwd,
+        pid: childProcess.pid,
         port,
         baseUrl,
         command: spawnSpec.command,
@@ -813,7 +814,8 @@ export class OpenCodeClient {
     }
 
     appendAppLog("info", "opencode.serve_started", {
-      cwd,
+      spawnCwd: cwd,
+      pid: childProcess.pid,
       port,
       baseUrl,
       command: spawnSpec.command,
