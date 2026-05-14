@@ -5,6 +5,7 @@ import { act } from "react";
 
 import {
   createTopologyFlowRecord,
+  type MessageRecord,
   type TaskSnapshot,
   type TopologyRecord,
 } from "@shared/types";
@@ -89,13 +90,23 @@ function createTaskAgent(input: {
   } satisfies TaskSnapshot["agents"][number];
 }
 
-function createFinalMessage(input: {
-  id: string;
-  sender: string;
-  content: string;
-  timestamp: string;
-}) {
-  return {
+function createFinalMessage(input:
+  | {
+      id: string;
+      sender: string;
+      content: string;
+      timestamp: string;
+      routingKind: "default" | "invalid";
+    }
+  | {
+      id: string;
+      sender: string;
+      content: string;
+      timestamp: string;
+      routingKind: "triggered";
+      trigger: "<continue>" | "<complete>" | "<default>";
+    }): Extract<MessageRecord, { kind: "agent-final" }> {
+  const base = {
     id: input.id,
     taskId: TASK_ID,
     sender: input.sender,
@@ -104,9 +115,19 @@ function createFinalMessage(input: {
     kind: "agent-final" as const,
     runCount: 1,
     status: "completed" as const,
-    routingKind: "default" as const,
     responseNote: "",
     rawResponse: input.content,
+  } satisfies Omit<Extract<MessageRecord, { kind: "agent-final" }>, "routingKind" | "trigger">;
+  if (input.routingKind === "triggered") {
+    return {
+      ...base,
+      routingKind: "triggered" as const,
+      trigger: input.trigger,
+    };
+  }
+  return {
+    ...base,
+    routingKind: input.routingKind,
   };
 }
 
@@ -258,14 +279,15 @@ test("TopologyGraph 会继续展示刚完成的运行实例", async () => {
         id: "challenge-final",
         taskId: TASK_ID,
         sender: "漏洞挑战-1",
-        content: "漏洞挑战-1 已经完成本轮回应。",
+        content: "漏洞挑战-1 请求继续论证。",
         timestamp: toUtcIsoTimestamp("2026-04-29T10:00:02.000Z"),
         kind: "agent-final",
         runCount: 1,
         status: "completed",
-        routingKind: "default",
+        routingKind: "triggered",
+        trigger: "<continue>",
         responseNote: "",
-        rawResponse: "漏洞挑战-1 已经完成本轮回应。",
+        rawResponse: "漏洞挑战-1 请求继续论证。",
       },
     ],
   });
@@ -286,7 +308,8 @@ test("TopologyGraph 会继续展示刚完成的运行实例", async () => {
     assert.equal(attachButton.disabled, false);
     const pageText = rendered.window.document.body.textContent;
     assert.ok(pageText !== null);
-    assert.equal(pageText.includes("漏洞挑战-1 已经完成本轮回应。"), true);
+    assert.equal(pageText.includes("<continue>"), true);
+    assert.equal(pageText.includes("漏洞挑战-1 请求继续论证。"), true);
   } finally {
     await rendered.cleanup();
   }
@@ -324,12 +347,14 @@ test("TopologyGraph 展示最终多条历史，不展示过程消息，任务结
         sender: "线索发现",
         content: "第一条最终结果消息",
         timestamp: offsetTimestamp(-1),
+        routingKind: "default",
       }),
       createFinalMessage({
         id: "runtime-final-last",
         sender: "线索发现",
         content: "最后一条最终结果消息",
         timestamp: offsetTimestamp(0),
+        routingKind: "default",
       }),
     ],
   });
@@ -676,12 +701,14 @@ test("TopologyGraph 的单条最终历史消息按文字自然撑高，滚动发
           sender: "线索发现",
           content: "很长的最终结果消息 ".repeat(40),
           timestamp: "2026-04-29T10:00:30.000Z",
+          routingKind: "default",
         }),
         createFinalMessage({
           id: "runtime-final-next",
           sender: "线索发现",
           content: "第二条最终结果消息",
           timestamp: "2026-04-29T10:00:31.000Z",
+          routingKind: "default",
         }),
       ],
     }),
@@ -795,12 +822,14 @@ test("TopologyGraph 遇到相同最终时间戳的多条最终消息时保留全
           sender: "线索发现",
           content: "最终结果一",
           timestamp: "2026-04-29T10:00:30.000Z",
+          routingKind: "default",
         }),
         createFinalMessage({
           id: "runtime-final-2",
           sender: "线索发现",
           content: "最终结果二",
           timestamp: "2026-04-29T10:00:30.000Z",
+          routingKind: "default",
         }),
       ],
     }),

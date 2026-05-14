@@ -193,6 +193,7 @@ function getRuntimeItemPresentation(kind: AgentProgressMessageRecord["activityKi
 }
 
 function getFinalItemPresentation(input: {
+  message: AgentFinalMessageRecord;
   status: AgentFinalMessageRecord["status"];
 }) {
   if (input.status === "error") {
@@ -203,7 +204,7 @@ function getFinalItemPresentation(input: {
   }
 
   return {
-    label: "已完成",
+    label: input.message.routingKind === "triggered" ? input.message.trigger : "已完成",
     tone: "success" as const,
   };
 }
@@ -231,6 +232,7 @@ function mapAgentFinalHistoryItem(input: {
   const allowedTriggers = decisionAgent ? getAgentAllowedTriggers(input.topology, input.agentId) : [];
 
   const presentation = getFinalItemPresentation({
+    message: input.message,
     status: input.message.status,
   });
   const detail = decisionAgent
