@@ -33,14 +33,21 @@ export interface SubmitMessagePayload {
   agent: string;
 }
 
-export interface OpenCodeNormalizedMessage {
+interface OpenCodeMessageBase {
   id: string;
-  content: string;
   sender: string;
   timestamp: UtcIsoTimestamp;
-  error: string;
   raw: unknown;
 }
+
+export type OpenCodeNormalizedMessage =
+  | (OpenCodeMessageBase & {
+      content: string;
+    })
+  | (OpenCodeMessageBase & {
+      content: string;
+      error: string;
+    });
 
 export interface OpenCodeExecutionResult {
   status: "completed" | "error";
@@ -70,6 +77,32 @@ export interface OpenCodeSessionRuntime {
   activeToolNames: string[];
   activities: OpenCodeRuntimeActivity[];
 }
+
+interface OpenCodeToolCallDetail {
+  detail: string;
+  detailState: OpenCodeRuntimeActivity["detailState"];
+  detailPayloadKeyCount: number;
+  detailHasPlaceholderValue: boolean;
+  detailParseMode: OpenCodeRuntimeActivity["detailParseMode"];
+}
+
+const TOOL_CALL_DETAIL_KEYS = [
+  "input",
+  "args",
+  "arguments",
+  "payload",
+  "options",
+  "params",
+  "data",
+  "body",
+] as const;
+
+const TOOL_CALL_DETAIL_CONTAINERS = [
+  "state",
+  "call",
+  "tool",
+  "metadata",
+] as const;
 
 const MAX_RUNTIME_MESSAGES = 100;
 const SERVE_BASE_URL_TIMEOUT_MS = 10_000;
@@ -108,13 +141,6 @@ interface WorkspaceEventEntry {
   state: WorkspaceEventState;
 }
 
-interface RelatedTransportReplySnapshot {
-  messageId: string;
-  timestamp: UtcIsoTimestamp;
-  finish: string;
-  parentMessageId: string;
-}
-
 interface RecoveredTransportExecutionResult {
   kind: "recovered";
   result: OpenCodeExecutionResult;
@@ -145,7 +171,6 @@ type TransportRecoveryInspection =
     kind: "waiting-with-related-reply";
     messageCount: number;
     relatedReplyCount: number;
-    latestRelatedReply: RelatedTransportReplySnapshot;
   }
   | {
     kind: "recovered";
@@ -244,17 +269,23 @@ export class OpenCodeClient {
       throw new Error(`OpenCode 创建 session 失败: ${response.status}`);
     }
 
-    const data = this.asRecord(await this.readJsonResponse(response));
-    if (typeof data["id"] === "string" && data["id"].trim()) {
-      return data["id"];
+    try {
+      const data = this.expectRecord(
+        await this.readJsonResponse(response),
+        "OpenCode 创建 session 响应",
+      );
+      return this.readRequiredTrimmedString(
+        data["id"],
+        "OpenCode 创建 session 响应.id",
+      );
+    } catch {
+      appendAppLog("error", "opencode.create_session_invalid_response", {
+        cwd: normalized,
+        title,
+        status: response.status,
+      });
+      throw new Error("OpenCode 创建 session 响应缺少有效的 session id");
     }
-
-    appendAppLog("error", "opencode.create_session_invalid_response", {
-      cwd: normalized,
-      title,
-      status: response.status,
-    });
-    throw new Error("OpenCode 创建 session 响应缺少有效的 session id");
   }
 
   async connectEvents(cwd: string, onEvent: (event: OpenCodeEvent) => void): Promise<void> {
@@ -314,8 +345,13 @@ export class OpenCodeClient {
           throw new RetryableSubmitMessageError(`OpenCode 请求失败: ${response.status}`);
         }
 
-        const raw = this.asRecord(await this.readJsonResponse(response));
-        if (Object.keys(raw).length === 0) {
+        try {
+          return this.parseMessageEnvelope(
+            await this.readJsonResponse(response),
+            opencodeAgent,
+            "OpenCode 提交消息响应",
+          );
+        } catch {
           appendAppLog("error", "opencode.submit_message_invalid_response", {
             cwd: normalized,
             sessionId,
@@ -324,18 +360,6 @@ export class OpenCodeClient {
           });
           throw new RetryableSubmitMessageError("OpenCode 提交消息响应缺少有效的消息实体");
         }
-        const envelope = raw;
-        const info = this.asRecord("info" in envelope ? envelope["info"] : raw);
-        if (typeof info["id"] !== "string" && typeof envelope["id"] !== "string") {
-          appendAppLog("error", "opencode.submit_message_invalid_response", {
-            cwd: normalized,
-            sessionId,
-            agent: opencodeAgent,
-            status: response.status,
-          });
-          throw new RetryableSubmitMessageError("OpenCode 提交消息响应缺少有效的消息实体");
-        }
-        return this.normalizeMessageEnvelope(raw, opencodeAgent);
       } catch (error) {
         if (!(error instanceof RetryableSubmitMessageError)) {
           throw error;
@@ -386,13 +410,15 @@ export class OpenCodeClient {
           }
         }
 
-        const finalMessage = latest.content || latest.error;
+        const finalMessage = this.messageHasError(latest.raw)
+          ? this.readMessageError(latest.raw, `OpenCode session ${sessionId} 最终消息`)
+          : latest.content;
         if (!finalMessage.trim()) {
           throw new RetryableExecutionResultError(this.buildEmptyAssistantResultError(sessionId, latest));
         }
 
         const result: OpenCodeExecutionResult = {
-          status: latest.error ? "error" : "completed",
+          status: this.messageHasError(latest.raw) ? "error" : "completed",
           finalMessage,
           messageId: latest.id,
           timestamp: latest.timestamp,
@@ -1008,13 +1034,15 @@ export class OpenCodeClient {
 
   private handleEvent(event: OpenCodeEvent) {
     const eventType = typeof event["type"] === "string" ? event["type"] : "";
-    const properties = this.asRecord(event["properties"]);
-
     if (eventType === "session.idle") {
-      const sessionId = this.readNonEmptyString(properties["sessionID"]);
-      if (!sessionId) {
-        return;
-      }
+      const properties = this.expectRecord(
+        event["properties"],
+        "OpenCode 事件 session.idle.properties",
+      );
+      const sessionId = this.readRequiredTrimmedString(
+        properties["sessionID"],
+        "OpenCode 事件 session.idle.properties.sessionID",
+      );
       this.sessionIdleAt.set(sessionId, Date.now());
       const waiters = this.sessionWaiters.get(sessionId) || [];
       const ready = waiters.filter((waiter) => waiter.after <= Date.now());
@@ -1029,11 +1057,18 @@ export class OpenCodeClient {
     }
 
     if (eventType === "session.error") {
-      const sessionId = this.readNonEmptyString(properties["sessionID"]);
-      if (!sessionId) {
-        return;
-      }
-      const error = this.extractEventError(properties["error"]) || "OpenCode session 发生未知错误";
+      const properties = this.expectRecord(
+        event["properties"],
+        "OpenCode 事件 session.error.properties",
+      );
+      const sessionId = this.readRequiredTrimmedString(
+        properties["sessionID"],
+        "OpenCode 事件 session.error.properties.sessionID",
+      );
+      const error = this.readEventError(
+        properties["error"],
+        "OpenCode 事件 session.error.properties.error",
+      );
       this.sessionErrors.set(sessionId, error);
       const waiters = this.sessionWaiters.get(sessionId) || [];
       this.sessionWaiters.delete(sessionId);
@@ -1191,8 +1226,12 @@ export class OpenCodeClient {
   ): Promise<OpenCodeNormalizedMessage> {
     const list = await this.listSessionMessages(cwd, sessionId, 0);
     for (let index = list.length - 1; index >= 0; index -= 1) {
-      const message = this.normalizeMessageEnvelope(list[index], "assistant");
-      if (message.sender === "assistant" || message.sender === "system" || message.sender === "unknown") {
+      const message = this.parseMessageEnvelope(
+        list[index],
+        "assistant",
+        `OpenCode session ${sessionId} 最新消息`,
+      );
+      if (message.sender === "assistant" || message.sender === "system") {
         return message;
       }
     }
@@ -1213,9 +1252,15 @@ export class OpenCodeClient {
     }
 
     const normalizedRecords = messages.map((raw) => {
-      const envelope = this.asRecord(raw);
-      const info = this.asRecord("info" in envelope ? envelope["info"] : raw);
-      const normalized = this.normalizeMessageEnvelope(raw, "assistant");
+      const envelope = this.expectRecord(raw, `OpenCode session ${sessionId} 消息列表项`);
+      const info = "info" in envelope
+        ? this.expectRecord(envelope["info"], `OpenCode session ${sessionId} 消息列表项.info`)
+        : envelope;
+      const normalized = this.parseMessageEnvelope(
+        raw,
+        "assistant",
+        `OpenCode session ${sessionId} 消息列表项`,
+      );
       return {
         raw,
         info,
@@ -1244,12 +1289,11 @@ export class OpenCodeClient {
         return rightTimestamp - leftTimestamp;
       });
 
-    const latestRelatedReply = relatedReplies[0];
     const finalReply = relatedReplies
       .filter((record) =>
         this.isRecoverableReplyCandidate(record.info, record.normalized))[0];
     if (!finalReply) {
-      if (!latestRelatedReply) {
+      if (relatedReplies.length === 0) {
         return {
           kind: "waiting-without-related-reply",
           messageCount: messages.length,
@@ -1260,16 +1304,18 @@ export class OpenCodeClient {
         kind: "waiting-with-related-reply",
         messageCount: messages.length,
         relatedReplyCount: relatedReplies.length,
-        latestRelatedReply: this.buildRelatedTransportReplySnapshot(latestRelatedReply),
       };
     }
 
     const message = finalReply.normalized;
+    const status = this.messageHasError(message.raw) ? "error" : "completed";
     return {
       kind: "recovered",
       result: {
-        status: message.error ? "error" : "completed",
-        finalMessage: message.content || message.error,
+        status,
+        finalMessage: status === "error"
+          ? this.readMessageError(message.raw, `OpenCode session ${sessionId} 恢复结果`)
+          : message.content,
         messageId: message.id,
         timestamp: message.timestamp,
         rawMessage: message,
@@ -1287,31 +1333,10 @@ export class OpenCodeClient {
       return {
         ...baseDetails,
         relatedReplyCount: inspection.relatedReplyCount,
-        latestRelatedMessageId: inspection.latestRelatedReply.messageId,
-        latestRelatedParentMessageId: inspection.latestRelatedReply.parentMessageId,
-        latestRelatedTimestamp: inspection.latestRelatedReply.timestamp,
-        latestRelatedFinish: inspection.latestRelatedReply.finish,
       };
     }
 
     return baseDetails;
-  }
-
-  private buildRelatedTransportReplySnapshot(record: {
-    info: Record<string, unknown>;
-    normalized: OpenCodeNormalizedMessage;
-  }): RelatedTransportReplySnapshot {
-    const parentMessageId = this.extractParentMessageId(record.info);
-    if (!parentMessageId) {
-      throw new Error(`Transport recovery related reply 缺少 parentID: messageId=${record.normalized.id}`);
-    }
-
-    return {
-      messageId: record.normalized.id,
-      timestamp: record.normalized.timestamp,
-      finish: this.resolveTransportReplyFinish(record.info),
-      parentMessageId,
-    };
   }
 
   private collectRelatedTransportReplies(
@@ -1325,10 +1350,13 @@ export class OpenCodeClient {
   ) {
     const childrenByParent = new Map<string, typeof records>();
     for (const record of records) {
-      const parentMessageId = this.extractParentMessageId(record.info);
-      if (!parentMessageId) {
+      if (!("parentID" in record.info)) {
         continue;
       }
+      const parentMessageId = this.readRequiredTrimmedString(
+        record.info["parentID"],
+        "OpenCode 消息 info.parentID",
+      );
       const siblings = childrenByParent.get(parentMessageId) || [];
       siblings.push(record);
       childrenByParent.set(parentMessageId, siblings);
@@ -1351,7 +1379,6 @@ export class OpenCodeClient {
       if (
         current.normalized.sender !== "assistant"
         && current.normalized.sender !== "system"
-        && current.normalized.sender !== "unknown"
       ) {
         continue;
       }
@@ -1360,15 +1387,6 @@ export class OpenCodeClient {
     }
 
     return relatedReplies;
-  }
-
-  private resolveTransportReplyFinish(info: Record<string, unknown>): string {
-    if (typeof info["finish"] !== "string") {
-      return "unknown";
-    }
-
-    const finish = info["finish"].trim();
-    return finish || "unknown";
   }
 
   async getSessionMessage(
@@ -1383,11 +1401,11 @@ export class OpenCodeClient {
     if (!response.ok) {
       throw new RetryableExecutionResultError(`OpenCode session ${sessionId} 未找到消息 ${messageId}`);
     }
-    const raw = this.asRecord(await this.readJsonResponse(response));
-    if (Object.keys(raw).length === 0) {
-      throw new RetryableExecutionResultError(`OpenCode session ${sessionId} 的消息 ${messageId} 响应无效`);
-    }
-    return this.normalizeMessageEnvelope(raw, "assistant");
+    return this.parseMessageEnvelope(
+      await this.readJsonResponse(response),
+      "assistant",
+      `OpenCode session ${sessionId} 的消息 ${messageId}`,
+    );
   }
 
   async listSessionMessages(
@@ -1403,87 +1421,155 @@ export class OpenCodeClient {
       cwd,
     });
     if (!response.ok) {
-      return [];
+      throw new Error(`OpenCode 会话消息查询失败: ${response.status}`);
     }
-
-    try {
-      const parsed = await this.readJsonResponse(response);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
+    const parsed = await this.readJsonResponse(response);
+    if (!Array.isArray(parsed)) {
+      throw new Error("OpenCode 会话消息响应必须是数组");
     }
+    return parsed;
   }
 
   private async readJsonResponse(response: Response): Promise<unknown> {
     const raw = await response.text();
     const trimmed = raw.trim();
     if (!trimmed) {
-      return {};
+      throw new Error("OpenCode 响应体为空");
     }
 
     try {
       return JSON.parse(trimmed) as unknown;
-    } catch {
-      return {};
+    } catch (error) {
+      throw new Error(
+        `OpenCode 响应体不是合法 JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
-  private normalizeMessageEnvelope(
+  private parseMessageEnvelope(
     raw: unknown,
     fallbackSender: string,
+    context: string,
   ): OpenCodeNormalizedMessage {
-    const envelope = this.asRecord(raw);
-    const info = this.asRecord("info" in envelope ? envelope["info"] : raw);
-    const parts = Array.isArray(envelope["parts"]) ? (envelope["parts"] as Array<Record<string, unknown>>) : [];
-    const time = this.asRecord(info["time"]);
-    const created = this.toIsoString(time["created"]) || this.toIsoString(info["createdAt"]) || new Date().toISOString();
-    const completed = this.toIsoString(time["completed"]) || this.toIsoString(info["completedAt"]);
-    const sender =
-      typeof info["role"] === "string"
-        ? info["role"]
-        : typeof envelope["sender"] === "string"
-          ? envelope["sender"]
-          : fallbackSender;
-    const content =
-      parts.length > 0
-        ? this.extractVisibleMessageText(parts)
-        : typeof envelope["content"] === "string"
-          ? envelope["content"]
-          : typeof envelope["text"] === "string"
-            ? envelope["text"]
-            : "";
-
+    const envelope = this.expectRecord(raw, context);
+    const info = "info" in envelope
+      ? this.expectRecord(envelope["info"], `${context}.info`)
+      : envelope;
+    const parts = Array.isArray(envelope["parts"])
+      ? envelope["parts"].map((part, index) =>
+          this.expectRecord(part, `${context}.parts[${index}]`))
+      : [];
+    const content = this.readVisibleMessageContent(envelope, parts, context);
+    const id = "id" in info
+      ? this.readRequiredTrimmedString(info["id"], `${context}.info.id`)
+      : this.readRequiredTrimmedString(envelope["id"], `${context}.id`);
+    const sender = "role" in info
+      ? this.readRequiredTrimmedString(info["role"], `${context}.info.role`)
+      : "sender" in envelope
+        ? this.readRequiredTrimmedString(envelope["sender"], `${context}.sender`)
+        : fallbackSender;
+    const timestamp = toUtcIsoTimestamp(this.readMessageTimestamp(info, context));
+    if ("error" in info) {
+      const error = this.readEventError(info["error"], `${context}.info.error`);
+      return {
+        id,
+        content,
+        sender,
+        timestamp,
+        error,
+        raw,
+      };
+    }
+    if ("error" in envelope) {
+      const error = this.readEventError(envelope["error"], `${context}.error`);
+      return {
+        id,
+        content,
+        sender,
+        timestamp,
+        error,
+        raw,
+      };
+    }
     return {
-      id: this.readNonEmptyString(info["id"]) || this.readNonEmptyString(envelope["id"]),
+      id,
       content,
       sender,
-      timestamp: toUtcIsoTimestamp(completed || created),
-      error: this.extractEventError("error" in info ? info["error"] : envelope["error"]),
+      timestamp,
       raw,
     };
   }
 
   private isTerminalMessage(message: OpenCodeNormalizedMessage): boolean {
-    return this.hasCompletedTimestamp(message.raw) || Boolean(message.error);
+    return this.hasCompletedTimestamp(message.raw) || this.messageHasError(message.raw);
+  }
+
+  private messageHasError(raw: unknown): boolean {
+    const envelope = this.expectRecord(raw, "OpenCode 消息");
+    const info = "info" in envelope
+      ? this.expectRecord(envelope["info"], "OpenCode 消息.info")
+      : envelope;
+    return "error" in info || "error" in envelope;
+  }
+
+  private readMessageError(raw: unknown, context: string): string {
+    const envelope = this.expectRecord(raw, context);
+    const info = "info" in envelope
+      ? this.expectRecord(envelope["info"], `${context}.info`)
+      : envelope;
+    if ("error" in info) {
+      return this.readEventError(info["error"], `${context}.info.error`);
+    }
+    return this.readEventError(envelope["error"], `${context}.error`);
+  }
+
+  private readVisibleMessageContent(
+    envelope: Record<string, unknown>,
+    parts: Array<Record<string, unknown>>,
+    context: string,
+  ): string {
+    if (parts.length > 0) {
+      return this.extractVisibleMessageText(parts);
+    }
+    if ("content" in envelope) {
+      return typeof envelope["content"] === "string"
+        ? envelope["content"]
+        : this.readRequiredTrimmedString(envelope["content"], `${context}.content`);
+    }
+    if ("text" in envelope) {
+      return typeof envelope["text"] === "string"
+        ? envelope["text"]
+        : this.readRequiredTrimmedString(envelope["text"], `${context}.text`);
+    }
+    return "";
   }
 
   private hasCompletedTimestamp(raw: unknown): boolean {
-    const envelope = this.asRecord(raw);
-    const info = this.asRecord("info" in envelope ? envelope["info"] : raw);
-    const time = this.asRecord(info["time"]);
-    return (
-      Boolean(this.toIsoString(time["completed"])) ||
-      Boolean(this.toIsoString(info["completedAt"]))
-    );
+    const envelope = this.expectRecord(raw, "OpenCode 消息");
+    const info = "info" in envelope
+      ? this.expectRecord(envelope["info"], "OpenCode 消息.info")
+      : envelope;
+    if ("time" in info) {
+      const time = this.expectRecord(info["time"], "OpenCode 消息.info.time");
+      if (this.isIsoLikeValue(time["completed"])) {
+        return true;
+      }
+    }
+    return this.isIsoLikeValue(info["completedAt"]);
   }
 
   private buildEmptyAssistantResultError(
     sessionId: string,
     message: OpenCodeNormalizedMessage,
   ): string {
-    const record = this.asRecord(message.raw);
-    const info = this.asRecord("info" in record ? record["info"] : message.raw);
-    const parts = Array.isArray(record["parts"]) ? (record["parts"] as Array<Record<string, unknown>>) : [];
+    const record = this.expectRecord(message.raw, `OpenCode session ${sessionId} assistant 消息`);
+    const info = "info" in record
+      ? this.expectRecord(record["info"], `OpenCode session ${sessionId} assistant 消息.info`)
+      : record;
+    const parts = Array.isArray(record["parts"])
+      ? record["parts"].map((part, index) =>
+          this.expectRecord(part, `OpenCode session ${sessionId} assistant 消息.parts[${index}]`))
+      : [];
     const finish = typeof info["finish"] === "string" && info["finish"].trim()
       ? info["finish"].trim()
       : "unknown";
@@ -1494,10 +1580,6 @@ export class OpenCodeClient {
     return `OpenCode session ${sessionId} 返回了空的 assistant 结果: messageId=${message.id}, finish=${finish}, partTypes=${partSummary}`;
   }
 
-  private extractParentMessageId(info: Record<string, unknown>): string {
-    return this.readNonEmptyString(info["parentID"]);
-  }
-
   private isRecoverableReplyCandidate(
     info: Record<string, unknown>,
     message: OpenCodeNormalizedMessage,
@@ -1506,7 +1588,7 @@ export class OpenCodeClient {
       return false;
     }
 
-    if (message.error) {
+    if (this.messageHasError(message.raw)) {
       return true;
     }
 
@@ -1529,13 +1611,20 @@ export class OpenCodeClient {
 
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
       const raw = messages[messageIndex];
-      const normalized = this.normalizeMessageEnvelope(raw, "assistant");
+      const record = this.expectRecord(raw, `OpenCode session ${sessionId} 运行时消息`);
+      const parts = Array.isArray(record["parts"])
+        ? record["parts"].map((part, index) =>
+            this.expectRecord(part, `OpenCode session ${sessionId} 运行时消息.parts[${index}]`))
+        : [];
+      const normalized = this.parseMessageEnvelope(
+        raw,
+        "assistant",
+        `OpenCode session ${sessionId} 运行时消息`,
+      );
       if (normalized.sender === "user") {
         continue;
       }
 
-      const record = this.asRecord(raw);
-      const parts = Array.isArray(record["parts"]) ? (record["parts"] as Array<Record<string, unknown>>) : [];
       const extracted = this.extractRuntimeActivities(parts, normalized, messageIndex);
 
       if (extracted.length === 0 && normalized.content.trim()) {
@@ -1569,6 +1658,9 @@ export class OpenCodeClient {
     }
 
     const latestActivity = activities.at(-1);
+    if (!latestActivity) {
+      throw new Error(`OpenCode session ${sessionId} 缺少可展示的运行态活动`);
+    }
     const recentToolNames = activities
       .filter((activity) => activity.kind === "tool")
       .map((activity) => activity.label.replace(/^tool:\s*/i, "").trim())
@@ -1579,8 +1671,8 @@ export class OpenCodeClient {
     return {
       sessionId,
       messageCount: messages.length,
-      updatedAt: latestActivity ? latestActivity.timestamp : "",
-      headline: latestActivity ? latestActivity.detail : "",
+      updatedAt: latestActivity.timestamp,
+      headline: latestActivity.detail,
       activeToolNames: recentToolNames.length > 0 ? recentToolNames : toolNames.slice(-2).reverse(),
       activities,
     };
@@ -1598,331 +1690,305 @@ export class OpenCodeClient {
       if (!part) {
         continue;
       }
-      const activity = this.partToRuntimeActivity(part, message, messageIndex, partIndex);
-      if (activity) {
-        activities.push(activity);
+      const timestamp = message.timestamp;
+      const toolNames = this.collectToolNameCandidates(part);
+      if (toolNames[0]) {
+        const toolCallDetail = this.extractToolCallDetail(part);
+        activities.push({
+          id: `${message.id}:${messageIndex}:${partIndex}:tool`,
+          kind: "tool",
+          label: toolNames[0],
+          detail: toolCallDetail.detail,
+          detailState: toolCallDetail.detailState,
+          detailPayloadKeyCount: toolCallDetail.detailPayloadKeyCount,
+          detailHasPlaceholderValue: toolCallDetail.detailHasPlaceholderValue,
+          detailParseMode: toolCallDetail.detailParseMode,
+          timestamp,
+        });
+        continue;
+      }
+
+      const reasoningDetails = this.collectReasoningDetails(part);
+      if (reasoningDetails[0]) {
+        activities.push({
+          id: `${message.id}:${messageIndex}:${partIndex}:thinking`,
+          kind: "thinking",
+          label: this.shortenText(reasoningDetails[0], 48),
+          detail: reasoningDetails[0],
+          detailState: "not_applicable",
+          detailPayloadKeyCount: 0,
+          detailHasPlaceholderValue: false,
+          detailParseMode: "not_applicable",
+          timestamp,
+        });
+        continue;
+      }
+
+      if (typeof part["type"] === "string" && part["type"] === "step-start" && typeof part["name"] === "string") {
+        const stepName = part["name"].trim();
+        if (stepName) {
+          const detailCandidates = this.collectPartDetailCandidates(part);
+          activities.push({
+            id: `${message.id}:${messageIndex}:${partIndex}:step`,
+            kind: "step",
+            label: stepName,
+            detail: detailCandidates[0] || stepName,
+            detailState: "not_applicable",
+            detailPayloadKeyCount: 0,
+            detailHasPlaceholderValue: false,
+            detailParseMode: "not_applicable",
+            timestamp,
+          });
+          continue;
+        }
+      }
+
+      const detailCandidates = this.collectPartDetailCandidates(part);
+      if (detailCandidates[0]) {
+        activities.push({
+          id: `${message.id}:${messageIndex}:${partIndex}:message`,
+          kind: "message",
+          label: this.shortenText(detailCandidates[0], 48),
+          detail: detailCandidates[0],
+          detailState: "not_applicable",
+          detailPayloadKeyCount: 0,
+          detailHasPlaceholderValue: false,
+          detailParseMode: "not_applicable",
+          timestamp,
+        });
       }
     }
 
     return activities;
   }
 
-  private partToRuntimeActivity(
-    part: Record<string, unknown>,
-    message: OpenCodeNormalizedMessage,
-    messageIndex: number,
-    partIndex: number,
-  ): OpenCodeRuntimeActivity | false {
-    const type = typeof part["type"] === "string" ? part["type"] : "";
-    const timestamp = message.timestamp;
-    const toolName = this.extractToolName(part);
+  private collectToolNameCandidates(part: Record<string, unknown>): string[] {
+    const candidates: string[] = [];
+    const type = typeof part["type"] === "string" ? part["type"].toLowerCase() : "";
+    if (type.includes("tool")) {
+      this.appendTrimmedString(candidates, part["toolName"]);
+      this.appendTrimmedString(candidates, part["tool"]);
+      this.appendTrimmedString(candidates, part["name"]);
+    }
+    if ("tool" in part && part["tool"] && typeof part["tool"] === "object" && !Array.isArray(part["tool"])) {
+      const toolRecord = part["tool"] as Record<string, unknown>;
+      this.appendTrimmedString(candidates, toolRecord["name"]);
+      this.appendTrimmedString(candidates, toolRecord["id"]);
+    }
+    if ("call" in part && part["call"] && typeof part["call"] === "object" && !Array.isArray(part["call"])) {
+      const callRecord = part["call"] as Record<string, unknown>;
+      this.appendTrimmedString(candidates, callRecord["tool"]);
+      this.appendTrimmedString(candidates, callRecord["name"]);
+      this.appendTrimmedString(candidates, callRecord["id"]);
+    }
+    return candidates;
+  }
 
-    if (toolName) {
-      const toolDetail = this.extractToolCallDetail(part);
-      return {
-        id: `${message.id}:${messageIndex}:${partIndex}:tool`,
-        kind: "tool",
-        label: toolName,
-        detail: toolDetail.detail || "未获取到调用参数",
-        detailState: toolDetail.detail ? "complete" : "missing",
-        detailPayloadKeyCount: toolDetail.payloadKeyCount,
-        detailHasPlaceholderValue: toolDetail.hasPlaceholderValue,
-        detailParseMode: toolDetail.parseMode,
-        timestamp,
-      };
+  private collectPartDetailCandidates(part: Record<string, unknown>): string[] {
+    const candidates: string[] = [];
+    this.appendTrimmedString(candidates, part["summary"]);
+    this.appendTrimmedString(candidates, part["text"]);
+    this.appendTrimmedString(candidates, part["title"]);
+    this.appendTrimmedString(candidates, part["description"]);
+    this.appendStructuredDetailCandidates(candidates, part["input"]);
+    this.appendStructuredDetailCandidates(candidates, part["args"]);
+    this.appendStructuredDetailCandidates(candidates, part["arguments"]);
+    this.appendStructuredDetailCandidates(candidates, part["payload"]);
+    this.appendStructuredDetailCandidates(candidates, part["output"]);
+    return candidates;
+  }
+
+  private collectReasoningDetails(part: Record<string, unknown>): string[] {
+    const candidates: string[] = [];
+    if (typeof part["type"] === "string" && part["type"].toLowerCase() === "reasoning") {
+      this.appendTrimmedString(candidates, part["text"]);
+    }
+    this.appendTrimmedString(candidates, part["reasoning"]);
+    return candidates;
+  }
+
+  private extractToolCallDetail(part: Record<string, unknown>): OpenCodeToolCallDetail {
+    const structuredCandidates = [
+      ...this.collectStructuredToolCallDetails(part["state"], TOOL_CALL_DETAIL_KEYS),
+      ...this.collectStructuredToolCallDetails(part, TOOL_CALL_DETAIL_KEYS),
+      ...TOOL_CALL_DETAIL_CONTAINERS.slice(1).flatMap((key) =>
+        this.collectStructuredToolCallDetails(part[key], TOOL_CALL_DETAIL_KEYS)),
+    ];
+    if (structuredCandidates[0]) {
+      return this.createStructuredToolCallDetail(structuredCandidates[0]);
     }
 
-    const reasoningDetail = this.extractReasoningDetail(part);
-    if (reasoningDetail) {
-      return {
-        id: `${message.id}:${messageIndex}:${partIndex}:thinking`,
-        kind: "thinking",
-        label: this.shortenText(reasoningDetail, 48),
-        detail: reasoningDetail,
-        detailState: "not_applicable",
-        detailPayloadKeyCount: 0,
-        detailHasPlaceholderValue: false,
-        detailParseMode: "not_applicable",
-        timestamp,
-      };
+    const plainTextCandidates = [
+      ...this.collectPlainTextToolCallDetails(part["state"], TOOL_CALL_DETAIL_KEYS),
+      ...this.collectPlainTextToolCallDetails(part, TOOL_CALL_DETAIL_KEYS),
+      ...TOOL_CALL_DETAIL_CONTAINERS.slice(1).flatMap((key) =>
+        this.collectPlainTextToolCallDetails(part[key], TOOL_CALL_DETAIL_KEYS)),
+    ];
+    if (plainTextCandidates[0]) {
+      return this.createPlainTextToolCallDetail(plainTextCandidates[0]);
     }
 
-    if (type === "step-start" && typeof part["name"] === "string" && part["name"].trim()) {
-      const detail = this.extractPartDetail(part);
-      return {
-        id: `${message.id}:${messageIndex}:${partIndex}:step`,
-        kind: "step",
-        label: part["name"].trim(),
-        detail: detail || `执行步骤：${part["name"].trim()}`,
-        detailState: "not_applicable",
-        detailPayloadKeyCount: 0,
-        detailHasPlaceholderValue: false,
-        detailParseMode: "not_applicable",
-        timestamp,
-      };
-    }
+    throw new Error("OpenCode 工具调用缺少可展示的参数");
+  }
 
-    const detail = this.extractPartDetail(part);
-    if (!detail) {
-      return false;
-    }
-
+  private createStructuredToolCallDetail(input: { detail: string; payloadKeyCount: number }): OpenCodeToolCallDetail {
     return {
-      id: `${message.id}:${messageIndex}:${partIndex}:message`,
-      kind: "message",
-      label: this.shortenText(detail, 48),
-      detail,
-      detailState: "not_applicable",
-      detailPayloadKeyCount: 0,
+      detail: `参数: ${input.detail}`,
+      detailState: "complete",
+      detailPayloadKeyCount: input.payloadKeyCount,
       detailHasPlaceholderValue: false,
-      detailParseMode: "not_applicable",
-      timestamp,
+      detailParseMode: "structured",
     };
   }
 
-  private extractToolName(part: Record<string, unknown>): string {
-    const type = typeof part["type"] === "string" ? part["type"].toLowerCase() : "";
-    const directTool = this.readNonEmptyString(part["toolName"])
-      || this.readNonEmptyString(part["tool"])
-      || this.readNonEmptyString(part["name"]);
-
-    if (directTool && type.includes("tool")) {
-      return directTool;
-    }
-
-    const toolRecord = this.asRecord(part["tool"]);
-    const toolRecordName = this.readNonEmptyString(toolRecord["name"])
-      || this.readNonEmptyString(toolRecord["id"]);
-    if (toolRecordName) {
-      return toolRecordName;
-    }
-
-    const callRecord = this.asRecord(part["call"]);
-    return this.readNonEmptyString(callRecord["tool"])
-      || this.readNonEmptyString(callRecord["name"])
-      || this.readNonEmptyString(callRecord["id"]);
+  private createPlainTextToolCallDetail(detail: string): OpenCodeToolCallDetail {
+    return {
+      detail: `参数: ${detail}`,
+      detailState: "complete",
+      detailPayloadKeyCount: 0,
+      detailHasPlaceholderValue: this.isPlaceholderToolCallDetail(detail),
+      detailParseMode: "plain_text",
+    };
   }
 
-  private extractPartDetail(part: Record<string, unknown>): string {
-    const textCandidates = [
-      typeof part["summary"] === "string" ? part["summary"] : "",
-      typeof part["text"] === "string" ? part["text"] : "",
-      typeof part["title"] === "string" ? part["title"] : "",
-      typeof part["description"] === "string" ? part["description"] : "",
-      this.extractStructuredDetail(part["input"]),
-      this.extractStructuredDetail(part["args"]),
-      this.extractStructuredDetail(part["arguments"]),
-      this.extractStructuredDetail(part["payload"]),
-      this.extractStructuredDetail(part["output"]),
-    ]
-      .map((value) => value.trim())
-      .filter(Boolean);
-
-    return textCandidates[0] || "";
-  }
-
-  private extractReasoningDetail(part: Record<string, unknown>): string {
-    const type = typeof part["type"] === "string" ? part["type"].toLowerCase() : "";
-    if (type === "reasoning" && typeof part["text"] === "string") {
-      return part["text"].trim();
-    }
-    if (typeof part["reasoning"] === "string") {
-      return part["reasoning"].trim();
+  private collectStructuredToolCallDetails(
+    value: unknown,
+    keys: readonly string[],
+  ): Array<{ detail: string; payloadKeyCount: number }> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return [];
     }
 
-    return "";
-  }
-
-  private extractToolCallDetail(part: Record<string, unknown>): {
-    detail: string;
-    payloadKeyCount: number;
-    hasPlaceholderValue: boolean;
-    parseMode: OpenCodeRuntimeActivity["detailParseMode"];
-  } {
-    const callRecord = this.asRecord(part["call"]);
-    const toolRecord = this.asRecord(part["tool"]);
-    const metadataRecord = this.asRecord(part["metadata"]);
-    const stateRecord = this.asRecord(part["state"]);
-    const candidates: unknown[] = [
-      stateRecord["input"],
-      stateRecord["args"],
-      stateRecord["arguments"],
-      stateRecord["payload"],
-      stateRecord["options"],
-      stateRecord["params"],
-      stateRecord["data"],
-      stateRecord["body"],
-      part["input"],
-      part["args"],
-      part["arguments"],
-      part["payload"],
-      part["options"],
-      part["params"],
-      part["data"],
-      part["body"],
-      callRecord["input"],
-      callRecord["args"],
-      callRecord["arguments"],
-      callRecord["payload"],
-      callRecord["options"],
-      callRecord["params"],
-      callRecord["data"],
-      callRecord["body"],
-      toolRecord["input"],
-      toolRecord["args"],
-      toolRecord["arguments"],
-      toolRecord["payload"],
-      toolRecord["options"],
-      toolRecord["params"],
-      toolRecord["data"],
-      toolRecord["body"],
-      metadataRecord["input"],
-      metadataRecord["args"],
-      metadataRecord["arguments"],
-      metadataRecord["payload"],
-      metadataRecord["options"],
-      metadataRecord["params"],
-      metadataRecord["data"],
-      metadataRecord["body"],
-    ];
-    for (const candidate of candidates) {
-      const summary = this.extractStructuredToolCallDetail(candidate);
-      if (!summary.detail) {
+    const details: Array<{ detail: string; payloadKeyCount: number }> = [];
+    for (const key of keys) {
+      if (!(key in value)) {
         continue;
       }
-      return {
-        detail: `参数: ${summary.detail}`,
-        payloadKeyCount: summary.payloadKeyCount,
-        hasPlaceholderValue: summary.hasPlaceholderValue,
-        parseMode: summary.parseMode,
-      };
+      this.appendStructuredToolCallCandidates(details, (value as Record<string, unknown>)[key]);
     }
-    return {
-      detail: "",
-      payloadKeyCount: 0,
-      hasPlaceholderValue: false,
-      parseMode: "missing",
-    };
+    return details;
   }
 
-  private extractStructuredToolCallDetail(value: unknown, depth = 0): {
-    detail: string;
-    payloadKeyCount: number;
-    hasPlaceholderValue: boolean;
-    parseMode: OpenCodeRuntimeActivity["detailParseMode"];
-  } {
+  private collectPlainTextToolCallDetails(
+    value: unknown,
+    keys: readonly string[],
+  ): string[] {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return [];
+    }
+
+    const details: string[] = [];
+    for (const key of keys) {
+      if (!(key in value)) {
+        continue;
+      }
+      this.appendPlainTextToolCallCandidates(details, (value as Record<string, unknown>)[key]);
+    }
+    return details;
+  }
+
+  private appendPlainTextToolCallCandidates(
+    target: string[],
+    value: unknown,
+  ) {
+    if (typeof value !== "string") {
+      return;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      target.push(this.shortenText(trimmed, 160));
+    }
+  }
+
+  private isPlaceholderToolCallDetail(detail: string): boolean {
+    return detail.trim().toLowerCase() === "placeholder";
+  }
+
+  private appendStructuredToolCallCandidates(
+    target: Array<{ detail: string; payloadKeyCount: number }>,
+    value: unknown,
+    depth = 0,
+  ) {
     if ((!value && value !== 0 && value !== false) || depth > 4) {
-      return {
-        detail: "",
-        payloadKeyCount: 0,
-        hasPlaceholderValue: false,
-        parseMode: "missing",
-      };
+      return;
     }
 
     if (typeof value === "string") {
       const trimmed = value.trim();
       if (!trimmed) {
-        return {
-          detail: "",
-          payloadKeyCount: 0,
-          hasPlaceholderValue: false,
-          parseMode: "missing",
-        };
+        return;
       }
       if (
         (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
         (trimmed.startsWith("[") && trimmed.endsWith("]"))
       ) {
         try {
-          return this.extractStructuredToolCallDetail(
-            JSON.parse(trimmed) as unknown,
-            depth + 1,
-          );
+          this.appendStructuredToolCallCandidates(target, JSON.parse(trimmed) as unknown, depth + 1);
         } catch {
-          return {
-            detail: this.shortenText(trimmed, 160),
-            payloadKeyCount: 0,
-            hasPlaceholderValue: this.isPlaceholderLikeValue(trimmed),
-            parseMode: "plain_text",
-          };
         }
+        return;
       }
-      return {
-        detail: this.shortenText(trimmed, 160),
-        payloadKeyCount: 0,
-        hasPlaceholderValue: this.isPlaceholderLikeValue(trimmed),
-        parseMode: "plain_text",
-      };
+      if (depth > 0) {
+        target.push({
+          detail: this.shortenText(trimmed, 160),
+          payloadKeyCount: 0,
+        });
+      }
+      return;
     }
 
     if (typeof value === "number" || typeof value === "boolean") {
-      return {
+      target.push({
         detail: String(value),
-        payloadKeyCount: 0,
-        hasPlaceholderValue: false,
-        parseMode: "plain_text",
-      };
+        payloadKeyCount: 1,
+      });
+      return;
     }
 
     if (Array.isArray(value)) {
-      const items = value
-        .map((item) => this.extractStructuredToolCallDetail(item, depth + 1))
-        .filter((item) => item.detail)
-        .slice(0, 6);
-      const detail = items.length > 0
-        ? this.shortenText(
-            `[${items.map((item) => item.detail).join(", ")}]`,
-            180,
-          )
-        : "";
-      return {
-        detail,
-        payloadKeyCount: items.reduce(
-          (sum, item) => sum + item.payloadKeyCount,
-          value.length,
-        ),
-        hasPlaceholderValue: items.some((item) => item.hasPlaceholderValue),
-        parseMode: detail ? "structured" : "missing",
-      };
+      const items: Array<{ detail: string; payloadKeyCount: number }> = [];
+      for (const item of value) {
+        this.appendStructuredToolCallCandidates(items, item, depth + 1);
+        if (items.length >= 6) {
+          break;
+        }
+      }
+      if (items[0]) {
+        target.push({
+          detail: this.shortenText(`[${items.slice(0, 6).map((item) => item.detail).join(", ")}]`, 180),
+          payloadKeyCount: items.reduce((count, item) => count + item.payloadKeyCount, 0),
+        });
+      }
+      return;
     }
 
-    const record = this.asRecord(value);
-    const preferredEntries = Object.entries(record)
-      .filter(([key, item]) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    const preferredEntries = Object.entries(record).flatMap(([key, item]) => {
         if ((!item && item !== 0 && item !== false) || item === "") {
-          return false;
+          return [];
         }
-        return !["output", "result", "response", "summary", "reasoning"].includes(key);
-      })
-      .slice(0, 6)
-      .map(([key, item]) => {
-        const summarized = this.extractStructuredToolCallDetail(item, depth + 1);
-        return summarized.detail
+        if (["output", "result", "response", "summary", "reasoning"].includes(key)) {
+          return [];
+        }
+        const summaries: Array<{ detail: string; payloadKeyCount: number }> = [];
+        this.appendStructuredToolCallCandidates(summaries, item, depth + 1);
+        return summaries[0]
           ? [{
-              detail: `${key}=${summarized.detail}`,
-              payloadKeyCount: summarized.payloadKeyCount,
-              hasPlaceholderValue: summarized.hasPlaceholderValue,
-            }]
+            detail: `${key}=${summaries[0].detail}`,
+            payloadKeyCount: summaries[0].payloadKeyCount + 1,
+          }]
           : [];
-      })
-      .flat();
+      }).slice(0, 6);
 
-    if (preferredEntries.length > 0) {
-      return {
-        detail: this.shortenText(
-          preferredEntries.map((item) => item.detail).join(", "),
-          220,
-        ),
-        payloadKeyCount: preferredEntries.reduce(
-          (sum, item) => sum + item.payloadKeyCount,
-          preferredEntries.length,
-        ),
-        hasPlaceholderValue: preferredEntries.some(
-          (item) => item.hasPlaceholderValue,
-        ),
-        parseMode: "structured",
-      };
+    if (preferredEntries[0]) {
+      target.push({
+        detail: this.shortenText(preferredEntries.map((entry) => entry.detail).join(", "), 220),
+        payloadKeyCount: preferredEntries.reduce((count, entry) => count + entry.payloadKeyCount, 0),
+      });
+      return;
     }
 
     for (const key of [
@@ -1938,117 +2004,48 @@ export class OpenCodeClient {
       if (!(key in record)) {
         continue;
       }
-      const nested = this.extractStructuredToolCallDetail(
-        record[key],
-        depth + 1,
-      );
-      if (nested.detail) {
-        return nested;
+      const nested: Array<{ detail: string; payloadKeyCount: number }> = [];
+      this.appendStructuredToolCallCandidates(nested, record[key], depth + 1);
+      if (nested[0]) {
+        target.push(nested[0]);
+        return;
       }
     }
-
-    return {
-      detail: "",
-      payloadKeyCount: 0,
-      hasPlaceholderValue: false,
-      parseMode: "missing",
-    };
   }
 
-  private isPlaceholderLikeValue(value: string): boolean {
-    const normalized = value.trim().toLowerCase();
-    return normalized === "placeholder"
-      || normalized === "<placeholder>"
-      || normalized === "todo"
-      || normalized === "tbd"
-      || normalized === "unknown";
-  }
-
-  private extractStructuredArgsDetail(value: unknown, depth = 0): string {
-    if ((!value && value !== 0 && value !== false) || depth > 4) {
-      return "";
-    }
-
-    if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (!trimmed) {
-        return "";
-      }
-      if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-        try {
-          return this.extractStructuredArgsDetail(JSON.parse(trimmed) as unknown, depth + 1);
-        } catch {
-          return this.shortenText(trimmed, 160);
-        }
-      }
-      return this.shortenText(trimmed, 160);
-    }
-
-    if (typeof value === "number" || typeof value === "boolean") {
-      return String(value);
-    }
-
-    if (Array.isArray(value)) {
-      const items = value
-        .map((item) => this.extractStructuredArgsDetail(item, depth + 1))
-        .filter(Boolean)
-        .slice(0, 6);
-      return items.length > 0 ? this.shortenText(`[${items.join(", ")}]`, 180) : "";
-    }
-
-    const record = this.asRecord(value);
-    const preferredEntries = Object.entries(record)
-      .filter(([key, item]) => {
-        if ((!item && item !== 0 && item !== false) || item === "") {
-          return false;
-        }
-        return !["output", "result", "response", "summary", "reasoning"].includes(key);
-      })
-      .slice(0, 6)
-      .map(([key, item]) => {
-        const summarized = this.extractStructuredArgsDetail(item, depth + 1);
-        return summarized ? `${key}=${summarized}` : "";
-      })
-      .filter(Boolean);
-
-    if (preferredEntries.length > 0) {
-      return this.shortenText(preferredEntries.join(", "), 220);
-    }
-
-    for (const key of ["input", "args", "arguments", "payload", "options", "params", "data", "body"]) {
-      if (key in record) {
-        const nested = this.extractStructuredArgsDetail(record[key], depth + 1);
-        if (nested) {
-          return nested;
-        }
-      }
-    }
-
-    return "";
-  }
-
-  private extractStructuredDetail(value: unknown, depth = 0): string {
+  private appendStructuredDetailCandidates(target: string[], value: unknown, depth = 0) {
     if ((!value && value !== 0 && value !== false) || depth > 3) {
-      return "";
+      return;
     }
 
     if (typeof value === "string") {
-      return this.shortenText(value, 120);
+      this.appendTrimmedString(target, this.shortenText(value.trim(), 120));
+      return;
     }
 
     if (typeof value === "number" || typeof value === "boolean") {
-      return String(value);
+      target.push(String(value));
+      return;
     }
 
     if (Array.isArray(value)) {
-      const items = value
-        .map((item) => this.extractStructuredDetail(item, depth + 1))
-        .filter(Boolean)
-        .slice(0, 4);
-      return items.length > 0 ? this.shortenText(`[${items.join(", ")}]`, 140) : "";
+      const items: string[] = [];
+      for (const item of value) {
+        this.appendStructuredDetailCandidates(items, item, depth + 1);
+        if (items.length >= 4) {
+          break;
+        }
+      }
+      if (items[0]) {
+        target.push(this.shortenText(`[${items.slice(0, 4).join(", ")}]`, 140));
+      }
+      return;
     }
 
-    const record = this.asRecord(value);
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const record = value as Record<string, unknown>;
     const direct = [
       typeof record["command"] === "string" ? record["command"] : "",
       typeof record["cmd"] === "string" ? record["cmd"] : "",
@@ -2067,14 +2064,17 @@ export class OpenCodeClient {
       .filter(Boolean);
 
     if (direct[0]) {
-      return this.shortenText(direct[0], 120);
+      target.push(this.shortenText(direct[0], 120));
+      return;
     }
 
     for (const key of ["input", "args", "arguments", "payload", "options", "params", "data"]) {
       if (key in record) {
-        const nested = this.extractStructuredDetail(record[key], depth + 1);
-        if (nested) {
-          return nested;
+        const nested: string[] = [];
+        this.appendStructuredDetailCandidates(nested, record[key], depth + 1);
+        if (nested[0]) {
+          target.push(nested[0]);
+          return;
         }
       }
     }
@@ -2083,35 +2083,57 @@ export class OpenCodeClient {
       .filter(([, item]) => item !== "" && item !== false && item !== 0 && Boolean(item))
       .slice(0, 4)
       .map(([key, item]) => {
-        const summarized = this.extractStructuredDetail(item, depth + 1) || this.shortenText(String(item), 40);
-        return summarized ? `${key}=${summarized}` : "";
+        const summaries: string[] = [];
+        this.appendStructuredDetailCandidates(summaries, item, depth + 1);
+        return summaries[0]
+          ? `${key}=${summaries[0]}`
+          : this.shortenText(`${key}=${String(item)}`, 40);
       })
       .filter(Boolean);
 
-    return entries.length > 0 ? this.shortenText(entries.join(", "), 160) : "";
-  }
-
-  private asRecord(value: unknown): Record<string, unknown> {
-    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-  }
-
-  private readNonEmptyString(value: unknown): string {
-    return typeof value === "string" && value.trim() ? value.trim() : "";
-  }
-
-  private extractEventError(value: unknown): string {
-    const record = this.asRecord(value);
-    if (typeof record["message"] === "string") {
-      return record["message"];
+    if (entries[0]) {
+      target.push(this.shortenText(entries.join(", "), 160));
     }
-    const data = this.asRecord(record["data"]);
-    if (typeof data["message"] === "string") {
-      return data["message"];
-    }
-    return "";
   }
 
-  private toIsoString(value: unknown): string {
+  private appendTrimmedString(target: string[], value: unknown) {
+    if (typeof value !== "string") {
+      return;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      target.push(trimmed);
+    }
+  }
+
+  private expectRecord(value: unknown, context: string): Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${context} 必须是对象`);
+    }
+    return value as Record<string, unknown>;
+  }
+
+  private readRequiredTrimmedString(value: unknown, context: string): string {
+    if (typeof value !== "string") {
+      throw new Error(`${context} 必须是非空字符串`);
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      throw new Error(`${context} 必须是非空字符串`);
+    }
+    return trimmed;
+  }
+
+  private readEventError(value: unknown, context: string): string {
+    const record = this.expectRecord(value, context);
+    if ("message" in record) {
+      return this.readRequiredTrimmedString(record["message"], `${context}.message`);
+    }
+    const data = this.expectRecord(record["data"], `${context}.data`);
+    return this.readRequiredTrimmedString(data["message"], `${context}.data.message`);
+  }
+
+  private toIsoString(value: unknown, context: string): string {
     if (typeof value === "string") {
       const parsed = new Date(value);
       return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
@@ -2119,7 +2141,47 @@ export class OpenCodeClient {
     if (typeof value === "number") {
       return new Date(value).toISOString();
     }
-    return "";
+    throw new Error(`${context} 缺少合法时间`);
+  }
+
+  private isIsoLikeValue(value: unknown): boolean {
+    try {
+      this.toIsoString(value, "OpenCode 时间字段");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private readMessageTimestamp(info: Record<string, unknown>, context: string): string {
+    const time = "time" in info
+      ? this.expectRecord(info["time"], `${context}.time`)
+      : {};
+    if ("completed" in time) {
+      return this.readRequiredTrimmedString(
+        this.toIsoString(time["completed"], `${context}.time.completed`),
+        `${context}.time.completed`,
+      );
+    }
+    if ("completedAt" in info) {
+      return this.readRequiredTrimmedString(
+        this.toIsoString(info["completedAt"], `${context}.completedAt`),
+        `${context}.completedAt`,
+      );
+    }
+    if ("created" in time) {
+      return this.readRequiredTrimmedString(
+        this.toIsoString(time["created"], `${context}.time.created`),
+        `${context}.time.created`,
+      );
+    }
+    if ("createdAt" in info) {
+      return this.readRequiredTrimmedString(
+        this.toIsoString(info["createdAt"], `${context}.createdAt`),
+        `${context}.createdAt`,
+      );
+    }
+    throw new Error(`${context} 缺少合法时间`);
   }
 
   private async waitForHealthy(baseUrl: string): Promise<boolean> {
@@ -2223,12 +2285,9 @@ export class OpenCodeClient {
 
   private extractVisibleMessageText(parts: Array<Record<string, unknown>>): string {
     const text = parts
-      .map((part) => {
-        if (part["type"] === "text" && typeof part["text"] === "string") {
-          return part["text"];
-        }
-        return "";
-      })
+      .map((part) => part["type"] === "text" && typeof part["text"] === "string"
+        ? part["text"]
+        : false)
       .filter(Boolean)
       .join("\n");
 

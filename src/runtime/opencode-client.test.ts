@@ -7,6 +7,7 @@ import path from "node:path";
 import { buildTaskLogFilePath, initAppFileLogger, runWithTaskLogScope } from "./app-log";
 import type { OpenCodeNormalizedMessage, OpenCodeSessionRuntime } from "./opencode-client";
 import { OpenCodeClient } from "./opencode-client";
+import { buildRuntimeActivityFreshness, isRuntimeActivityFreshnessNewer } from "./runtime-activity-freshness";
 import { toUtcIsoTimestamp } from "@shared/types";
 
 class TestOpenCodeClient extends OpenCodeClient {
@@ -30,7 +31,23 @@ function createDetachedServeHandle(port: number) {
   };
 }
 
-function createNormalizedMessage(input: {
+function createCompletedMessage(input: {
+  id: string;
+  content: string;
+  timestamp: string;
+  sender: string;
+  raw: unknown;
+}): OpenCodeNormalizedMessage {
+  return {
+    id: input.id,
+    content: input.content,
+    sender: input.sender,
+    timestamp: toUtcIsoTimestamp(input.timestamp),
+    raw: input.raw,
+  };
+}
+
+function createErrorMessage(input: {
   id: string;
   content: string;
   timestamp: string;
@@ -371,25 +388,24 @@ test("resolveExecutionResult 在 completed 响应触发重试时会先立刻重�
     submitCount += 1;
     submittedContents.push(payload.content);
     submittedAt.push(Date.now());
-    return createNormalizedMessage({
+    return createCompletedMessage({
       id: `submitted-${submitCount}`,
       content: payload.content,
       sender: "assistant",
       timestamp: `2026-05-11T00:01:0${submitCount}.000Z`,
-      error: "",
       raw: {},
     });
   };
   typed.waitForMessageCompletion = async (_target, _sessionId, messageId) => {
     replyCount += 1;
-    return createNormalizedMessage({
+    return createErrorMessage({
       id: `reply-${messageId}`,
       content: replyCount < 3
         ? "<456> 非法判定"
         : "<continue>第三次恢复</continue>",
       sender: "assistant",
       timestamp: "2026-05-11T00:01:10.000Z",
-      error: "",
+      error: replyCount < 3 ? "<456> 非法判定" : "<continue>第三次恢复</continue>",
       raw: {},
     });
   };
@@ -400,12 +416,11 @@ test("resolveExecutionResult 在 completed 响应触发重试时会先立刻重�
         cwd,
         "session-1",
         {
-          ...createNormalizedMessage({
+          ...createCompletedMessage({
             id: "submitted-1",
             content: "初始请求",
             sender: "assistant",
             timestamp: "2026-05-11T00:01:00.000Z",
-            error: "",
             raw: {
             info: {
               config: {
@@ -547,17 +562,18 @@ test("createSession 超时后不应重启 runtime，也不应自动重试", asyn
   assert.equal(requestCount, 1);
 });
 
-test("消息查询接口空响应体时对单条消息抛错，对列表返回空数组", async () => {
+test("消息查询接口空响应体时对单条消息和列表都直接抛错", async () => {
   const { client, cwd } = createClient();
   client.request = async () => new Response("", { status: 200 });
 
-  const list = await client.listSessionMessages(cwd, "session-1", 0);
-
   await assert.rejects(
     client.getSessionMessage(cwd, "session-1", "msg-1"),
-    /响应无效/,
+    /响应体为空/,
   );
-  assert.deepEqual(list, []);
+  await assert.rejects(
+    client.listSessionMessages(cwd, "session-1", 0),
+    /响应体为空/,
+  );
 });
 
 test("resolveExecutionResult 在消息已完成时不会额外等待 session idle 超时", async () => {
@@ -576,12 +592,11 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
   typed.waitForSessionSettled = async () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
   };
-  typed.waitForMessageCompletion = async () => createNormalizedMessage({
+  typed.waitForMessageCompletion = async () => createCompletedMessage({
     id: "msg-1",
     content: "已完成",
     sender: "assistant",
     timestamp: completedAt,
-    error: "",
     raw: { completedAt },
   });
   typed.getLatestAssistantMessage = async () => {
@@ -589,12 +604,11 @@ test("resolveExecutionResult 在消息已完成时不会额外等待 session idl
   };
 
   const startedAt = Date.now();
-  const result = await typed.resolveExecutionResult(cwd, "session-1", createNormalizedMessage({
+  const result = await typed.resolveExecutionResult(cwd, "session-1", createCompletedMessage({
     id: "msg-1",
     content: "",
     sender: "assistant",
     timestamp: completedAt,
-    error: "",
     raw: {},
   }), "TaskReview", []);
   const elapsed = Date.now() - startedAt;
@@ -607,43 +621,52 @@ test("resolveExecutionResult 在没有任何 assistant 消息时会在原地重�
   const { client, cwd } = createClient();
   const typed = client as unknown as OpenCodeClient & {
     waitForSessionSettled: (sessionId: string, after: number, timeoutMs: number) => Promise<void>;
-    getSessionMessage: (cwd: string, sessionId: string, messageId: string) => Promise<OpenCodeNormalizedMessage>;
+    waitForMessageCompletion: (
+      cwd: string,
+      sessionId: string,
+      messageId: string,
+      timeoutMs: number,
+    ) => Promise<OpenCodeNormalizedMessage>;
     getLatestAssistantMessage: (cwd: string, sessionId: string) => Promise<OpenCodeNormalizedMessage>;
   };
 
-  typed.waitForSessionSettled = async () => new Promise<void>(() => {});
-  let getSessionMessageCount = 0;
-  let getLatestAssistantMessageCount = 0;
-  typed.getSessionMessage = async () => {
-    getSessionMessageCount += 1;
-    if (getSessionMessageCount <= 21) {
-      throw new Error("message missing");
+  typed.waitForSessionSettled = async () => {};
+  let resolveCount = 0;
+  let latestAttemptCount = 0;
+  typed.waitForMessageCompletion = async () => {
+    throw new Error("OpenCode session session-1 未返回任何有效的 assistant 消息");
+  };
+  typed.getLatestAssistantMessage = async () => {
+    latestAttemptCount += 1;
+    if (latestAttemptCount === 1) {
+      return createCompletedMessage({
+        id: "msg-empty",
+        content: "",
+        sender: "assistant",
+        timestamp: "2026-04-25T00:00:30.000Z",
+        raw: {},
+      });
     }
-    return createNormalizedMessage({
+    resolveCount += 1;
+    return createCompletedMessage({
       id: "msg-final",
       content: "已恢复正式回复",
       sender: "assistant",
       timestamp: "2026-04-25T00:01:00.000Z",
-      error: "",
       raw: {},
     });
   };
-  typed.getLatestAssistantMessage = async () => {
-    getLatestAssistantMessageCount += 1;
-    throw new Error("latest assistant message not found");
-  };
 
-  const result = await withFastForwardedTimeouts(() => typed.resolveExecutionResult(cwd, "session-1", createNormalizedMessage({
+  const result = await withFastForwardedTimeouts(() => typed.resolveExecutionResult(cwd, "session-1", createCompletedMessage({
       id: "msg-user",
       content: "请整理需求",
       sender: "user",
       timestamp: "2026-04-25T00:00:00.000Z",
-      error: "",
       raw: {},
     }), "BA", []));
   assert.equal(result.finalMessage, "已恢复正式回复");
-  assert.ok(getSessionMessageCount > 21);
-  assert.equal(getLatestAssistantMessageCount, 1);
+  assert.equal(resolveCount, 1);
+  assert.equal(latestAttemptCount, 2);
 });
 
 function readTaskLogRecords(userDataPath: string, taskId: string) {
@@ -795,8 +818,6 @@ for (const scenario of [
       logEvent: "opencode.transport_recovery_timed_out",
       recoveryState: "waiting-with-related-reply",
       relatedReplyCount: 1,
-      latestRelatedMessageId: "msg-placeholder",
-      latestRelatedParentMessageId: "msg-user",
     },
   },
   {
@@ -838,9 +859,6 @@ for (const scenario of [
       logEvent: "opencode.transport_recovery_timed_out",
       recoveryState: "waiting-with-related-reply",
       relatedReplyCount: 1,
-      latestRelatedMessageId: "msg-tool-calls",
-      latestRelatedParentMessageId: "msg-user",
-      latestRelatedFinish: "tool-calls",
     },
   },
 ]) {
@@ -885,11 +903,6 @@ for (const scenario of [
     const timeoutRecord = records[1] || {};
     assert.equal(timeoutRecord["recoveryState"], scenario.expected.recoveryState);
     assert.equal(timeoutRecord["relatedReplyCount"], scenario.expected.relatedReplyCount);
-    assert.equal(timeoutRecord["latestRelatedMessageId"], scenario.expected.latestRelatedMessageId);
-    assert.equal(timeoutRecord["latestRelatedParentMessageId"], scenario.expected.latestRelatedParentMessageId);
-    if ("latestRelatedFinish" in scenario.expected) {
-      assert.equal(timeoutRecord["latestRelatedFinish"], scenario.expected.latestRelatedFinish);
-    }
   });
 }
 
@@ -1416,6 +1429,130 @@ test("buildRuntimeSnapshot 会优先使用 tool state.input 作为更完整的�
   assert.equal(firstActivity.detailParseMode, "structured");
   assert.equal(firstActivity.detailPayloadKeyCount, 1);
   assert.equal(firstActivity.detailHasPlaceholderValue, false);
+
+  const stateWinsSnapshot = typed.buildRuntimeSnapshot("session-1", [
+    {
+      id: "msg-state-wins-tool",
+      role: "assistant",
+      createdAt: "2026-04-21T12:52:27.500Z",
+      completedAt: "2026-04-21T12:52:27.500Z",
+      parts: [
+        {
+          type: "tool",
+          tool: "read",
+          input: {
+            filePath: "/tmp/short.txt",
+          },
+          state: {
+            input: {
+              filePath: "/tmp/demo.txt",
+              offset: 8,
+            },
+          },
+        },
+      ],
+    },
+  ]);
+  const stateWinsActivity = assertActivityAt(stateWinsSnapshot.activities, 0);
+  assert.equal(stateWinsActivity.detail, "参数: filePath=/tmp/demo.txt, offset=8");
+  assert.equal(stateWinsActivity.detailState, "complete");
+  assert.equal(stateWinsActivity.detailParseMode, "structured");
+  assert.equal(stateWinsActivity.detailPayloadKeyCount, 3);
+  assert.equal(stateWinsActivity.detailHasPlaceholderValue, false);
+
+  const metadataSnapshot = typed.buildRuntimeSnapshot("session-1", [
+    {
+      id: "msg-metadata-tool",
+      role: "assistant",
+      createdAt: "2026-04-21T12:52:28.000Z",
+      completedAt: "2026-04-21T12:52:28.000Z",
+      parts: [
+        {
+          type: "tool",
+          tool: "grep",
+          metadata: {
+            params: {
+              pattern: "TODO",
+            },
+          },
+        },
+      ],
+    },
+  ]);
+  const metadataActivity = assertActivityAt(metadataSnapshot.activities, 0);
+  assert.equal(metadataActivity.kind, "tool");
+  assert.equal(metadataActivity.detail, "参数: pattern=TODO");
+  assert.equal(metadataActivity.detailState, "complete");
+  assert.equal(metadataActivity.detailParseMode, "structured");
+  assert.equal(metadataActivity.detailPayloadKeyCount, 1);
+  assert.equal(metadataActivity.detailHasPlaceholderValue, false);
+});
+
+test("buildRuntimeSnapshot 会用 freshness 元数据区分 placeholder 与 structured 参数", () => {
+  const { client } = createClient();
+  const typed = client as OpenCodeClient & {
+    buildRuntimeSnapshot: (sessionId: string, messages: unknown[]) => OpenCodeSessionRuntime;
+  };
+  const timestamp = "2026-04-21T12:52:27.000Z";
+
+  const placeholderSnapshot = typed.buildRuntimeSnapshot("session-1", [
+    {
+      id: "msg-placeholder-tool",
+      role: "assistant",
+      createdAt: timestamp,
+      completedAt: timestamp,
+      parts: [
+        {
+          type: "tool",
+          tool: "read",
+          input: "placeholder",
+        },
+      ],
+    },
+  ]);
+  const structuredSnapshot = typed.buildRuntimeSnapshot("session-1", [
+    {
+      id: "msg-structured-tool",
+      role: "assistant",
+      createdAt: timestamp,
+      completedAt: timestamp,
+      parts: [
+        {
+          type: "tool",
+          tool: "read",
+          state: {
+            input: {
+              filePath: "/tmp/demo.txt",
+            },
+          },
+          input: "placeholder",
+        },
+      ],
+    },
+  ]);
+
+  const placeholderActivity = assertActivityAt(placeholderSnapshot.activities, 0);
+  const structuredActivity = assertActivityAt(structuredSnapshot.activities, 0);
+
+  assert.equal(placeholderActivity.detail, "参数: placeholder");
+  assert.equal(placeholderActivity.detailState, "complete");
+  assert.equal(placeholderActivity.detailParseMode, "plain_text");
+  assert.equal(placeholderActivity.detailPayloadKeyCount, 0);
+  assert.equal(placeholderActivity.detailHasPlaceholderValue, true);
+
+  assert.equal(structuredActivity.detail, "参数: filePath=/tmp/demo.txt");
+  assert.equal(structuredActivity.detailState, "complete");
+  assert.equal(structuredActivity.detailParseMode, "structured");
+  assert.equal(structuredActivity.detailPayloadKeyCount, 1);
+  assert.equal(structuredActivity.detailHasPlaceholderValue, false);
+
+  assert.equal(
+    isRuntimeActivityFreshnessNewer(
+      buildRuntimeActivityFreshness(placeholderActivity),
+      buildRuntimeActivityFreshness(structuredActivity),
+    ),
+    true,
+  );
 });
 
 test("startEventPump 在单条 SSE 数据非法时保留原始载荷并继续消费后续事件", async () => {
