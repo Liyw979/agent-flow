@@ -1931,7 +1931,9 @@ export class Orchestrator {
 
       if (response.status === "error") {
         throw new Error(
-          response.rawMessage.error ||
+          ("error" in response.rawMessage
+            ? response.rawMessage.error
+            : "") ||
             response.finalMessage ||
             `${runtimeAgentId} 返回错误状态`,
         );
