@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -172,7 +172,7 @@ test("request 会跟随当前 serverHandle 的实际端口", async () => {
     globalThis.fetch = (async (input: string | URL | Request) => {
       requestedUrl = String(input);
       return new Response("", { status: 200 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     try {
       await typed.request("/session", {
@@ -196,7 +196,7 @@ test("request 失败时会写入 task 级失败日志", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
     throw new Error("boom task-request-failed");
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   try {
     await runWithTaskLogScope("task-request-failed", () => assert.rejects(
@@ -515,7 +515,7 @@ test("session message 请求不注入 AbortSignal，确保长任务不会被请�
       ? requestInit.signal
       : "unobserved";
     return new Response("", { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   try {
     await typed.request("/session/session-1/message", {
@@ -1401,7 +1401,7 @@ test("startEventPump 在单条 SSE 数据非法时保留原始载荷并继续消
       ));
       controller.close();
     },
-  }), { status: 200 })) as typeof fetch;
+  }), { status: 200 })) as unknown as typeof fetch;
 
   const events: Array<Record<string, unknown>> = [];
   try {

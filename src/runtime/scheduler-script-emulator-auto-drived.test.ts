@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 
 import { assertAutoDerivedNegativeScripts } from "../../test-support/runtime/scheduler-script-emulator";
 import { createTopology } from "../../test-support/runtime/topology-test-dsl";

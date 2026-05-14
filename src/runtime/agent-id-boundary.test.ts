@@ -1,5 +1,5 @@
 import { strict as assert } from "assert";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { buildTopologyNodeRecords, createTopologyFlowRecord } from "@shared/types";
 

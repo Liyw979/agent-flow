@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);

@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 
 import { act, useEffect, type ReactNode } from "react";
@@ -369,7 +369,7 @@ test("App 在 ui-snapshot 自动轮询后会把新 final 消息展示出来", as
     const next = snapshots[Math.min(uiSnapshotRequestCount, snapshots.length - 1)]!;
     uiSnapshotRequestCount += 1;
     return new Response(JSON.stringify(next), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const appTest = setupAppTest(fetchImpl);
 
@@ -407,7 +407,7 @@ test("App 会把自动轮询带回的 attach 状态更新到界面", async () =>
     const next = snapshots[Math.min(uiSnapshotRequestCount, snapshots.length - 1)]!;
     uiSnapshotRequestCount += 1;
     return new Response(JSON.stringify(next), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const appTest = setupAppTest(fetchImpl);
 
@@ -448,7 +448,7 @@ test("App 在后台标签页也会继续自动轮询", async () => {
     const next = snapshots[Math.min(uiSnapshotRequestCount, snapshots.length - 1)]!;
     uiSnapshotRequestCount += 1;
     return new Response(JSON.stringify(next), { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const appTest = setupAppTest(fetchImpl, "hidden");
 
@@ -494,7 +494,7 @@ test("submitTaskMutation 成功后会失效 ui-snapshot 查询并立即重拉", 
       return new Response(JSON.stringify(refreshedSnapshot.task), { status: 200 });
     }
     throw new Error(`unexpected request: ${requestUrl.pathname} ${init?.method ?? "GET"}`);
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 
   const appTest = setupAppTest(fetchImpl);
 

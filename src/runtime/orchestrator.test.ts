@@ -1,4 +1,4 @@
-import test, { afterEach } from "node:test";
+import { afterEach, test } from "bun:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -580,21 +580,32 @@ async function waitForValue<T>(
 test("task init 会补齐 OpenCode 运行态", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
+  const originalStartServer = OpenCodeClient.startServer;
+  let startServerCount = 0;
   const orchestrator = new TestOrchestrator({
     cwd: projectPath,
     userDataPath,
     enableEventStream: false,
   });
   stubOpenCodeSessions(orchestrator);
+  OpenCodeClient.startServer = async (...args) => {
+    startServerCount += 1;
+    return originalStartServer(...args);
+  };
 
-  let project = await orchestrator.getWorkspaceSnapshot();
-  project = await addBuiltinAgents(orchestrator, ["Build"], "Build", ["Build"]);
-  const task = await orchestrator.initializeTask({ title: "demo" });
+  try {
+    let project = await orchestrator.getWorkspaceSnapshot();
+    project = await addBuiltinAgents(orchestrator, ["Build"], "Build", ["Build"]);
+    const task = await orchestrator.initializeTask({ title: "demo" });
 
-  assert.equal(task.task.cwd, project.cwd);
-  assert.equal(task.messages.some((message) => /session/i.test(message.content)), false);
-  assert.equal(task.agents.some((agent) => agent.id === "Build"), true);
-  assert.equal(task.task.cwd, projectPath);
+    assert.equal(task.task.cwd, project.cwd);
+    assert.equal(task.messages.some((message) => /session/i.test(message.content)), false);
+    assert.equal(task.agents.some((agent) => agent.id === "Build"), true);
+    assert.equal(task.task.cwd, projectPath);
+    assert.equal(startServerCount, 0);
+  } finally {
+    OpenCodeClient.startServer = originalStartServer;
+  }
 });
 
 test("漏洞团队任务初始化时不会为仅作为 group 模板存在的静态 agent 预建 session", async () => {

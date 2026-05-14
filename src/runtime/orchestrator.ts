@@ -1230,6 +1230,10 @@ export class Orchestrator {
       overlay.attachBaseUrl = existingAttachBaseUrl;
       return;
     }
+    if (this.hasStartedOpenCode) {
+      overlay.attachBaseUrl = await this.opencodeClient.getAttachBaseUrl();
+      return;
+    }
     const server = await OpenCodeClient.startServer(task.cwd, injectedConfig);
     const client = new OpenCodeClient({
       server,

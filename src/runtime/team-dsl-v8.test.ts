@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 
 import { readBuiltinTopology } from "../../test-support/runtime/builtin-topology-test-helpers";
 import { compileTeamDsl } from "./team-dsl";
