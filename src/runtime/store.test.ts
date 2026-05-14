@@ -31,12 +31,16 @@ test("StoreService 会在内存里保存 topology / tasks / taskAgents / message
   store.upsertTopology({
     nodes: ["Build"],
     edges: [],
-    langgraph: {
+    flow: {
       start: {
         id: "__start__",
         targets: ["Build"],
       },
-      end: null,
+      end: {
+        id: "__end__",
+        sources: [],
+        incoming: [],
+      },
     },
     nodeRecords: buildTopologyNodeRecords({
       nodes: ["Build"],

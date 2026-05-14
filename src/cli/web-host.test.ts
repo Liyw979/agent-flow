@@ -129,7 +129,7 @@ test("startWebHost 会同时监听 IPv4 和 IPv6 loopback，避免 localhost 命
         topology: {
           nodes: [],
           edges: [],
-          langgraph: {
+          flow: {
             nodes: [],
             edges: [],
           },
@@ -312,7 +312,7 @@ test("startWebHost 任一 bind host 监听失败时会关闭已监听 server 并
         topology: {
           nodes: [],
           edges: [],
-          langgraph: {
+          flow: {
             nodes: [],
             edges: [],
           },

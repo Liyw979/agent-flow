@@ -5,6 +5,7 @@ import {
   buildTopologyNodeRecords,
   collectTopologyTriggerShapes,
   createDefaultTopology,
+  createTopologyFlowRecord,
   getGroupRules,
   getTriggerEdgeLoopLimit,
   isDecisionAgentInTopology,
@@ -15,9 +16,24 @@ import {
   usesOpenCodeBuiltinPrompt,
 } from "./types";
 
-function withAgentNodeRecords(topology: Omit<TopologyRecord, "nodeRecords">): TopologyRecord {
+function withAgentNodeRecords(
+  topology: Omit<TopologyRecord, "nodeRecords" | "flow"> & Partial<Pick<TopologyRecord, "flow">>,
+): TopologyRecord {
+  const flowInput = topology.flow
+    ? {
+        startTargets: topology.flow.start.targets,
+        endSources: topology.flow.end.sources,
+        endIncoming: topology.flow.end.incoming,
+      }
+    : {};
+  const flow = createTopologyFlowRecord({
+    nodes: topology.nodes,
+    edges: topology.edges,
+    ...flowInput,
+  });
   return {
     ...topology,
+    flow,
     nodeRecords: buildTopologyNodeRecords({
       nodes: topology.nodes,
       groupNodeIds: new Set(),
@@ -48,12 +64,16 @@ test("默认拓扑只生成首节点到次节点的 transfer 边", () => {
     trigger: "<default>",
     messageMode: "last", maxTriggerRounds: 4,
   });
-  assert.deepEqual(topology.langgraph, {
+  assert.deepEqual(topology.flow, {
     start: {
       id: "__start__",
       targets: ["Build"],
     },
-    end: null,
+    end: {
+      id: "__end__",
+      sources: [],
+      incoming: [],
+    },
   });
   assert.equal(
     topology.edges.some((edge) => edge.trigger === "complete" || edge.trigger === "continue"),
@@ -71,12 +91,16 @@ test("默认拓扑在缺少 Build 时不会偷偷把首个 Agent 当起点", () 
 
   assert.deepEqual(topology.nodes, ["BA", "TaskReview"]);
   assert.deepEqual(topology.edges, []);
-  assert.deepEqual(topology.langgraph, {
+  assert.deepEqual(topology.flow, {
     start: {
       id: "__start__",
       targets: ["BA"],
     },
-    end: null,
+    end: {
+      id: "__end__",
+      sources: [],
+      incoming: [],
+    },
   });
 });
 
@@ -195,7 +219,7 @@ test("自定义 label 的回流与通过不再按 trigger 名字推断，而是�
 
   assert.deepEqual(collectTopologyTriggerShapes({
     edges: topology.edges,
-    endIncoming: topology.langgraph?.end?.incoming ?? [],
+    endIncoming: topology.flow.end.incoming,
   }), [
     { source: "Judge", trigger: "<revise>" },
     { source: "Judge", trigger: "<approved>" },
@@ -224,7 +248,7 @@ test("示例 label 作为普通 trigger 时不会获得特殊待遇，仍只按�
 
   assert.deepEqual(collectTopologyTriggerShapes({
     edges: topology.edges,
-    endIncoming: topology.langgraph?.end?.incoming ?? [],
+    endIncoming: topology.flow.end.incoming,
   }), [
     { source: "Judge", trigger: "<continue>" },
     { source: "Judge", trigger: "<complete>" },
@@ -260,6 +284,10 @@ test("getGroupRules 保留显式声明的 messageMode，不再依赖默认补值
   const topology: TopologyRecord = {
     nodes: ["线索发现", "疑点辩论"],
     edges: [],
+    flow: createTopologyFlowRecord({
+      nodes: ["线索发现", "疑点辩论"],
+      edges: [],
+    }),
     nodeRecords: [
       {
         id: "线索发现",

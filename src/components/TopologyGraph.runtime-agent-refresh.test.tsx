@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 
 import { act } from "react";
 
-import type { TaskSnapshot, TopologyRecord } from "@shared/types";
+import {
+  createTopologyFlowRecord,
+  type TaskSnapshot,
+  type TopologyRecord,
+} from "@shared/types";
 import { renderTopologyGraphInDom } from "../../test-support/components/topology-graph-dom";
 import { toUtcIsoTimestamp } from "@shared/types";
 
@@ -13,6 +17,10 @@ const WORKSPACE_CWD = "/tmp/agent-team-topology-runtime-refresh";
 const topology: TopologyRecord = {
   nodes: ["线索发现", "漏洞挑战"],
   edges: [],
+  flow: createTopologyFlowRecord({
+    nodes: ["线索发现", "漏洞挑战"],
+    edges: [],
+  }),
   nodeRecords: [
     { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
     { id: "漏洞挑战", kind: "agent", templateName: "漏洞挑战", initialMessageRouting: { mode: "inherit" } },

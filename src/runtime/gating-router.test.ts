@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildTopologyNodeRecords,
+  createTopologyFlowRecord,
   type TopologyRecord,
 } from "@shared/types";
 
@@ -20,10 +21,25 @@ type TestGraphAgentResult =
   | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "invalid" }>, "messageId" | "forwardedAgentMessage">
   | Omit<Extract<GraphAgentResult, { status: "completed"; routingKind: "triggered" }>, "messageId" | "forwardedAgentMessage">;
 
-function withNodeRecords(topology: Omit<TopologyRecord, "nodeRecords">): TopologyRecord {
+function withNodeRecords(
+  topology: Omit<TopologyRecord, "flow" | "nodeRecords"> &
+    Partial<Pick<TopologyRecord, "flow" | "nodeRecords">>,
+): TopologyRecord {
+  const flowInput = topology.flow
+    ? {
+        startTargets: topology.flow.start.targets,
+        endSources: topology.flow.end.sources,
+        endIncoming: topology.flow.end.incoming,
+      }
+    : {};
   return {
     ...topology,
-    nodeRecords: buildTopologyNodeRecords({
+    flow: createTopologyFlowRecord({
+      nodes: topology.nodes,
+      edges: topology.edges,
+      ...flowInput,
+    }),
+    nodeRecords: topology.nodeRecords ?? buildTopologyNodeRecords({
       nodes: topology.nodes,
       groupNodeIds: new Set(),
       templateNameByNodeId: new Map(),
@@ -243,7 +259,7 @@ test("triggered 会按 trigger 字面值派发到匹配边", () => {
 });
 
 test("同一 trigger 多入边在 all_completed 子图下需要全部来源完成后才派发", () => {
-  const topology: TopologyRecord = {
+  const topology: TopologyRecord = withNodeRecords({
     nodes: ["漏洞论证-1", "漏洞挑战-1", "讨论总结-1"],
     nodeRecords: [
       { id: "漏洞论证-1", kind: "agent", templateName: "漏洞论证", initialMessageRouting: { mode: "inherit" } },
@@ -272,7 +288,7 @@ test("同一 trigger 多入边在 all_completed 子图下需要全部来源完�
         report: false,
       },
     ],
-  };
+  });
   const state = createEmptyGraphTaskState({
     taskId: "task-group",
     topology,
@@ -397,7 +413,7 @@ test("trigger 边超限后若唯一其他 trigger 指向 __end__，会按该 tri
       { source: "Build", target: "Judge", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 },
       { source: "Judge", target: "Build", trigger: "<revise>", messageMode: "last", maxTriggerRounds: 1 },
     ],
-    langgraph: {
+    flow: {
       start: {
         id: "__start__",
         targets: ["Build"],

@@ -23,7 +23,7 @@ links: []
 根级字段含义：
 
 - `entry`
-  当前任务默认入口。必须指向某个真实存在的 `agent`；如果写的是 group 内部 agent，编译阶段会自动把 LangGraph 的根入口折叠成它所属的最外层 group。
+  当前任务默认入口。必须指向某个真实存在的 `agent`；如果写的是 group 内部 agent，编译阶段会自动把 flow 的根入口折叠成它所属的最外层 group。
 - `nodes`
   当前图声明的节点数组。节点只允许 `agent` 或 `group`。
 - `links`

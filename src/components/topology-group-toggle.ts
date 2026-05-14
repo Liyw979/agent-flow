@@ -1,5 +1,6 @@
 import {
   DEFAULT_TOPOLOGY_TRIGGER,
+  createTopologyFlowRecord,
   getTopologyNodeRecords,
   normalizeTopologyEdgeTrigger,
   type GroupRule,
@@ -121,12 +122,19 @@ export function getDownstreamMode(input: {
   sourceNodeId: string;
   targetNodeId: string;
 }): DownstreamMode | null {
-  const targetNode = getTopologyNodeRecords(input.topology).find((node) => node.id === input.targetNodeId);
+  const topology: TopologyRecord = {
+    ...input.topology,
+    flow: createTopologyFlowRecord({
+      nodes: input.topology.nodes,
+      edges: input.topology.edges,
+    }),
+  };
+  const targetNode = getTopologyNodeRecords(topology).find((node) => node.id === input.targetNodeId);
   if (targetNode?.groupEnabled) {
     return "group";
   }
 
-  const trigger = input.topology.edges.find(
+  const trigger = topology.edges.find(
     (edge) =>
       edge.source === input.sourceNodeId &&
       edge.target === input.targetNodeId,

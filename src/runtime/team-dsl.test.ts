@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildTopologyNodeRecords, type GroupRule, type GroupRuleWithReport } from "@shared/types";
+import {
+  buildTopologyNodeRecords,
+  createTopologyFlowRecord,
+  type GroupRule,
+  type GroupRuleWithReport,
+} from "@shared/types";
 
 import { readBuiltinTopology } from "../../test-support/runtime/builtin-topology-test-helpers";
 import {
@@ -292,7 +297,7 @@ test("compileTeamDsl 支持在拓扑文件里直接连接 __end__", () => {
     ],
   });
 
-  assert.deepEqual(compiled.topology.langgraph?.end, {
+  assert.deepEqual(compiled.topology.flow.end, {
     id: "__end__",
     sources: ["Source"],
     incoming: [
@@ -313,9 +318,13 @@ test("compileTeamDsl 会把 entry 位于 group 内部的根入口折叠成 group
     links: [],
   });
 
-  assert.deepEqual(compiled.topology.langgraph, {
+  assert.deepEqual(compiled.topology.flow, {
     start: { id: "__start__", targets: ["Debate"] },
-    end: null,
+    end: {
+      id: "__end__",
+      sources: [],
+      incoming: [],
+    },
   });
 });
 
@@ -754,6 +763,10 @@ test("matchesAppliedTeamDslAgents 会把 agent 一致但拓扑不同识别为只
       {
         nodes: ["Build", "BA", "CodeReview", "UnitTest", "TaskReview"],
         edges: [{ source: "Build", target: "BA", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 }],
+        flow: createTopologyFlowRecord({
+          nodes: ["Build", "BA", "CodeReview", "UnitTest", "TaskReview"],
+          edges: [{ source: "Build", target: "BA", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 }],
+        }),
         nodeRecords: buildTopologyNodeRecords({
           nodes: ["Build", "BA", "CodeReview", "UnitTest", "TaskReview"],
           groupNodeIds: new Set(),

@@ -1,16 +1,16 @@
 import {
   collectTopologyTriggerShapes,
   isDefaultTopologyTrigger,
-  LANGGRAPH_END_NODE_ID,
+  FLOW_END_NODE_ID,
   type AgentRecord,
-  createTopologyLangGraphRecord,
+  createTopologyFlowRecord,
   normalizeMaxTriggerRounds,
   normalizeInitialMessageAgentIds,
   normalizeTopologyEdgeTrigger,
   parseInitialMessageRoutingFromDslInput,
   type TopologyEdge,
   type TopologyEdgeMessageMode,
-  type TopologyLangGraphRecord,
+  type TopologyFlowRecord,
   type TopologyNodeRecord,
   type TopologyRecord,
   type GroupRule,
@@ -205,9 +205,7 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
         const rightKey = `${right.source}__${right.target}__${right.trigger}__${right.messageMode}__${String(right.maxTriggerRounds)}`;
         return leftKey.localeCompare(rightKey);
       }),
-    ...(topology.langgraph
-      ? { langgraph: normalizeComparableLangGraph(topology.langgraph) }
-      : {}),
+    flow: normalizeComparableFlow(topology.flow),
     nodeRecords: [...topology.nodeRecords].sort((left, right) => left.id.localeCompare(right.id)),
     ...(topology.groupRules
       ? {
@@ -217,23 +215,21 @@ function normalizeComparableTopology(topology: TopologyRecord): TopologyRecord {
   };
 }
 
-function normalizeComparableLangGraph(langgraph: TopologyLangGraphRecord): TopologyLangGraphRecord {
+function normalizeComparableFlow(flow: TopologyFlowRecord): TopologyFlowRecord {
   return {
     start: {
-      id: langgraph.start.id,
-      targets: [...langgraph.start.targets].sort((left, right) => left.localeCompare(right)),
+      id: flow.start.id,
+      targets: [...flow.start.targets].sort((left, right) => left.localeCompare(right)),
     },
-    end: langgraph.end
-      ? {
-          id: langgraph.end.id,
-          sources: [...langgraph.end.sources].sort((left, right) => left.localeCompare(right)),
-          incoming: [...langgraph.end.incoming].sort((left, right) => {
-            const leftKey = `${left.source}__${left.trigger}`;
-            const rightKey = `${right.source}__${right.trigger}`;
-            return leftKey.localeCompare(rightKey);
-          }),
-        }
-      : null,
+    end: {
+      id: flow.end.id,
+      sources: [...flow.end.sources].sort((left, right) => left.localeCompare(right)),
+      incoming: [...flow.end.incoming].sort((left, right) => {
+        const leftKey = `${left.source}__${left.trigger}`;
+        const rightKey = `${right.source}__${right.trigger}`;
+        return leftKey.localeCompare(rightKey);
+      }),
+    },
   };
 }
 
@@ -470,7 +466,7 @@ function collectScopeEdges(
 ): TopologyEdge[] {
   return dedupeTopologyEdges(
     graph.links.flatMap((link) => {
-      if (link.to === LANGGRAPH_END_NODE_ID) {
+      if (link.to === FLOW_END_NODE_ID) {
         return [];
       }
       const sourceInScope = scopeId === ROOT_SCOPE_ID || isNodeInsideGroup(flat, scopeId, link.from);
@@ -504,7 +500,7 @@ function collectScopeEdges(
 
 function collectRootEndLinks(graph: GraphDslGraph): GraphDslLink[] {
   return graph.links
-    .filter((link) => link.to === LANGGRAPH_END_NODE_ID)
+    .filter((link) => link.to === FLOW_END_NODE_ID)
     .filter((value, index, list) =>
       list.findIndex((item) =>
         item.from === value.from
@@ -530,7 +526,7 @@ function assertLinkEndpoints(graph: GraphDslGraph, flat: FlatGraph): void {
     if (sourceNode.kind !== "agent") {
       throw new Error(`links[${index}].from 必须指向 agent，不能直接指向 group：${link.from}`);
     }
-    if (link.to === LANGGRAPH_END_NODE_ID) {
+    if (link.to === FLOW_END_NODE_ID) {
       if (sourceNode.ancestors.length > 0) {
         throw new Error(`group 内 agent 不能直接连接 __end__：${link.from} -> ${link.to}`);
       }
@@ -603,7 +599,7 @@ function collectGroupRule(
   const groupId = groupNode.id;
   const parentScopeId = resolveParentScopeId(groupNode);
   const incomingLinks = graph.links.filter((link) =>
-    link.to !== LANGGRAPH_END_NODE_ID
+    link.to !== FLOW_END_NODE_ID
     && isNodeInsideGroup(flat, groupId, link.to)
     && !isNodeInsideGroup(flat, groupId, link.from),
   );
@@ -631,7 +627,7 @@ function collectGroupRule(
   const outgoingEdges = dedupeTopologyEdges(
     graph.links.flatMap((link) => {
       if (
-        link.to === LANGGRAPH_END_NODE_ID
+        link.to === FLOW_END_NODE_ID
         || !isNodeInsideGroup(flat, groupId, link.from)
         || isNodeInsideGroup(flat, groupId, link.to)
       ) {
@@ -698,8 +694,8 @@ function assertTopologyAgentsDeclared(
   ]);
   const allNodes = new Set<string>([
     ...topology.nodes,
-    ...(topology.langgraph?.start.targets ?? []),
-    ...(topology.langgraph?.end?.sources ?? []),
+    ...topology.flow.start.targets,
+    ...topology.flow.end.sources,
     ...topology.nodeRecords.map((node) => node.id),
     ...(topology.groupRules?.flatMap((rule) => [
       rule.groupNodeName,
@@ -768,7 +764,7 @@ function compileGraphDsl(graph: GraphDslGraph): CompiledTeamDsl {
   const topology: TopologyRecord = {
     nodes: graph.nodes.map((node) => node.id),
     edges: topologyEdges,
-    langgraph: createTopologyLangGraphRecord({
+    flow: createTopologyFlowRecord({
       nodes: graph.nodes.map((node) => node.id),
       edges: topologyEdges,
       startTargets: [startTarget],
@@ -784,7 +780,7 @@ function compileGraphDsl(graph: GraphDslGraph): CompiledTeamDsl {
   assertTopologyAgentsDeclared(compiledAgents, topology);
   collectTopologyTriggerShapes({
     edges: topology.edges,
-    endIncoming: topology.langgraph?.end?.incoming ?? [],
+    endIncoming: topology.flow.end.incoming,
   });
 
   return {

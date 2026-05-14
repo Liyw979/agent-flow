@@ -5,7 +5,11 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { JSDOM } from "jsdom";
 
-import type { TaskSnapshot, WorkspaceSnapshot } from "@shared/types";
+import {
+  createTopologyFlowRecord,
+  type TaskSnapshot,
+  type WorkspaceSnapshot,
+} from "@shared/types";
 
 import { ChatWindow } from "./ChatWindow";
 import { toUtcIsoTimestamp } from "@shared/types";
@@ -121,6 +125,26 @@ function createWorkspaceAndTask(): {
         maxTriggerRounds: 4,
       },
     ],
+    flow: createTopologyFlowRecord({
+      nodes: [
+        "Build",
+        "QA",
+        "线索发现",
+        "漏洞挑战",
+        "漏洞论证",
+        "讨论总结",
+        "疑点辩论",
+      ],
+      edges: [
+        {
+          source: "线索发现",
+          target: "疑点辩论",
+          trigger: "<continue>",
+          messageMode: "last" as const,
+          maxTriggerRounds: 4,
+        },
+      ],
+    }),
     nodeRecords: [
       { id: "Build", kind: "agent" as const, templateName: "Build", initialMessageRouting: { mode: "inherit" } },
       { id: "QA", kind: "agent" as const, templateName: "QA", initialMessageRouting: { mode: "inherit" } },

@@ -5,7 +5,7 @@ import {
   normalizeTopologyEdgeTrigger,
   resolveTriggerRoutingKindForSource,
   type AgentStatus,
-  type TopologyLangGraphEndIncoming,
+  type TopologyFlowEndIncoming,
   type TopologyRecord,
 } from "@shared/types";
 
@@ -1072,11 +1072,8 @@ function requireSingleTriggerLoopEscalation(
   return candidate;
 }
 
-function getTopologyEndIncoming(topology: TopologyRecord): TopologyLangGraphEndIncoming[] {
-  if (!topology.langgraph || !topology.langgraph.end) {
-    return [];
-  }
-  return topology.langgraph.end.incoming;
+function getTopologyEndIncoming(topology: TopologyRecord): TopologyFlowEndIncoming[] {
+  return topology.flow.end.incoming;
 }
 
 function buildTriggeredLoopEscalationDisplayContent(
