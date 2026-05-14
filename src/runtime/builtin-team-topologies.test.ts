@@ -60,7 +60,7 @@ test("开发团队拓扑为每个 decisionAgent 显式声明回流与成功 trig
 
 test("开发团队拓扑编译后保留显式成功结束边", () => {
   const compiled = compileBuiltinTopology("development-team.topology.yaml");
-  assert.deepEqual(compiled.topology.langgraph?.end, {
+  assert.deepEqual(compiled.topology.flow.end, {
     id: "__end__",
     sources: ["CodeReview", "UnitTest", "SecurityReview"],
     incoming: [

@@ -7,6 +7,7 @@ import path from "node:path";
 
 import {
   buildTopologyNodeRecords,
+  createTopologyFlowRecord,
   getMessageTargetAgentIds,
   isUserMessageRecord,
   type MessageRecord,
@@ -75,9 +76,24 @@ function parseInjectedAgents(content: { agent: Record<string, InjectedAgentConfi
   return content.agent;
 }
 
-function withAgentNodeRecords(topology: Omit<TopologyRecord, "nodeRecords">): TopologyRecord {
+function withAgentNodeRecords(
+  topology: Omit<TopologyRecord, "nodeRecords" | "flow"> & Partial<Pick<TopologyRecord, "flow">>,
+): TopologyRecord {
+  const flowInput = topology.flow
+    ? {
+        startTargets: topology.flow.start.targets,
+        endSources: topology.flow.end.sources,
+        endIncoming: topology.flow.end.incoming,
+      }
+    : {};
+  const flow = createTopologyFlowRecord({
+    nodes: topology.nodes,
+    edges: topology.edges,
+    ...flowInput,
+  });
   return {
     ...topology,
+    flow,
     nodeRecords: buildTopologyNodeRecords({
       nodes: topology.nodes,
       groupNodeIds: new Set(),
@@ -113,7 +129,7 @@ type TestRunAgentPrompt =
     };
 
 type TestOrchestratorDependencies = {
-  createLangGraphBatchRunners: (
+  createRuntimeBatchRunners: (
     cwd: string,
     taskId: string,
     state: GraphTaskState,
@@ -143,8 +159,8 @@ class TestOrchestrator extends Orchestrator {
     super(options);
     const defaults: TestOrchestratorDependencies = {
       trackBackgroundTask: (promise, context) => super.trackBackgroundTask(promise, context),
-      createLangGraphBatchRunners: (cwd, taskId, state, batch) =>
-        super.createLangGraphBatchRunners(cwd, taskId, state, batch),
+      createRuntimeBatchRunners: (cwd, taskId, state, batch) =>
+        super.createRuntimeBatchRunners(cwd, taskId, state, batch),
       ensureAgentSession: (task, agent) => super.ensureAgentSession(task, agent),
       ensureTaskPanels: (task) => super.ensureTaskPanels(task),
     };
@@ -159,13 +175,13 @@ class TestOrchestrator extends Orchestrator {
     this.dependencies.trackBackgroundTask(promise, context);
   }
 
-  protected override async createLangGraphBatchRunners(
+  protected override async createRuntimeBatchRunners(
     cwd: string,
     taskId: string,
     state: GraphTaskState,
     batch: GraphDispatchBatch,
   ) {
-    return this.dependencies.createLangGraphBatchRunners(cwd, taskId, state, batch);
+    return this.dependencies.createRuntimeBatchRunners(cwd, taskId, state, batch);
   }
 
   protected override async ensureAgentSession(task: TaskRecord, agent: TaskAgentRecord) {
@@ -199,7 +215,7 @@ class BatchRunnerTestOrchestrator extends StandaloneRunTestOrchestrator {
     state: GraphTaskState,
     batch: GraphDispatchBatch,
   ) {
-    return this.createLangGraphBatchRunners(cwd, taskId, state, batch);
+    return this.createRuntimeBatchRunners(cwd, taskId, state, batch);
   }
 }
 
@@ -637,7 +653,7 @@ test("单节点任务进入 finished 时不会因为缺少 workspace cwd 而在�
         backgroundRunTracked = true;
         backgroundRun = promise.then(() => undefined);
       },
-      createLangGraphBatchRunners: async () => [],
+      createRuntimeBatchRunners: async () => [],
     }),
   );
   stubOpenCodeAttachBaseUrl(orchestrator);
@@ -1174,12 +1190,12 @@ test("漏洞团队 group runtime agent 尚未落库时，getTaskSnapshot 不会�
     },
     (defaults) => ({
       ...defaults,
-      createLangGraphBatchRunners: async (cwd, taskId, state, batch) => {
+      createRuntimeBatchRunners: async (cwd, taskId, state, batch) => {
         createBatchRunnerCallCount += 1;
         if (createBatchRunnerCallCount >= 2) {
           await createBatchRunnersGate;
         }
-        return defaults.createLangGraphBatchRunners(cwd, taskId, state, batch);
+        return defaults.createRuntimeBatchRunners(cwd, taskId, state, batch);
       },
     }),
   );
@@ -1687,7 +1703,7 @@ test("保存拓扑后不会再生成旧工作区快照文件", async () => {
   assert.equal(fs.existsSync(path.join(projectPath, ".agent-team", LEGACY_WORKSPACE_STATE_BASENAME)), false);
 });
 
-test("保存拓扑时不会再把 langgraph.end.sources 隐式恢复成无 trigger 结束边", async () => {
+test("保存拓扑时不会再把 flow.end.sources 隐式恢复成无 trigger 结束边", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
@@ -1702,7 +1718,7 @@ test("保存拓扑时不会再把 langgraph.end.sources 隐式恢复成无 trigg
   const saved = await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["漏洞论证"],
       edges: [],
-      langgraph: {
+      flow: {
         start: {
           id: "__start__",
           targets: ["漏洞论证"],
@@ -1716,10 +1732,14 @@ test("保存拓扑时不会再把 langgraph.end.sources 隐式恢复成无 trigg
     }),
   });
 
-  assert.equal(saved.topology.langgraph?.end, null);
+  assert.deepEqual(saved.topology.flow.end, {
+    id: "__end__",
+    sources: [],
+    incoming: [],
+  });
 });
 
-test("保存拓扑时会把 target=__end__ 的 trigger 边提升到 langgraph.end.incoming", async () => {
+test("保存拓扑时会把 target=__end__ 的 trigger 边提升到 flow.end.incoming", async () => {
   const userDataPath = createTempDir();
   const projectPath = createTempDir();
   const orchestrator = new TestOrchestrator({
@@ -1745,7 +1765,7 @@ test("保存拓扑时会把 target=__end__ 的 trigger 边提升到 langgraph.en
   });
 
   assert.deepEqual(saved.topology.edges, []);
-  assert.deepEqual(saved.topology.langgraph?.end, {
+  assert.deepEqual(saved.topology.flow.end, {
     id: "__end__",
     sources: ["漏洞论证"],
     incoming: [
@@ -4415,7 +4435,7 @@ test("自定义结束 trigger 可以直接命中 __end__", async () => {
   await orchestrator.saveTopology({ topology: withAgentNodeRecords({
       nodes: ["漏洞论证"],
       edges: [],
-      langgraph: {
+      flow: {
         start: {
           id: "__start__",
           targets: ["漏洞论证"],

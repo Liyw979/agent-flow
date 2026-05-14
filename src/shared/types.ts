@@ -154,8 +154,8 @@ export type TopologyEdgeMessageMode = "none" | "last";
 const DEFAULT_MAX_TRIGGER_ROUNDS = 4;
 const DEFAULT_TOPOLOGY_EDGE_MESSAGE_MODE: TopologyEdgeMessageMode =
   "last";
-export const LANGGRAPH_START_NODE_ID = "__start__";
-export const LANGGRAPH_END_NODE_ID = "__end__";
+export const FLOW_START_NODE_ID = "__start__";
+export const FLOW_END_NODE_ID = "__end__";
 
 export interface TopologyEdge {
   source: string;
@@ -169,7 +169,7 @@ interface TopologyTriggerRouteInput {
   edges: ReadonlyArray<
     Pick<TopologyEdge, "source" | "trigger" | "maxTriggerRounds">
   >;
-  endIncoming: ReadonlyArray<TopologyLangGraphEndIncoming>;
+  endIncoming: ReadonlyArray<TopologyFlowEndIncoming>;
 }
 
 type TopologyTriggerRouteResolution =
@@ -180,31 +180,31 @@ type TopologyTriggerRouteResolution =
       kind: "invalid";
     };
 
-export interface TopologyLangGraphStartNode {
-  id: typeof LANGGRAPH_START_NODE_ID;
+export interface TopologyFlowStartNode {
+  id: typeof FLOW_START_NODE_ID;
   targets: string[];
 }
 
-export interface TopologyLangGraphEndIncoming {
+export interface TopologyFlowEndIncoming {
   source: string;
   trigger: TopologyTrigger;
 }
 
-export interface TopologyLangGraphEndNode {
-  id: typeof LANGGRAPH_END_NODE_ID;
+export interface TopologyFlowEndNode {
+  id: typeof FLOW_END_NODE_ID;
   sources: string[];
-  incoming: TopologyLangGraphEndIncoming[];
+  incoming: TopologyFlowEndIncoming[];
 }
 
-export interface TopologyLangGraphRecord {
-  start: TopologyLangGraphStartNode;
-  end: TopologyLangGraphEndNode | null;
+export interface TopologyFlowRecord {
+  start: TopologyFlowStartNode;
+  end: TopologyFlowEndNode;
 }
 
 export interface TopologyRecord {
   nodes: string[];
   edges: TopologyEdge[];
-  langgraph?: TopologyLangGraphRecord;
+  flow: TopologyFlowRecord;
   nodeRecords: TopologyNodeRecord[];
   groupRules?: GroupRule[];
 }
@@ -357,8 +357,7 @@ function assertInitialMessageRouting(
 }
 
 export function getTriggerEdgeLoopLimit(
-  topology: Pick<TopologyRecord, "edges"> &
-    Partial<Pick<TopologyRecord, "langgraph">>,
+  topology: Pick<TopologyRecord, "edges" | "flow">,
   sourceAgentId: string,
   targetAgentId: string,
   trigger: string,
@@ -673,8 +672,7 @@ export function collectTopologyTriggerShapes(
 }
 
 export function resolveTriggerRoutingKindForSource(
-  topology: Pick<TopologyRecord, "edges"> &
-    Partial<Pick<TopologyRecord, "langgraph">>,
+  topology: Pick<TopologyRecord, "edges" | "flow">,
   source: string,
   trigger: string,
 ): TopologyTriggerRouteResolution {
@@ -692,12 +690,9 @@ export function resolveTriggerRoutingKindForSource(
 }
 
 function getTopologyEndIncoming(
-  topology: Partial<Pick<TopologyRecord, "langgraph">>,
-): TopologyLangGraphEndIncoming[] {
-  if (!topology.langgraph || !topology.langgraph.end) {
-    return [];
-  }
-  return topology.langgraph.end.incoming;
+  topology: Pick<TopologyRecord, "flow">,
+): TopologyFlowEndIncoming[] {
+  return topology.flow.end.incoming;
 }
 
 export function getTopologyEdgeId(
@@ -707,8 +702,7 @@ export function getTopologyEdgeId(
 }
 
 export function isDecisionAgentInTopology(
-  topology: Pick<TopologyRecord, "edges"> &
-    Partial<Pick<TopologyRecord, "langgraph">>,
+  topology: Pick<TopologyRecord, "edges" | "flow">,
   agentId: string,
 ): boolean {
   const hasDecisionEdge = topology.edges.some(
@@ -740,9 +734,9 @@ export function resolveBuildAgentId(
 }
 
 export function resolvePrimaryTopologyStartTarget(
-  topology: Pick<TopologyRecord, "langgraph" | "nodes">,
+  topology: Pick<TopologyRecord, "flow" | "nodes">,
 ): string | null {
-  const explicitStartTarget = topology.langgraph?.start.targets.find(
+  const explicitStartTarget = topology.flow.start.targets.find(
     (target) => target.trim().length > 0,
   );
   if (explicitStartTarget) {
@@ -823,7 +817,7 @@ export function createDefaultTopology(
   return {
     nodes,
     edges,
-    langgraph: createTopologyLangGraphRecord({
+    flow: createTopologyFlowRecord({
       nodes,
       edges,
       startTargets: startAgent?.id
@@ -966,13 +960,13 @@ export function getGroupRules(topology: TopologyRecord): GroupRule[] {
   );
 }
 
-export function createTopologyLangGraphRecord(input: {
+export function createTopologyFlowRecord(input: {
   nodes: string[];
   edges: TopologyEdge[];
   startTargets?: ReadonlyArray<string>;
   endSources?: ReadonlyArray<string>;
-  endIncoming?: ReadonlyArray<TopologyLangGraphEndIncoming>;
-}): TopologyLangGraphRecord {
+  endIncoming?: ReadonlyArray<TopologyFlowEndIncoming>;
+}): TopologyFlowRecord {
   const knownNodes = new Set(input.nodes);
   const normalizeRefs = (values: ReadonlyArray<string> | undefined) =>
     (values ?? [])
@@ -1016,16 +1010,13 @@ export function createTopologyLangGraphRecord(input: {
 
   return {
     start: {
-      id: LANGGRAPH_START_NODE_ID,
+      id: FLOW_START_NODE_ID,
       targets: startTargets,
     },
-    end:
-      endSources.length > 0
-        ? {
-            id: LANGGRAPH_END_NODE_ID,
-            sources: endSources,
-            incoming: endIncoming,
-          }
-        : null,
+    end: {
+      id: FLOW_END_NODE_ID,
+      sources: endSources,
+      incoming: endIncoming,
+    },
   };
 }

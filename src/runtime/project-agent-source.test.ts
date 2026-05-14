@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createTopologyFlowRecord } from "@shared/types";
 import {
   buildInjectedConfigFromAgents,
   extractDslAgentsFromTopology,
@@ -38,6 +39,10 @@ test("extractDslAgentsFromTopology 不会把未显式配置 writable 的 Build �
   const resolved = extractDslAgentsFromTopology({
     nodes: ["Build", "BA"],
     edges: [{ source: "BA", target: "Build", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 }],
+    flow: createTopologyFlowRecord({
+      nodes: ["Build", "BA"],
+      edges: [{ source: "BA", target: "Build", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 }],
+    }),
     nodeRecords: [
       { id: "Build", kind: "agent", templateName: "Build", initialMessageRouting: { mode: "inherit" } },
       { id: "BA", kind: "agent", templateName: "BA", prompt: "你是 BA。", initialMessageRouting: { mode: "inherit" } },

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
 import {
-  LANGGRAPH_END_NODE_ID,
+  FLOW_END_NODE_ID,
   collectTopologyTriggerShapes,
   type TopologyRecord,
 } from "@shared/types";
@@ -1511,7 +1511,7 @@ function resolveCandidateDecisionTriggers(
   const topology = buildEffectiveTopology(state);
   return collectTopologyTriggerShapes({
     edges: topology.edges,
-    endIncoming: topology.langgraph?.end?.incoming ?? [],
+    endIncoming: topology.flow.end.incoming,
   })
     .filter((item) => item.source === senderId)
     .map((item) => item.trigger)
@@ -1525,7 +1525,7 @@ function resolveAllowedDecisionTriggersForScript(
   const topology = buildEffectiveTopology(state);
   return collectTopologyTriggerShapes({
     edges: topology.edges,
-    endIncoming: topology.langgraph?.end?.incoming ?? [],
+    endIncoming: topology.flow.end.incoming,
   })
     .filter((item) => item.source === senderId)
     .map((item) => ({
@@ -1575,7 +1575,7 @@ function isImplicitScriptHiddenTarget(
   state: ReturnType<typeof createEmptyGraphTaskState>,
   agentId: string,
 ): boolean {
-  return agentId === LANGGRAPH_END_NODE_ID || isCompletedGroupRuntimeTarget(state, agentId);
+  return agentId === FLOW_END_NODE_ID || isCompletedGroupRuntimeTarget(state, agentId);
 }
 
 function isCompletedGroupRuntimeTarget(

@@ -14,7 +14,7 @@ type DecisionAgentState =
 
 export function isExecutionDecisionAgent(input: {
   state: DecisionAgentState;
-  topology: Pick<TopologyRecord, "edges"> & Partial<Pick<TopologyRecord, "langgraph">>;
+  topology: Pick<TopologyRecord, "edges" | "flow">;
   runtimeAgentId: string;
   executableAgentId: string;
 }): boolean {

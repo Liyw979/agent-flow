@@ -11,6 +11,7 @@ import {
 } from "./ui-snapshot-refresh-gate";
 import {
   buildTopologyNodeRecords,
+  createTopologyFlowRecord,
   type MessageRecord,
   type TaskAgentRecord,
   toUtcIsoTimestamp,
@@ -127,6 +128,10 @@ function createUiSnapshotPayload(input: {
       topology: {
         nodes: ["BA", "Build", "UnitTest"],
         edges: [],
+        flow: createTopologyFlowRecord({
+          nodes: ["BA", "Build", "UnitTest"],
+          edges: [],
+        }),
         nodeRecords: buildTopologyNodeRecords({
           nodes: ["BA", "Build", "UnitTest"],
           groupNodeIds: new Set(),

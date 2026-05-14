@@ -8,6 +8,7 @@ import type {
   TopologyRecord,
   TopologyTrigger,
 } from "@shared/types";
+import { createTopologyFlowRecord } from "@shared/types";
 import { renderAgentHistoryDetailToStaticHtml } from "./agent-history-markdown";
 import {
   buildAgentExecutionHistoryItems,
@@ -122,6 +123,25 @@ const topology: TopologyRecord = {
       messageMode: "last", maxTriggerRounds: 4,
     },
   ],
+  flow: createTopologyFlowRecord({
+    nodes: ["Build", "TaskReview"],
+    edges: [
+      {
+        source: "Build",
+        target: "TaskReview",
+        trigger: "<default>",
+        messageMode: "last",
+        maxTriggerRounds: 4,
+      },
+      {
+        source: "TaskReview",
+        target: "Build",
+        trigger: "<continue>",
+        messageMode: "last",
+        maxTriggerRounds: 4,
+      },
+    ],
+  }),
   nodeRecords: [
     { id: "Build", kind: "agent", templateName: "Build", initialMessageRouting: { mode: "inherit" } },
     { id: "TaskReview", kind: "agent", templateName: "TaskReview", initialMessageRouting: { mode: "inherit" } },
@@ -668,6 +688,18 @@ test("buildAgentHistoryItems 会按 runtime agent 对应模板的 trigger 集合
         messageMode: "last", maxTriggerRounds: 4,
       },
     ],
+    flow: createTopologyFlowRecord({
+      nodes: ["线索发现", "漏洞挑战", "漏洞论证", "讨论总结", "疑点辩论"],
+      edges: [
+        {
+          source: "线索发现",
+          target: "疑点辩论",
+          trigger: "<continue>",
+          messageMode: "last",
+          maxTriggerRounds: 4,
+        },
+      ],
+    }),
     nodeRecords: [
       { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
       {
@@ -783,6 +815,25 @@ test("buildAgentHistoryItems 解析 runtime agent 模板时不会误命中同前
         messageMode: "last", maxTriggerRounds: 4,
       },
     ],
+    flow: createTopologyFlowRecord({
+      nodes: ["A", "A-B", "Next"],
+      edges: [
+        {
+          source: "A",
+          target: "Next",
+          trigger: "<complete>",
+          messageMode: "last",
+          maxTriggerRounds: 4,
+        },
+        {
+          source: "A-B",
+          target: "Next",
+          trigger: "<continue>",
+          messageMode: "last",
+          maxTriggerRounds: 4,
+        },
+      ],
+    }),
     nodeRecords: ambiguousNodeRecords,
   };
 
@@ -832,6 +883,25 @@ test("buildAgentHistoryItems 遇到归属多个 group rule 的模板时不会猜
         messageMode: "last", maxTriggerRounds: 4,
       },
     ],
+    flow: createTopologyFlowRecord({
+      nodes: ["入口甲", "入口乙", "工厂甲", "工厂乙", "复核"],
+      edges: [
+        {
+          source: "入口甲",
+          target: "工厂甲",
+          trigger: "<continue>",
+          messageMode: "last",
+          maxTriggerRounds: 4,
+        },
+        {
+          source: "入口乙",
+          target: "工厂乙",
+          trigger: "<continue>",
+          messageMode: "last",
+          maxTriggerRounds: 4,
+        },
+      ],
+    }),
     nodeRecords: [
       { id: "入口甲", kind: "agent", templateName: "入口甲", initialMessageRouting: { mode: "inherit" } },
       { id: "入口乙", kind: "agent", templateName: "入口乙", initialMessageRouting: { mode: "inherit" } },

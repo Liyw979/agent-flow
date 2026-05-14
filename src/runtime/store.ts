@@ -1,6 +1,6 @@
 import {
   buildTopologyNodeRecords,
-  createTopologyLangGraphRecord,
+  createTopologyFlowRecord,
 } from "@shared/types";
 import type {
   MessageRecord,
@@ -74,7 +74,7 @@ function createDefaultWorkspaceState(): WorkspaceStateFile {
     topology: {
       nodes: [],
       edges: [],
-      langgraph: createTopologyLangGraphRecord({
+      flow: createTopologyFlowRecord({
         nodes: [],
         edges: [],
       }),

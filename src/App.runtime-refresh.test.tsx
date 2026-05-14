@@ -65,6 +65,17 @@ function createSingleAgentTopology(agentId: string) {
   return {
     nodes: [agentId],
     edges: [],
+    flow: {
+      start: {
+        id: "__start__" as const,
+        targets: [agentId],
+      },
+      end: {
+        id: "__end__" as const,
+        sources: [],
+        incoming: [],
+      },
+    },
     nodeRecords: buildTopologyNodeRecords({
       nodes: [agentId],
       groupNodeIds: new Set(),

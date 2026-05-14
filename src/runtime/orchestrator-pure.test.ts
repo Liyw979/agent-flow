@@ -8,7 +8,11 @@ import type {
   TopologyEdgeTrigger,
   TopologyRecord,
 } from "@shared/types";
-import { buildTopologyNodeRecords, toUtcIsoTimestamp } from "@shared/types";
+import {
+  buildTopologyNodeRecords,
+  createTopologyFlowRecord,
+  toUtcIsoTimestamp,
+} from "@shared/types";
 
 import { buildDownstreamForwardedContextFromMessages } from "./message-forwarding";
 import { resolveAgentStatusFromRouting } from "./gating-rules";
@@ -41,6 +45,10 @@ function createTopology(input: {
   return {
     nodes: [...nodeIds],
     edges: input.edges.map((edge) => ({ ...edge })),
+    flow: createTopologyFlowRecord({
+      nodes: [...nodeIds],
+      edges: input.edges.map((edge) => ({ ...edge })),
+    }),
     nodeRecords: buildTopologyNodeRecords({
       nodes: [...nodeIds],
       groupNodeIds: new Set(),

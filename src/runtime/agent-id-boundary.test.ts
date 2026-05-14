@@ -1,7 +1,7 @@
 import { strict as assert } from "assert";
 import test from "node:test";
 
-import { buildTopologyNodeRecords } from "@shared/types";
+import { buildTopologyNodeRecords, createTopologyFlowRecord } from "@shared/types";
 
 import { createEmptyGraphTaskState } from "./gating-state";
 import { createUserDispatchDecision } from "./gating-router";
@@ -12,6 +12,10 @@ test("用户派发决策使用 agentId 字段表达来源和目标", () => {
     topology: {
       nodes: ["Build"],
       edges: [],
+      flow: createTopologyFlowRecord({
+        nodes: ["Build"],
+        edges: [],
+      }),
       nodeRecords: buildTopologyNodeRecords({
         nodes: ["Build"],
         groupNodeIds: new Set(),
@@ -54,6 +58,10 @@ test("用户直接命中 group 时不会把 group 节点伪造成来源 agent", 
     topology: {
       nodes: ["讨论", "执行"],
       edges: [],
+      flow: createTopologyFlowRecord({
+        nodes: ["讨论", "执行"],
+        edges: [],
+      }),
       nodeRecords: [
         {
           id: "讨论",

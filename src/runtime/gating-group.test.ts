@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { TopologyRecord } from "@shared/types";
+import { createTopologyFlowRecord, type TopologyRecord } from "@shared/types";
 
 import { createEmptyGraphTaskState } from "./gating-state";
 import { materializeRuntimeGroupAgentsForItems } from "./gating-group";
@@ -20,6 +20,12 @@ function createGroupTopology(): TopologyRecord {
     edges: [
       { source: "线索发现", target: "漏洞疑点辩论", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 },
     ],
+    flow: createTopologyFlowRecord({
+      nodes: ["线索发现", "漏洞疑点辩论", "漏洞论证模板", "漏洞挑战模板", "Summary模板"],
+      edges: [
+        { source: "线索发现", target: "漏洞疑点辩论", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 },
+      ],
+    }),
     groupRules: [
       {
         id: "finding-debate",

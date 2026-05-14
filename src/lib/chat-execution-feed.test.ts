@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildTopologyNodeRecords,
+  createTopologyFlowRecord,
   type AgentFinalMessageRecord,
   type MessageRecord,
   type TopologyTrigger,
@@ -252,6 +253,32 @@ const topology: TopologyRecord = {
       messageMode: "last", maxTriggerRounds: 4,
     },
   ],
+  flow: createTopologyFlowRecord({
+    nodes: ["Build", "UnitTest", "TaskReview"],
+    edges: [
+      {
+        source: "Build",
+        target: "UnitTest",
+        trigger: "<default>",
+        messageMode: "last",
+        maxTriggerRounds: 4,
+      },
+      {
+        source: "Build",
+        target: "TaskReview",
+        trigger: "<default>",
+        messageMode: "last",
+        maxTriggerRounds: 4,
+      },
+      {
+        source: "TaskReview",
+        target: "Build",
+        trigger: "<continue>",
+        messageMode: "last",
+        maxTriggerRounds: 4,
+      },
+    ],
+  }),
   nodeRecords: buildTopologyNodeRecords({
     nodes: ["Build", "UnitTest", "TaskReview"],
     groupNodeIds: new Set(),
@@ -286,6 +313,32 @@ const vulnerabilityTopology: TopologyRecord = {
       messageMode: "last", maxTriggerRounds: 4,
     },
   ],
+  flow: createTopologyFlowRecord({
+    nodes: ["线索发现", "漏洞挑战-1", "漏洞论证-1", "讨论总结-1"],
+    edges: [
+      {
+        source: "线索发现",
+        target: "漏洞挑战-1",
+        trigger: "<default>",
+        messageMode: "last",
+        maxTriggerRounds: 4,
+      },
+      {
+        source: "漏洞挑战-1",
+        target: "漏洞论证-1",
+        trigger: "<continue>",
+        messageMode: "last",
+        maxTriggerRounds: 4,
+      },
+      {
+        source: "漏洞论证-1",
+        target: "讨论总结-1",
+        trigger: "<complete>",
+        messageMode: "last",
+        maxTriggerRounds: 4,
+      },
+    ],
+  }),
   nodeRecords: buildTopologyNodeRecords({
     nodes: ["线索发现", "漏洞挑战-1", "漏洞论证-1", "讨论总结-1"],
     groupNodeIds: new Set(),

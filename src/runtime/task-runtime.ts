@@ -1,5 +1,3 @@
-import { Annotation, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
-
 import {
   applyAgentResultToGraphState,
   createUserDispatchDecision,
@@ -7,10 +5,10 @@ import {
 } from "./gating-router";
 import { createEmptyGraphTaskState, type GraphTaskState } from "./gating-state";
 import type {
-  LangGraphBatchRunner,
-  LangGraphInputEvent,
-  LangGraphTaskLoopHost,
-} from "./langgraph-host";
+  TaskRuntimeBatchRunner,
+  TaskRuntimeInputEvent,
+  TaskRuntimeLoopHost,
+} from "./task-runtime-host";
 
 interface RuntimeEnvelope {
   graphState: GraphStateSlot;
@@ -31,7 +29,7 @@ type GraphStateSlot =
 type PendingInputSlot =
   | {
       kind: "received";
-      event: LangGraphInputEvent;
+      event: TaskRuntimeInputEvent;
     }
   | {
       kind: "empty";
@@ -64,114 +62,61 @@ type CheckpointSlot =
       kind: "missing";
     };
 
-function takeLatestValue<T>(...values: [previous: T, next: T]): T {
-  return values[1];
-}
-
-const RuntimeAnnotation = Annotation.Root({
-  graphState: Annotation<GraphStateSlot>({
-    reducer: takeLatestValue,
-    default: () => ({ kind: "empty" }),
-  }),
-  pendingInput: Annotation<PendingInputSlot>({
-    reducer: takeLatestValue,
-    default: () => ({ kind: "empty" }),
-  }),
-  lastDecision: Annotation<LastDecisionSlot>({
-    reducer: takeLatestValue,
-    default: () => ({ kind: "empty" }),
-  }),
-  lastError: Annotation<LastRuntimeError>({
-    reducer: takeLatestValue,
-    default: () => ({ kind: "none" }),
-  }),
-});
-
-function runtimeConfig(taskId: string) {
-  return {
-    configurable: {
-      thread_id: taskId,
-    },
-  };
-}
-
-export class LangGraphRuntime {
-  private readonly checkpointer: MemorySaver;
-  private readonly graph;
+export class TaskRuntime {
+  private readonly checkpoints = new Map<string, RuntimeEnvelope>();
 
   constructor(
     private readonly options: {
-      host: LangGraphTaskLoopHost;
+      host: TaskRuntimeLoopHost;
     },
-  ) {
-    this.checkpointer = new MemorySaver();
-
-    const builder = new StateGraph(RuntimeAnnotation)
-      .addNode("task_loop", async (state: RuntimeEnvelope) => this.runTaskLoop(state))
-      .addNode("task_finished", async (state: RuntimeEnvelope) => state)
-      .addNode("task_failed", async (state: RuntimeEnvelope) => state)
-      .addEdge(START, "task_loop")
-      .addConditionalEdges("task_loop", (state: RuntimeEnvelope) => {
-        if (state.lastDecision.kind === "decided" && state.lastDecision.decision.type === "failed") {
-          return "task_failed";
-        }
-        return "task_finished";
-      })
-      .addEdge("task_finished", END)
-      .addEdge("task_failed", END);
-
-    this.graph = builder.compile({
-      checkpointer: this.checkpointer,
-      name: "agent-team-task-runtime",
-    });
-  }
+  ) {}
 
   async startTask(input: {
     taskId: string;
     topology: GraphTaskState["topology"];
-    initialInput: LangGraphInputEvent;
+    initialInput: TaskRuntimeInputEvent;
   }): Promise<GraphTaskState> {
     const graphState = createEmptyGraphTaskState({
       taskId: input.taskId,
       topology: input.topology,
     });
-    const result = await this.graph.invoke(
+    const result = await this.runAndPersist(
+      input.taskId,
       {
         graphState: { kind: "created", graphState },
         pendingInput: { kind: "received", event: input.initialInput },
         lastDecision: { kind: "empty" },
         lastError: { kind: "none" },
       } satisfies RuntimeEnvelope,
-      runtimeConfig(input.taskId),
-    ) as RuntimeEnvelope;
+    );
     return result.graphState.kind === "created" ? result.graphState.graphState : graphState;
   }
 
   async resumeTask(input: {
     taskId: string;
     topology: GraphTaskState["topology"];
-    event: LangGraphInputEvent;
+    event: TaskRuntimeInputEvent;
   }): Promise<GraphTaskState> {
     const existing = await this.getCheckpoint(input.taskId);
     const graphState = resolveCheckpointGraphState(existing, input.taskId, input.topology);
-    const result = await this.graph.invoke(
+    const result = await this.runAndPersist(
+      input.taskId,
       {
         graphState: { kind: "created", graphState },
         pendingInput: { kind: "received", event: input.event },
         lastDecision: { kind: "empty" },
         lastError: { kind: "none" },
       } satisfies RuntimeEnvelope,
-      runtimeConfig(input.taskId),
-    ) as RuntimeEnvelope;
+    );
     return result.graphState.kind === "created" ? result.graphState.graphState : graphState;
   }
 
   async getCheckpoint(taskId: string): Promise<CheckpointSlot> {
-    const state = await this.graph.getState(runtimeConfig(taskId));
-    if (!state.values || Object.keys(state.values).length === 0) {
+    const checkpoint = this.checkpoints.get(taskId);
+    if (!checkpoint) {
       return { kind: "missing" };
     }
-    return { kind: "found", checkpoint: state.values as RuntimeEnvelope };
+    return { kind: "found", checkpoint };
   }
 
   async streamTask(
@@ -182,7 +127,16 @@ export class LangGraphRuntime {
   }
 
   async deleteTask(taskId: string): Promise<void> {
-    await this.checkpointer.deleteThread(taskId);
+    this.checkpoints.delete(taskId);
+  }
+
+  private async runAndPersist(
+    taskId: string,
+    state: RuntimeEnvelope,
+  ): Promise<RuntimeEnvelope> {
+    const result = await this.runTaskLoop(state);
+    this.checkpoints.set(taskId, result);
+    return result;
   }
 
   private async runTaskLoop(state: RuntimeEnvelope): Promise<RuntimeEnvelope> {
@@ -203,7 +157,7 @@ export class LangGraphRuntime {
     let currentState = state.graphState.graphState;
     let currentDecision = resolveInitialRuntimeDecision(state, currentState);
 
-    const inflight = new Map<string, LangGraphBatchRunner>();
+    const inflight = new Map<string, TaskRuntimeBatchRunner>();
     while (true) {
       while (currentDecision.kind === "decided" && currentDecision.decision.type === "execute_batch") {
         const runners = await this.options.host.createBatchRunners({

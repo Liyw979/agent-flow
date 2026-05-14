@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getGroupRules, type GroupRule, type GroupRuleWithReport, type TopologyRecord } from "@shared/types";
+import {
+  createTopologyFlowRecord,
+  getGroupRules,
+  type GroupRule,
+  type GroupRuleWithReport,
+  type TopologyRecord,
+} from "@shared/types";
 
 import { compileTeamDsl, type TeamDslDefinition } from "./team-dsl";
 import { instantiateGroupBundle, instantiateGroupBundles, validateGroupRule } from "./runtime-topology";
@@ -27,6 +33,15 @@ function createVulnTopology(): TopologyRecord {
       { source: "线索发现", target: "疑点辩论工厂", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 },
       { source: "疑点辩论工厂", target: "线索发现", trigger: "<default>", messageMode: "none", maxTriggerRounds: 4 },
     ],
+    flow: createTopologyFlowRecord({
+      nodes: ["线索发现", "漏洞论证模板", "漏洞挑战模板", "Summary模板"],
+      edges: [
+        { source: "线索发现", target: "疑点辩论工厂", trigger: "<default>", messageMode: "last", maxTriggerRounds: 4 },
+        { source: "疑点辩论工厂", target: "线索发现", trigger: "<default>", messageMode: "none", maxTriggerRounds: 4 },
+      ],
+      endSources: ["疑点辩论工厂"],
+      endIncoming: [{ source: "疑点辩论工厂", trigger: "<default>" }],
+    }),
     groupRules: [
       {
         id: "finding-debate",

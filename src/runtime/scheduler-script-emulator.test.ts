@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildTopologyNodeRecords,
+  createTopologyFlowRecord,
   type TopologyRecord,
 } from "@shared/types";
 
@@ -77,10 +78,25 @@ function renderTriggerBlock(trigger: string, content: string): string {
   return `${trigger}${content}</${trigger.slice(1, -1)}>`;
 }
 
-function withAgentNodeRecords(topology: Omit<TopologyRecord, "nodeRecords">): TopologyRecord {
+function withAgentNodeRecords(
+  topology: Omit<TopologyRecord, "flow" | "nodeRecords"> &
+    Partial<Pick<TopologyRecord, "flow" | "nodeRecords">>,
+): TopologyRecord {
+  const flowInput = topology.flow
+    ? {
+        startTargets: topology.flow.start.targets,
+        endSources: topology.flow.end.sources,
+        endIncoming: topology.flow.end.incoming,
+      }
+    : {};
   return {
     ...topology,
-    nodeRecords: buildTopologyNodeRecords({
+    flow: createTopologyFlowRecord({
+      nodes: topology.nodes,
+      edges: topology.edges,
+      ...flowInput,
+    }),
+    nodeRecords: topology.nodeRecords ?? buildTopologyNodeRecords({
       nodes: topology.nodes,
       groupNodeIds: new Set(),
       templateNameByNodeId: new Map(),
@@ -628,7 +644,7 @@ test("scheduler script emulator 纯函数允许 decisionAgent 的 execute_batch 
 });
 
 test("scheduler script emulator 纯函数不允许 execute_batch 在脚本可见目标之外还夹带隐藏的旧 runtime target", () => {
-  const topology: TopologyRecord = {
+  const topology: TopologyRecord = withAgentNodeRecords({
     nodes: ["线索发现", "疑点辩论", "漏洞挑战"],
     nodeRecords: [
       { id: "线索发现", kind: "agent", templateName: "线索发现", initialMessageRouting: { mode: "inherit" } },
@@ -638,7 +654,7 @@ test("scheduler script emulator 纯函数不允许 execute_batch 在脚本可见
     edges: [
       { source: "线索发现", target: "疑点辩论", trigger: "<continue>", messageMode: "last", maxTriggerRounds: 4 },
     ],
-  };
+  });
   const state = createEmptyGraphTaskState({
     taskId: "scheduler-script-emulator-hidden-runtime-target",
     topology,

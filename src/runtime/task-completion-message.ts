@@ -7,9 +7,9 @@ export function buildTaskRoundFinishedMessageContent(): string {
 export function buildTaskCompletionMessageContent(input: {
   status: TaskRecord["status"];
   taskTitle: string;
-  failureReason?: string | null;
+  failureReason: string;
 }): string {
-  const failureReason = input.failureReason?.trim();
+  const failureReason = input.failureReason.trim();
   if (failureReason) {
     return failureReason;
   }

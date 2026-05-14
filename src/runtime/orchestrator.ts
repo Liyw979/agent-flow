@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import path from "node:path";
-import { withOptionalString, withOptionalValue } from "@shared/object-utils";
+import { withOptionalString } from "@shared/object-utils";
 import { resolveTaskSubmissionTarget } from "@shared/task-submission";
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import {
@@ -17,9 +17,9 @@ import {
   createDefaultTopology,
   DEFAULT_TOPOLOGY_TRIGGER,
   type InitialMessageRouting,
-  LANGGRAPH_END_NODE_ID,
+  FLOW_END_NODE_ID,
   normalizeMaxTriggerRounds,
-  createTopologyLangGraphRecord,
+  createTopologyFlowRecord,
   getTopologyEdgeId,
   getTopologyNodeRecords,
   normalizeGroupRule,
@@ -38,7 +38,7 @@ import {
   type TaskAgentRecord,
   type TaskRecord,
   type TaskSnapshot,
-  type TopologyLangGraphEndIncoming,
+  type TopologyFlowEndIncoming,
   type TopologyNodeRecord,
   type TopologyRecord,
   type WorkspaceSnapshot, toUtcIsoTimestamp,
@@ -80,8 +80,8 @@ import {
   resolveStandaloneTaskStatusAfterAgentRun,
   shouldFinishTaskFromPersistedState as shouldFinishTaskFromPersistedStatePure,
 } from "./task-lifecycle-rules";
-import { LangGraphRuntime } from "./langgraph-runtime";
-import type { LangGraphTaskLoopHost } from "./langgraph-host";
+import { TaskRuntime } from "./task-runtime";
+import type { TaskRuntimeLoopHost } from "./task-runtime-host";
 import type { GraphDispatchBatch, GraphAgentResult } from "./gating-router";
 import type { GraphTaskState } from "./gating-state";
 import {
@@ -163,12 +163,9 @@ function coerceGroupRuleInput(
 }
 
 function getTopologyEndIncoming(
-  topology: Partial<Pick<TopologyRecord, "langgraph">>,
-): TopologyLangGraphEndIncoming[] {
-  if (!topology.langgraph || !topology.langgraph.end) {
-    return [];
-  }
-  return topology.langgraph.end.incoming;
+  topology: Pick<TopologyRecord, "flow">,
+): TopologyFlowEndIncoming[] {
+  return topology.flow.end.incoming;
 }
 
 interface OrchestratorOptions {
@@ -283,7 +280,7 @@ export class Orchestrator {
   readonly opencodeRunner: OpenCodeRunner;
   readonly cwd: string;
   private readonly events = new EventEmitter();
-  private readonly langGraphRuntimes = new Map<string, LangGraphRuntime>();
+  private readonly runtimesByCwd = new Map<string, TaskRuntime>();
   private readonly enableEventStream: boolean;
   private readonly taskRuntimeOverlays = new Map<string, TaskRuntimeOverlay>();
   private readonly runtimeEventCallbacks = new Map<string, (event: unknown) => void>();
@@ -337,7 +334,7 @@ export class Orchestrator {
     } else if (!awaitPendingTaskRuns) {
       this.pendingTaskRuns.clear();
     }
-    this.langGraphRuntimes.clear();
+    this.runtimesByCwd.clear();
     this.taskRuntimeOverlays.clear();
     this.runtimeEventCallbacks.clear();
     try {
@@ -690,7 +687,7 @@ export class Orchestrator {
       targetAgentRecord.id,
     );
     const topology = this.store.getTopology();
-    const runtime = this.getLangGraphRuntime(normalizedCwd);
+    const runtime = this.getOrCreateTaskRuntime(normalizedCwd);
     this.trackBackgroundTask(
       runtime
         .resumeTask({
@@ -748,7 +745,7 @@ export class Orchestrator {
       taskId,
       content: normalizedContent,
       sender: "user",
-      timestamp: toUtcIsoTimestamp(new Date().toISOString()),
+      timestamp: toUtcIsoTimestamp(this.createTrailingMessageTimestamp(taskId)),
       kind: "user",
       scope: "task",
       taskTitle,
@@ -812,11 +809,11 @@ export class Orchestrator {
   ) {
     if (behavior.followTopology) {
       throw new Error(
-        "runAgent 已不再负责拓扑调度；请通过 submitTask/continueTask 走 LangGraph runtime。",
+        "runAgent 已不再负责拓扑调度；请通过 submitTask/continueTask 走 task runtime。",
       );
     }
 
-    const result = await this.executeLangGraphAgentOnce(
+    const result = await this.executeRuntimeAgentOnce(
       cwd,
       task,
       null,
@@ -832,7 +829,11 @@ export class Orchestrator {
     const latestTask = this.store.getTask(task.id);
     if (isTerminalTaskStatus(latestTask.status)) {
       if (latestTask.status === "failed" && latestTask.completedAt.length === 0) {
-        await this.completeTask(task.cwd, task.id, "failed");
+        await this.completeTask(task.cwd, {
+          taskId: task.id,
+          status: "failed",
+          failureReason: "standalone_agent_failed",
+        });
       }
       return;
     }
@@ -843,17 +844,20 @@ export class Orchestrator {
     });
 
     if (nextTaskStatus === "finished") {
-      await this.completeTask(
-        task.cwd,
-        task.id,
-        "finished",
-        "standalone_round_finished",
-      );
+      await this.completeTask(task.cwd, {
+        taskId: task.id,
+        status: "finished",
+        finishReason: "standalone_round_finished",
+      });
       return;
     }
 
     if (nextTaskStatus === "failed") {
-      await this.completeTask(task.cwd, task.id, "failed");
+      await this.completeTask(task.cwd, {
+        taskId: task.id,
+        status: "failed",
+        failureReason: "standalone_agent_failed",
+      });
       return;
     }
   }
@@ -924,12 +928,11 @@ export class Orchestrator {
       return;
     }
 
-    await this.completeTask(
-      task.cwd,
+    await this.completeTask(task.cwd, {
       taskId,
-      "finished",
-      "persisted_round_finished",
-    );
+      status: "finished",
+      finishReason: "persisted_round_finished",
+    });
   }
 
   private async reconcilePersistedWorkspaceTasks() {
@@ -982,8 +985,7 @@ export class Orchestrator {
 
   private resolveAllowedDecisionTriggers(input: {
     state: GraphTaskState | null;
-    topology: Pick<TopologyRecord, "edges"> &
-      Partial<Pick<TopologyRecord, "langgraph">>;
+    topology: Pick<TopologyRecord, "edges" | "flow">;
     runtimeAgentId: string;
     executableAgentId: string;
   }): AllowedDecisionTrigger[] {
@@ -1003,7 +1005,7 @@ export class Orchestrator {
 
     for (const trigger of collectTopologyTriggerShapes({
       edges: effectiveTopology.edges,
-      endIncoming: effectiveTopology.langgraph?.end?.incoming ?? [],
+      endIncoming: effectiveTopology.flow.end.incoming,
     })) {
       if (!sourceAgentIds.includes(trigger.source)) {
         continue;
@@ -1084,8 +1086,7 @@ export class Orchestrator {
   private resolveParsedDecisionValue(input: {
     parsedDecision: ParsedDecision;
     decisionAgent: boolean;
-    topology: Pick<TopologyRecord, "edges"> &
-      Partial<Pick<TopologyRecord, "langgraph">>;
+    topology: Pick<TopologyRecord, "edges" | "flow">;
     sourceAgentIds: string[];
   }): AgentRoutingKind {
     if (input.parsedDecision.kind === "invalid") {
@@ -1429,7 +1430,7 @@ export class Orchestrator {
         (edge) =>
           validTopologyNames.has(edge.source) &&
           (validTopologyNames.has(edge.target) ||
-            edge.target === LANGGRAPH_END_NODE_ID),
+            edge.target === FLOW_END_NODE_ID),
       )
       .filter((edge) => {
         const key = getTopologyEdgeId(edge);
@@ -1440,13 +1441,13 @@ export class Orchestrator {
         return true;
       });
     const endIncomingFromEdges = normalizedEdges
-      .filter((edge) => edge.target === LANGGRAPH_END_NODE_ID)
+      .filter((edge) => edge.target === FLOW_END_NODE_ID)
       .map((edge) => ({
         source: edge.source,
         trigger: edge.trigger,
       }));
     const edges = normalizedEdges
-      .filter((edge) => edge.target !== LANGGRAPH_END_NODE_ID)
+      .filter((edge) => edge.target !== FLOW_END_NODE_ID)
       .map((edge) => ({
         source: edge.source,
         target: edge.target,
@@ -1520,17 +1521,17 @@ export class Orchestrator {
     );
     const explicitStartTarget = resolvePrimaryTopologyStartTarget(topology);
     const endIncoming = [...explicitEndIncoming, ...endIncomingFromEdges];
-    const langgraph = createTopologyLangGraphRecord({
+    const flow = createTopologyFlowRecord({
       nodes,
       edges,
       startTargets:
-        topology.langgraph?.start.targets ??
+        topology.flow.start.targets ??
         (explicitStartTarget ? [explicitStartTarget] : []),
       endIncoming,
     });
     collectTopologyTriggerShapes({
       edges,
-      endIncoming: langgraph.end?.incoming ?? [],
+      endIncoming: flow.end.incoming,
     });
     const nodeRecords = buildTopologyNodeRecords({
       nodes,
@@ -1570,33 +1571,33 @@ export class Orchestrator {
     return {
       nodes,
       edges,
-      langgraph,
+      flow,
       nodeRecords,
       ...(groupRules ? { groupRules } : {}),
     } satisfies TopologyRecord;
   }
 
-  private getLangGraphRuntime(cwd: string): LangGraphRuntime {
-    let runtime = this.langGraphRuntimes.get(cwd);
+  private getOrCreateTaskRuntime(cwd: string): TaskRuntime {
+    let runtime = this.runtimesByCwd.get(cwd);
     if (runtime) {
       return runtime;
     }
 
-    const host: LangGraphTaskLoopHost = {
+    const host: TaskRuntimeLoopHost = {
       createBatchRunners: async ({ taskId, state, batch }) =>
-        this.createLangGraphBatchRunners(cwd, taskId, state, batch),
-      completeTask: async ({ taskId, status, finishReason, failureReason }) =>
-        this.completeTask(cwd, taskId, status, finishReason, failureReason),
+        this.createRuntimeBatchRunners(cwd, taskId, state, batch),
+      completeTask: async (input) =>
+        this.completeTask(cwd, input),
     };
-    runtime = new LangGraphRuntime({
+    runtime = new TaskRuntime({
       host,
     });
-    this.langGraphRuntimes.set(cwd, runtime);
+    this.runtimesByCwd.set(cwd, runtime);
     return runtime;
   }
 
   private async deleteTaskGraphRuntime(task: Pick<TaskRecord, "id" | "cwd">) {
-    await this.getLangGraphRuntime(task.cwd).deleteTask(task.id);
+    await this.getOrCreateTaskRuntime(task.cwd).deleteTask(task.id);
   }
 
   private resolveDispatchInitialMessageRouting(
@@ -1669,7 +1670,7 @@ export class Orchestrator {
     return buildEffectiveTopology(state).nodes;
   }
 
-  protected async createLangGraphBatchRunners(
+  protected async createRuntimeBatchRunners(
     cwd: string,
     taskId: string,
     state: GraphTaskState,
@@ -1796,7 +1797,7 @@ export class Orchestrator {
         return {
           id: `${batch.source.kind === "agent" ? batch.source.agentId : "user"}:${job.agentId}:${index}:${Date.now()}`,
           agentId: job.agentId,
-          promise: this.executeLangGraphAgentOnce(
+          promise: this.executeRuntimeAgentOnce(
             cwd,
             task,
             state,
@@ -1810,7 +1811,7 @@ export class Orchestrator {
       return {
         id: `${batch.source.kind === "agent" ? batch.source.agentId : "user"}:${job.agentId}:${index}:${Date.now()}`,
         agentId: job.agentId,
-          promise: this.executeLangGraphAgentOnce(
+          promise: this.executeRuntimeAgentOnce(
             cwd,
             task,
             state,
@@ -1823,7 +1824,7 @@ export class Orchestrator {
     });
   }
 
-  private async executeLangGraphAgentOnce(
+  private async executeRuntimeAgentOnce(
     cwd: string,
     task: TaskRecord,
     state: GraphTaskState | null,
@@ -2133,11 +2134,19 @@ export class Orchestrator {
 
   private async completeTask(
     cwd: string,
-    taskId: string,
-    status: Extract<TaskRecord["status"], "finished" | "failed">,
-    finishReason?: string | null,
-    failureReason?: string | null,
+    input:
+      | {
+          taskId: string;
+          status: "finished";
+          finishReason: string;
+        }
+      | {
+          taskId: string;
+          status: "failed";
+          failureReason: string;
+        },
   ) {
+    const { taskId, status } = input;
     const currentTask = this.store.getTask(taskId);
     if (currentTask.status === status && currentTask.completedAt) {
       return;
@@ -2158,7 +2167,7 @@ export class Orchestrator {
             timestamp: toUtcIsoTimestamp(completionTimestamp),
             content: buildTaskRoundFinishedMessageContent(),
             kind: "task-round-finished",
-            finishReason: finishReason ?? "round_finished",
+            finishReason: input.finishReason,
           }
         : {
             id: randomUUID(),
@@ -2166,14 +2175,11 @@ export class Orchestrator {
             sender: "system",
             timestamp: toUtcIsoTimestamp(completionTimestamp),
             content: buildTaskCompletionMessageContent(
-              withOptionalValue(
-                {
-                  status,
-                  taskTitle: snapshot.task.title,
-                },
-                "failureReason",
-                failureReason,
-              ),
+              {
+                status,
+                taskTitle: snapshot.task.title,
+                failureReason: input.failureReason,
+              },
             ),
             kind: "task-completed",
             status: "failed",

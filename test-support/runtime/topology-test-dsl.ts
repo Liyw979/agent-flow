@@ -2,13 +2,13 @@ import {
   buildTopologyNodeRecords,
   DEFAULT_TOPOLOGY_TRIGGER,
   type GroupRule,
-  LANGGRAPH_END_NODE_ID,
-  LANGGRAPH_START_NODE_ID,
+  FLOW_END_NODE_ID,
+  FLOW_START_NODE_ID,
   normalizeMaxTriggerRounds,
   normalizeTopologyEdgeTrigger,
   type TopologyEdge,
   type TopologyEdgeTrigger,
-  type TopologyLangGraphRecord,
+  type TopologyFlowRecord,
   type TopologyNodeRecord,
   type TopologyRecord,
 } from "@shared/types";
@@ -48,7 +48,7 @@ function collectNodes(input: CreateTopologyInput): string[] {
   for (const [source, targets] of Object.entries(input.downstream)) {
     pushUnique(nodes, source);
     for (const target of Object.keys(targets)) {
-      if (target === LANGGRAPH_END_NODE_ID) {
+      if (target === FLOW_END_NODE_ID) {
         continue;
       }
       pushUnique(nodes, target);
@@ -70,7 +70,7 @@ function buildEdges(input: CreateTopologyInput): TopologyEdge[] {
 
   for (const [source, targets] of Object.entries(input.downstream)) {
     for (const [target, mode] of Object.entries(targets)) {
-      if (target === LANGGRAPH_END_NODE_ID) {
+      if (target === FLOW_END_NODE_ID) {
         continue;
       }
       if (mode === "group") {
@@ -189,9 +189,9 @@ function buildGroupRules(input: CreateTopologyInput): GroupRule[] {
   });
 }
 
-function buildLangGraphFromDownstream(input: CreateTopologyInput): TopologyLangGraphRecord | undefined {
+function buildFlowFromDownstream(input: CreateTopologyInput): TopologyFlowRecord {
   const incoming = Object.entries(input.downstream).flatMap(([source, targets]) => {
-    const mode = targets[LANGGRAPH_END_NODE_ID];
+    const mode = targets[FLOW_END_NODE_ID];
     if (!mode || mode === "group") {
       return [];
     }
@@ -203,15 +203,25 @@ function buildLangGraphFromDownstream(input: CreateTopologyInput): TopologyLangG
     }];
   });
   if (incoming.length === 0) {
-    return undefined;
+    return {
+      start: {
+        id: FLOW_START_NODE_ID,
+        targets: [],
+      },
+      end: {
+        id: FLOW_END_NODE_ID,
+        sources: [],
+        incoming: [],
+      },
+    };
   }
   return {
     start: {
-      id: LANGGRAPH_START_NODE_ID,
+      id: FLOW_START_NODE_ID,
       targets: [],
     },
     end: {
-      id: LANGGRAPH_END_NODE_ID,
+      id: FLOW_END_NODE_ID,
       sources: incoming.map((item) => item.source),
       incoming,
     },
@@ -222,7 +232,7 @@ export function createTopology(
   input: CreateTopologyInput,
 ): TopologyRecord {
   const nodes = collectNodes(input);
-  const langgraph = buildLangGraphFromDownstream(input);
+  const flow = buildFlowFromDownstream(input);
   const edges = buildEdges(input);
   const nodeRecords = buildNodeRecords(nodes, input);
   const groupRules = buildGroupRules(input);
@@ -230,8 +240,8 @@ export function createTopology(
   return {
     nodes,
     edges,
+    flow,
     nodeRecords,
-    ...(langgraph ? {langgraph} : {}),
     ...(groupRules.length > 0 ? {groupRules} : {}),
   };
 }
