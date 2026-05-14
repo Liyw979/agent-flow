@@ -46,6 +46,8 @@ const NODE_WIDTH = 248;
 const NODE_HEIGHT = 308;
 const TOPOLOGY_PENDING_RESULT_COPY = "正在执行，暂无结果";
 const TOPOLOGY_SYNC_PENDING_COPY = "等待最终结果同步";
+const TOPOLOGY_FAILED_RESULT_COPY = "执行失败，暂无可展示的最终结果";
+const TOPOLOGY_MISSING_RESULT_COPY = "暂无可展示的最终结果";
 
 type TopologyNodeContent =
   | {
@@ -174,9 +176,17 @@ function resolveTopologyNodeContent(input: {
     };
   }
 
-  throw new Error(
-    `拓扑节点 ${input.agentId} 在任务状态 ${input.taskStatus}、Agent 状态 ${input.agentStatus} 下缺少最终消息`,
-  );
+  if (input.agentStatus === "failed" || input.taskStatus === "failed") {
+    return {
+      kind: "pending",
+      copy: TOPOLOGY_FAILED_RESULT_COPY,
+    };
+  }
+
+  return {
+    kind: "pending",
+    copy: TOPOLOGY_MISSING_RESULT_COPY,
+  };
 }
 
 function renderStatusBadgeIcon(

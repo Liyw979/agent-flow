@@ -6,7 +6,6 @@ import {
 import { runWithTaskLogScope } from "./app-log";
 
 interface RunAgentPayload extends SubmitMessagePayload {
-  cwd: string;
   taskId: string;
   sessionId: string;
   allowedDecisionTriggers: string[];
@@ -32,16 +31,13 @@ export class OpenCodeRunner {
 
   async run(payload: RunAgentPayload): Promise<OpenCodeExecutionResult> {
     return runWithTaskLogScope(payload.taskId, async () => {
-      const { cwd } = payload;
-
       while (true) {
         const startedAt = new Date().toISOString();
         try {
-          return await this.executeAttempt(cwd, payload);
+          return await this.executeAttempt(payload);
         } catch (error) {
           try {
             const recovered = await this.client.recoverExecutionResultAfterTransportError(
-              cwd,
               payload.sessionId,
               startedAt,
               error instanceof Error ? error.message : String(error),
@@ -59,12 +55,10 @@ export class OpenCodeRunner {
   }
 
   private async executeAttempt(
-    cwd: string,
     payload: RunAgentPayload,
   ): Promise<OpenCodeExecutionResult> {
-    const submitted = await this.client.submitMessage(cwd, payload.sessionId, payload);
+    const submitted = await this.client.submitMessage(payload.sessionId, payload);
     const result = await this.client.resolveExecutionResult(
-      cwd,
       payload.sessionId,
       submitted,
       payload.agent,

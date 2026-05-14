@@ -279,8 +279,9 @@ export function isTerminalTaskStatus(status: TaskRecord["status"]) {
 
 export class Orchestrator {
   readonly store: StoreService;
-  readonly opencodeClient: OpenCodeClient;
-  readonly opencodeRunner: OpenCodeRunner;
+  private startedOpenCodeClient!: OpenCodeClient;
+  private startedOpenCodeRunner!: OpenCodeRunner;
+  private hasStartedOpenCode = false;
   readonly cwd: string;
   private readonly events = new EventEmitter();
   private readonly langGraphRuntimes = new Map<string, LangGraphRuntime>();
@@ -307,8 +308,6 @@ export class Orchestrator {
     this.cwd = path.resolve(options.cwd);
     acquireProcessWorkspaceCwd(this.cwd);
     this.store = new StoreService();
-    this.opencodeClient = new OpenCodeClient();
-    this.opencodeRunner = new OpenCodeRunner(this.opencodeClient);
     this.enableEventStream = options.enableEventStream ?? true;
     this.runtimeRefreshDebounceMs = options.runtimeRefreshDebounceMs ?? 120;
     this.terminalLauncher = options.terminalLauncher ?? launchTerminalCommand;
@@ -316,6 +315,20 @@ export class Orchestrator {
 
   async initialize() {
     this.ensureWorkspaceRecord();
+  }
+
+  get opencodeClient(): OpenCodeClient {
+    if (!this.hasStartedOpenCode) {
+      throw new Error("OpenCodeClient 尚未启动。");
+    }
+    return this.startedOpenCodeClient;
+  }
+
+  get opencodeRunner(): OpenCodeRunner {
+    if (!this.hasStartedOpenCode) {
+      throw new Error("OpenCodeRunner 尚未启动。");
+    }
+    return this.startedOpenCodeRunner;
   }
 
   async dispose(
@@ -341,7 +354,12 @@ export class Orchestrator {
     this.taskRuntimeOverlays.clear();
     this.runtimeEventCallbacks.clear();
     try {
-      return await this.opencodeClient.shutdownAll();
+      if (!this.hasStartedOpenCode) {
+        return {
+          killedPids: [],
+        };
+      }
+      return await this.opencodeClient.shutdown();
     } finally {
       releaseProcessWorkspaceCwd(this.cwd);
     }
@@ -424,7 +442,7 @@ export class Orchestrator {
       .some((overlay) => path.resolve(overlay.cwd) === normalizedCwd);
     const runtimeEventCallback = this.runtimeEventCallbacks.get(normalizedCwd);
     if (!hasRemainingOverlayOnCwd && runtimeEventCallback) {
-      this.opencodeClient.disconnectEvents(normalizedCwd, runtimeEventCallback);
+      this.opencodeClient.disconnectEvents(runtimeEventCallback);
       this.runtimeEventCallbacks.delete(normalizedCwd);
     }
     const reconnectTimer = this.pendingEventReconnects.get(normalizedCwd);
@@ -556,7 +574,6 @@ export class Orchestrator {
         try {
           const runtime = await runWithTaskLogScope(task.id, () =>
             this.opencodeClient.getSessionRuntime(
-              task.cwd,
               agent.opencodeSessionId,
             ));
           return {
@@ -1184,10 +1201,8 @@ export class Orchestrator {
     }
     const injectedConfig = buildInjectedConfigFromAgents(this.listWorkspaceAgents());
     const sessionId = await runWithTaskLogScope(task.id, async () => {
-      const server = await this.opencodeClient.ensureServerStarted(task.cwd, injectedConfig);
-      overlay.attachBaseUrl = `http://${this.opencodeClient.host}:${server.port}`;
+      await this.ensureTaskServer(task, injectedConfig);
       return this.opencodeClient.createSession(
-        task.cwd,
         `${task.title}:${agent.id}`,
       );
     });
@@ -1198,6 +1213,31 @@ export class Orchestrator {
 
   protected async ensureTaskPanels(task: TaskRecord) {
     await this.ensureTaskInitialized(task, this.listWorkspaceAgents());
+  }
+
+  private async ensureTaskServer(
+    task: Pick<TaskRecord, "id" | "cwd">,
+    injectedConfig: ReturnType<typeof buildInjectedConfigFromAgents>,
+  ): Promise<void> {
+    const overlay = this.ensureTaskRuntimeOverlay(task);
+    if (overlay.attachBaseUrl) {
+      return;
+    }
+    const existingAttachBaseUrl = [...this.taskRuntimeOverlays.values()]
+      .find((currentOverlay) => currentOverlay.attachBaseUrl)?.attachBaseUrl ?? "";
+    if (existingAttachBaseUrl) {
+      overlay.attachBaseUrl = existingAttachBaseUrl;
+      return;
+    }
+    const server = await OpenCodeClient.startServer(task.cwd, injectedConfig);
+    const client = new OpenCodeClient({
+      server,
+    });
+    const runner = new OpenCodeRunner(client);
+    this.startedOpenCodeClient = client;
+    this.startedOpenCodeRunner = runner;
+    this.hasStartedOpenCode = true;
+    overlay.attachBaseUrl = `http://${client.host}:${server.port}`;
   }
 
   private async ensureTaskAgentSessions(
@@ -1226,6 +1266,10 @@ export class Orchestrator {
   ): Promise<TaskSnapshot> {
     this.syncTaskAgents(task, agents);
     const currentTask = this.store.getTask(task.id);
+    await this.ensureTaskServer(
+      currentTask,
+      buildInjectedConfigFromAgents(this.listWorkspaceAgents()),
+    );
     await this.ensureTaskAgentSessions(currentTask);
     if (this.hasTaskRuntimeSessions(currentTask.id)) {
       await this.ensureTaskRuntimeEventStream(currentTask);
@@ -1916,7 +1960,6 @@ export class Orchestrator {
           })
         : [];
       const responsePromise = this.opencodeRunner.run({
-        cwd: currentTask.cwd,
         taskId: task.id,
         sessionId: agentSessionId,
         content: dispatchedContent,
@@ -2434,12 +2477,11 @@ export class Orchestrator {
     const emittedMessages: MessageRecord[] = [];
     const targetAgentIds = new Set(input.agentIds);
     for (const [agentId, sessionId] of overlay.agentSessions.entries()) {
-        if (!targetAgentIds.has(agentId)) {
-          continue;
-        }
+      if (!targetAgentIds.has(agentId)) {
+        continue;
+      }
       const runtime = await runWithTaskLogScope(overlay.taskId, () =>
         this.opencodeClient.getSessionRuntime(
-          overlay.cwd,
           sessionId,
         ));
 
@@ -2598,7 +2640,7 @@ export class Orchestrator {
     };
     this.runtimeEventCallbacks.set(normalizedCwd, onEvent);
     void this.opencodeClient
-      .connectEvents(normalizedCwd, onEvent)
+      .connectEvents(onEvent)
       .catch(() => undefined)
       .finally(() => {
         this.runtimeEventCallbacks.delete(normalizedCwd);

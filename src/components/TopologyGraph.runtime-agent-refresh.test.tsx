@@ -712,56 +712,60 @@ test("TopologyGraph 的单条最终历史消息按文字自然撑高，滚动发
   }
 });
 
-test("TopologyGraph 遇到非运行态却缺少最终消息时直接报错", async () => {
-  await assert.rejects(
-    () =>
-      renderTopologyGraphInDom({
-        task: createTask({
+test("TopologyGraph 遇到失败节点但缺少最终消息时展示失败占位文案", async () => {
+  const rendered = await renderTopologyGraphInDom({
+    task: createTask({
+      taskId: TASK_ID,
+      taskStatus: "running",
+      agents: [
+        {
+          id: "线索发现",
           taskId: TASK_ID,
-          taskStatus: "running",
-          agents: [
-            {
-              id: "线索发现",
-              taskId: TASK_ID,
-              opencodeSessionId: "session-clue",
-              opencodeAttachBaseUrl: "http://localhost:4310",
-              status: "failed",
-              runCount: 1,
-            },
-          ],
-          messages: [],
-        }),
-        onToggleMaximize: () => {},
-        onOpenAgentTerminal: () => {},
-      }),
-    /拓扑节点 线索发现 在任务状态 running、Agent 状态 failed 下缺少最终消息/u,
-  );
+          opencodeSessionId: "session-clue",
+          opencodeAttachBaseUrl: "http://localhost:4310",
+          status: "failed",
+          runCount: 1,
+        },
+      ],
+      messages: [],
+    }),
+    onToggleMaximize: () => {},
+    onOpenAgentTerminal: () => {},
+  });
+
+  try {
+    assert.equal(document.body.textContent?.includes("执行失败，暂无可展示的最终结果"), true);
+  } finally {
+    await rendered.cleanup();
+  }
 });
 
-test("TopologyGraph 遇到任务已结束但 agent 仍缺少最终消息时直接报错", async () => {
-  await assert.rejects(
-    () =>
-      renderTopologyGraphInDom({
-        task: createTask({
+test("TopologyGraph 遇到任务已结束但节点仍缺少最终消息时展示通用占位文案", async () => {
+  const rendered = await renderTopologyGraphInDom({
+    task: createTask({
+      taskId: TASK_ID,
+      taskStatus: "finished",
+      agents: [
+        {
+          id: "线索发现",
           taskId: TASK_ID,
-          taskStatus: "finished",
-          agents: [
-            {
-              id: "线索发现",
-              taskId: TASK_ID,
-              opencodeSessionId: "session-clue",
-              opencodeAttachBaseUrl: "http://localhost:4310",
-              status: "running",
-              runCount: 1,
-            },
-          ],
-          messages: [],
-        }),
-        onToggleMaximize: () => {},
-        onOpenAgentTerminal: () => {},
-      }),
-    /拓扑节点 线索发现 在任务状态 finished、Agent 状态 running 下缺少最终消息/u,
-  );
+          opencodeSessionId: "session-clue",
+          opencodeAttachBaseUrl: "http://localhost:4310",
+          status: "running",
+          runCount: 1,
+        },
+      ],
+      messages: [],
+    }),
+    onToggleMaximize: () => {},
+    onOpenAgentTerminal: () => {},
+  });
+
+  try {
+    assert.equal(document.body.textContent?.includes("暂无可展示的最终结果"), true);
+  } finally {
+    await rendered.cleanup();
+  }
 });
 
 test("TopologyGraph 遇到相同最终时间戳的多条最终消息时保留全部历史记录", async () => {

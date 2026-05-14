@@ -17,7 +17,7 @@ import {
   type WorkspaceSnapshot,
   toUtcIsoTimestamp,
 } from "@shared/types";
-import type { OpenCodeExecutionResult } from "./opencode-client";
+import { OpenCodeClient, type OpenCodeExecutionResult } from "./opencode-client";
 import { Orchestrator, isTerminalTaskStatus } from "./orchestrator";
 import { compileBuiltinTopology } from "../../test-support/runtime/builtin-topology-test-helpers";
 import { parseDecision as parseDecisionPure } from "./decision-parser";
@@ -175,6 +175,47 @@ class TestOrchestrator extends Orchestrator {
   protected override async ensureTaskPanels(task: TaskRecord) {
     return this.dependencies.ensureTaskPanels(task);
   }
+
+  public initializeTestOpenCodeRuntime() {
+    const client = new OpenCodeClient({
+      server: {
+        process: {
+          pid: 0,
+          killed: true,
+          kill() {
+            return true;
+          },
+          on() {
+            return this;
+          },
+          off() {
+            return this;
+          },
+          stderr: {
+            on() {
+              return this;
+            },
+          },
+          stdout: {
+            on() {
+              return this;
+            },
+          },
+        } as never,
+        port: 43127,
+      },
+    });
+    Reflect.set(this, "startedOpenCodeClient", client);
+    Reflect.set(this, "startedOpenCodeRunner", {
+      run: async () => buildCompletedExecutionResult({
+        agent: "Build",
+        finalMessage: "",
+        messageId: "msg-test",
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    Reflect.set(this, "hasStartedOpenCode", true);
+  }
 }
 
 type StandaloneAgentRunInput = {
@@ -203,16 +244,11 @@ class BatchRunnerTestOrchestrator extends StandaloneRunTestOrchestrator {
   }
 }
 
-function stubOpenCodeSessions(orchestrator: Orchestrator) {
-  orchestrator.opencodeClient.ensureServerStarted = async () => ({
-    process: {
-      kind: "detached" as const,
-    },
-    port: 43127,
-  });
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+function stubOpenCodeSessions(orchestrator: TestOrchestrator) {
+  orchestrator.initializeTestOpenCodeRuntime();
+  orchestrator.opencodeClient.createSession = async (title: string) => `session:${title}`;
   orchestrator.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
-  orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => ({
+  orchestrator.opencodeClient.getSessionRuntime = async (sessionId) => ({
     sessionId,
     messageCount: 0,
     updatedAt: "",
@@ -222,15 +258,10 @@ function stubOpenCodeSessions(orchestrator: Orchestrator) {
   });
 }
 
-function stubOpenCodeAttachBaseUrl(orchestrator: Orchestrator) {
-  orchestrator.opencodeClient.ensureServerStarted = async () => ({
-    process: {
-      kind: "detached" as const,
-    },
-    port: 43127,
-  });
+function stubOpenCodeAttachBaseUrl(orchestrator: TestOrchestrator) {
+  orchestrator.initializeTestOpenCodeRuntime();
   orchestrator.opencodeClient.getAttachBaseUrl = async () => "http://127.0.0.1:43127";
-  orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => ({
+  orchestrator.opencodeClient.getSessionRuntime = async (sessionId) => ({
     sessionId,
     messageCount: 0,
     updatedAt: "",
@@ -641,7 +672,7 @@ test("单节点任务进入 finished 时不会因为缺少 workspace cwd 而在�
     }),
   );
   stubOpenCodeAttachBaseUrl(orchestrator);
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent }) =>
     buildCompletedExecutionResult({
       agent,
@@ -706,7 +737,7 @@ test("任务本轮 finished 后再次 @Agent 时会回到 running 并在同一 T
     resolveSecondRoundStarted = resolve;
   });
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     baRunCount += 1;
     if (baRunCount === 2) {
@@ -797,7 +828,7 @@ test("漏洞团队里漏洞挑战先返回触发回流的 label、漏洞论证�
     return next;
   };
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     const count = nextCount(agent);
     if (agent === "线索发现" && count === 1) {
@@ -957,7 +988,7 @@ test("漏洞团队里讨论总结以 transfer + none 回到线索发现时，会
     return current.length;
   };
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     const count = recordPrompt(agent, content);
     if (agent === "线索发现") {
@@ -1053,7 +1084,7 @@ test("漏洞团队第二轮 finding 已经派发到 漏洞挑战-2 时，UI 仍�
     return next;
   };
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     const count = nextCount(agent);
 
@@ -1184,7 +1215,7 @@ test("漏洞团队 group runtime agent 尚未落库时，getTaskSnapshot 不会�
     }),
   );
   stubOpenCodeSessions(orchestrator);
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     if (agent === "线索发现") {
       return {
@@ -1344,6 +1375,7 @@ test("dispose 之后，迟到结束的 event stream 不会再排 reconnect 定�
     userDataPath,
     enableEventStream: true,
   });
+  orchestrator.initializeTestOpenCodeRuntime();
 
   let releaseConnectEvents: () => void = () => undefined;
   orchestrator.opencodeClient.connectEvents = async () =>
@@ -1367,22 +1399,15 @@ test("dispose 在 CLI 快速退出模式下不会等待悬挂的后台 task prom
     userDataPath,
     enableEventStream: false,
   });
+  orchestrator.initializeTestOpenCodeRuntime();
 
   let shutdownCalled = false;
-  orchestrator.opencodeClient.runningServe = {
-    cwd,
-    handle: Promise.resolve({ process: { kind: "detached" as const }, port: 43127 }),
-  };
   orchestrator.opencodeClient.workspaceEventState = {
-    cwd,
-    state: {
-      eventPump: Promise.resolve(),
-      eventSubscribers: new Set(),
-    },
+    eventPump: Promise.resolve(),
+    eventSubscribers: new Set(),
   };
-  orchestrator.opencodeClient.shutdown = async (targetCwd) => {
+  orchestrator.opencodeClient.shutdown = async () => {
     shutdownCalled = true;
-    assert.equal(targetCwd, cwd);
     return {
       killedPids: [43127],
     };
@@ -1409,20 +1434,13 @@ test("dispose 会把 OpenCode 清理报告向上返回", async () => {
     userDataPath,
     enableEventStream: false,
   });
+  orchestrator.initializeTestOpenCodeRuntime();
 
-  orchestrator.opencodeClient.runningServe = {
-    cwd,
-    handle: Promise.resolve({ process: { kind: "detached" as const }, port: 43127 }),
-  };
   orchestrator.opencodeClient.workspaceEventState = {
-    cwd,
-    state: {
-      eventPump: Promise.resolve(),
-      eventSubscribers: new Set(),
-    },
+    eventPump: Promise.resolve(),
+    eventSubscribers: new Set(),
   };
-  orchestrator.opencodeClient.shutdown = async (targetCwd) => {
-    assert.equal(targetCwd, cwd);
+  orchestrator.opencodeClient.shutdown = async () => {
     return {
       killedPids: [43127],
     };
@@ -1971,22 +1989,88 @@ test("同一 cwd 下多个 task 只会启动一次 OpenCode serve", async () => 
   });
 
   let startServerCount = 0;
-  Reflect.set(orchestrator.opencodeClient, "startServer", async () => {
+  const originalStartServer = OpenCodeClient.startServer;
+  const originalFetch = globalThis.fetch;
+  OpenCodeClient.startServer = async () => {
     startServerCount += 1;
     return {
-      process: { kind: "detached" as const },
+      process: {
+        pid: 0,
+        killed: true,
+        kill() {
+          return true;
+        },
+        on() {
+          return this;
+        },
+        off() {
+          return this;
+        },
+        stderr: {
+          on() {
+            return this;
+          },
+        },
+        stdout: {
+          on() {
+            return this;
+          },
+        },
+      } as never,
       port: 43127,
     };
-  });
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  };
+  try {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/session")) {
+        return new Response(JSON.stringify({ id: "session:test" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        });
+      }
+      if (url.endsWith("/global/event")) {
+        return new Response("", { status: 200 });
+      }
+      if (url.includes("/message")) {
+        return new Response(JSON.stringify({
+          id: "msg-1",
+          info: {
+            id: "msg-1",
+            role: "assistant",
+            time: {
+              completed: Date.now(),
+            },
+          },
+          parts: [{ type: "text", text: "ok" }],
+        }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        });
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      });
+    }) as typeof fetch;
 
-  await orchestrator.getWorkspaceSnapshot();
-  await addBuiltinAgents(orchestrator, ["Build"], "Build", []);
+    await orchestrator.getWorkspaceSnapshot();
+    await addBuiltinAgents(orchestrator, ["Build"], "Build", []);
 
-  await orchestrator.initializeTask({ title: "task-a" });
-  await orchestrator.initializeTask({ title: "task-b" });
+    await orchestrator.initializeTask({ title: "task-a" });
+    await orchestrator.initializeTask({ title: "task-b" });
 
-  assert.equal(startServerCount, 1);
+    assert.equal(startServerCount, 1);
+  } finally {
+    OpenCodeClient.startServer = originalStartServer;
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("新的 Orchestrator 进程里不会再从旧工作区快照恢复 task attach session", async () => {
@@ -2262,7 +2346,7 @@ test("Agent 间传递不再携带 [Initial Task]，只保留来源 Agent 段落"
       timestamp: toUtcIsoTimestamp("2026-04-15T00:00:00.000Z"),
     });
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     recordPrompt(agent, content);
     if (agent === "BA") {
@@ -2346,7 +2430,7 @@ test("agent 声明 initialMessage 后，下游实际 prompt 会保留默认转�
       timestamp: toUtcIsoTimestamp("2026-04-15T00:00:00.000Z"),
     });
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     recordPrompt(agent, content);
     if (agent === "线索发现") {
@@ -2448,7 +2532,7 @@ test("initialMessage 已包含当前触发 agent 时，最终 prompt 不会重�
       timestamp: toUtcIsoTimestamp("2026-04-15T00:00:00.000Z"),
     });
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     recordPrompt(agent, content);
     if (agent === "A") {
@@ -2566,7 +2650,7 @@ test("同一个目标 Agent 只会在首次启动时注入 initialMessage，后�
   });
 
   stubOpenCodeAttachBaseUrl(orchestrator);
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
 
   const promptByAgent = new Map<string, string[]>();
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
@@ -2719,7 +2803,7 @@ test("多个 group 实例并存时，initialMessage 不会串组注入其他实�
   });
   const compiled = compileBuiltinTopology("vulnerability.yaml");
   stubOpenCodeAttachBaseUrl(orchestrator);
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   await orchestrator.applyTeamDsl({
     compiled,
   });
@@ -2962,7 +3046,7 @@ test("rfc-scanner 的 group 首轮派发到漏洞论证时，会额外注入来�
   });
   const compiled = compileBuiltinTopology("rfc-scanner.yaml");
   stubOpenCodeAttachBaseUrl(orchestrator);
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   await orchestrator.applyTeamDsl({
     compiled,
   });
@@ -3134,6 +3218,7 @@ test("讨论总结收到嵌套来源段落时，最终可见顺序按拓扑定�
   await orchestrator.applyTeamDsl({
     compiled,
   });
+  stubOpenCodeAttachBaseUrl(orchestrator);
 
   const promptByAgent = new Map<string, string>();
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
@@ -3145,8 +3230,7 @@ test("讨论总结收到嵌套来源段落时，最终可见顺序按拓扑定�
       timestamp: toUtcIsoTimestamp("2026-05-07T00:00:05.000Z"),
     });
   };
-  stubOpenCodeAttachBaseUrl(orchestrator);
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
 
   const task = await orchestrator.submitTask({ content: "@线索发现 请持续挖掘当前代码中的可疑漏洞点。",
     mentionAgentId: "线索发现",
@@ -3368,7 +3452,7 @@ test("单 decisionAgent 返回 <continue> 后会按 trigger 回流给 Build", as
       timestamp: toUtcIsoTimestamp(`2026-04-15T00:00:0${count}.000Z`),
     });
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     const count = recordPrompt(agent, content);
     if (agent === "BA") {
@@ -3486,7 +3570,7 @@ test("首个 <continue> 触发上游重派发后，会按上游默认边重新�
     releaseCodeReviewSecondRun = resolve;
   });
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
       buildRunCount += 1;
@@ -3621,7 +3705,7 @@ test("命中的 <continue> 会立即触发重派发，但同轮未结束执行�
     releaseCodeReview = resolve;
   });
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent, content }) => {
     if (agent === "Build") {
       buildRunCount += 1;
@@ -3799,7 +3883,7 @@ test("Agent 返回 completed 但正文为空时，任务必须失败而不是写
   });
   const task = await orchestrator.initializeTask({ title: "demo" });
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent }) =>
     buildCompletedExecutionResult({
       agent,
@@ -3915,7 +3999,7 @@ test("agent 运行中时会先把过程消息追加到 task messages", async () 
   });
   const task = await orchestrator.initializeTask({ title: "demo" });
 
-  orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => ({
+  orchestrator.opencodeClient.getSessionRuntime = async (sessionId) => ({
     sessionId,
     messageCount: 1,
     updatedAt: "2026-04-30T12:00:01.000Z",
@@ -4018,7 +4102,7 @@ test("runStandaloneAgent 会用后续同步拿到的真实参数覆盖占位 age
   const task = await orchestrator.initializeTask({ title: "demo" });
 
   let runtimeCallCount = 0;
-  orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => {
+  orchestrator.opencodeClient.getSessionRuntime = async (sessionId) => {
     runtimeCallCount += 1;
     return {
       sessionId,
@@ -4143,7 +4227,7 @@ test("runStandaloneAgent 在同为 complete 时会按结构化来源优先级覆
   const task = await orchestrator.initializeTask({ title: "demo" });
 
   let runtimeCallCount = 0;
-  orchestrator.opencodeClient.getSessionRuntime = async (_target, sessionId) => {
+  orchestrator.opencodeClient.getSessionRuntime = async (sessionId) => {
     runtimeCallCount += 1;
     return {
       sessionId,
@@ -4632,7 +4716,7 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
   });
   stubOpenCodeSessions(orchestrator);
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent }) =>
     buildCompletedExecutionResult({
       agent,
@@ -4899,7 +4983,7 @@ test("并发判定失败时不会提前追加任务结束系统消息", async ()
   });
   stubOpenCodeAttachBaseUrl(orchestrator);
 
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
       buildRunCount += 1;
@@ -5020,7 +5104,7 @@ test("修复批次的 dispatch 窗口里，不会被 getTaskSnapshot 提前补�
     enableEventStream: false,
   });
   stubOpenCodeAttachBaseUrl(orchestrator);
-  orchestrator.opencodeClient.createSession = async (...args: [string, string]) => `session:${args[1]}`;
+  orchestrator.opencodeClient.createSession = async (_title: string) => `session:`;
   orchestrator.opencodeRunner.run = async ({ agent }) => {
     if (agent === "Build") {
       buildRunCount += 1;
