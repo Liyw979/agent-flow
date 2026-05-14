@@ -645,6 +645,7 @@ export class OpenCodeClient {
   }
 
   static async startServer(cwd: string, config: OpenCodeInjectedConfig): Promise<ServeHandle> {
+    // OpenCode serve must still inherit the real workspace directory as its process cwd.
     const serverEnv = { ...process.env };
     // Isolate the embedded runtime from parent OpenCode config injection.
     delete serverEnv["OPENCODE_CONFIG"];

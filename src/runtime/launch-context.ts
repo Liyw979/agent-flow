@@ -8,6 +8,7 @@ interface ResolveLaunchContextInput {
 
 interface LaunchContext {
   launchTaskId: string | null;
+  // This only records where the UI launch was requested from; runtime routing stays inside Orchestrator.cwd.
   launchCwd: string;
 }
 

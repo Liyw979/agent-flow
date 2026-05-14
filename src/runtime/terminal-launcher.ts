@@ -2,16 +2,18 @@ import { spawn } from "node:child_process";
 import { resolveWindowsCmdPath } from "./windows-shell";
 
 interface TerminalLaunchInput {
-  cwd: string;
   command: string;
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
+}
+
+interface NormalizedTerminalLaunchInput {
+  command: string;
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>;
 }
 
 interface TerminalLaunchSpec {
   command: string;
   args: string[];
-  cwd: string;
 }
 
 type WindowsTerminalLauncher = "cmd" | "powershell";
@@ -25,16 +27,15 @@ function quotePowerShellString(value: string): string {
 }
 
 function readWindowsTerminalLauncher(
-  env?: NodeJS.ProcessEnv | Record<string, string | undefined>,
+  input: NormalizedTerminalLaunchInput,
 ): WindowsTerminalLauncher {
-  const raw = env?.["AGENT_TEAM_WINDOWS_TERMINAL"]?.trim().toLowerCase();
+  const raw = input.env["AGENT_TEAM_WINDOWS_TERMINAL"]?.trim().toLowerCase();
   return raw === "powershell" ? "powershell" : "cmd";
 }
 
 function buildWindowsStartArgs(input: {
   command: string;
-  cwd: string;
-  env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
+  env: NormalizedTerminalLaunchInput["env"];
 }): string[] {
   const cmdPath = resolveWindowsCmdPath(input.env);
   return [
@@ -42,8 +43,6 @@ function buildWindowsStartArgs(input: {
     "/c",
     "start",
     "",
-    "/d",
-    input.cwd,
     cmdPath,
     "/d",
     "/s",
@@ -54,7 +53,6 @@ function buildWindowsStartArgs(input: {
 
 function buildWindowsPowerShellStartArgs(input: {
   command: string;
-  cwd: string;
 }): string[] {
   return [
     "-NoLogo",
@@ -64,8 +62,6 @@ function buildWindowsPowerShellStartArgs(input: {
     "-Command",
     [
       "Start-Process",
-      "-WorkingDirectory",
-      quotePowerShellString(input.cwd),
       "-FilePath",
       quotePowerShellString("powershell.exe"),
       "-ArgumentList",
@@ -74,42 +70,50 @@ function buildWindowsPowerShellStartArgs(input: {
   ];
 }
 
-export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLaunchSpec {
-  const platform = input.platform ?? process.platform;
+function normalizeTerminalLaunchInput(
+  input: TerminalLaunchInput,
+): NormalizedTerminalLaunchInput {
+  return {
+    command: input.command,
+    platform: process.platform,
+    env: process.env,
+  };
+}
 
-  if (platform === "win32") {
-    const launcher = readWindowsTerminalLauncher(input.env);
+export function buildTerminalLaunchSpec(
+  input: NormalizedTerminalLaunchInput,
+): TerminalLaunchSpec {
+  const normalized = input;
+
+  if (normalized.platform === "win32") {
+    const launcher = readWindowsTerminalLauncher(normalized);
     if (launcher === "powershell") {
       return {
         command: "powershell.exe",
         args: buildWindowsPowerShellStartArgs({
-          command: input.command,
-          cwd: input.cwd,
+          command: normalized.command,
         }),
-        cwd: input.cwd,
       };
     }
 
-    const cmdPath = resolveWindowsCmdPath(input.env);
+    const cmdPath = resolveWindowsCmdPath(normalized.env);
     return {
       command: cmdPath,
       args: buildWindowsStartArgs({
-        command: input.command,
-        cwd: input.cwd,
-        ...(input.env ? { env: input.env } : {}),
+        command: normalized.command,
+        env: normalized.env,
       }),
-      cwd: input.cwd,
     };
   }
 
-  if (platform === "darwin") {
+  if (normalized.platform === "darwin") {
     return {
       command: "osascript",
       args: [
         "-e",
         'if application "Terminal" is running then',
         "-e",
-        `tell application "Terminal" to do script ${quoteAppleScriptString(input.command)}`,
+        `tell application "Terminal" to do script ${quoteAppleScriptString(normalized.command)}`,
         "-e",
         "else",
         "-e",
@@ -123,7 +127,7 @@ export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLau
         "-e",
         "end repeat",
         "-e",
-        `set attachTab to do script ${quoteAppleScriptString(input.command)} in window 1`,
+        `set attachTab to do script ${quoteAppleScriptString(normalized.command)} in window 1`,
         "-e",
         "set selected tab of window 1 to attachTab",
         "-e",
@@ -133,24 +137,21 @@ export function buildTerminalLaunchSpec(input: TerminalLaunchInput): TerminalLau
         "-e",
         'tell application "Terminal" to activate',
       ],
-      cwd: input.cwd,
     };
   }
 
-  return {
-    command: "x-terminal-emulator",
-    args: ["-e", "/bin/sh", "-lc", input.command],
-    cwd: input.cwd,
-  };
+    return {
+      command: "x-terminal-emulator",
+      args: ["-e", "/bin/sh", "-lc", normalized.command],
+    };
 }
 
 export async function launchTerminalCommand(input: TerminalLaunchInput): Promise<void> {
-  const spec = buildTerminalLaunchSpec(input);
-  const platform = input.platform ?? process.platform;
+  const normalized = normalizeTerminalLaunchInput(input);
+  const spec = buildTerminalLaunchSpec(normalized);
   const spawnOptions = {
-    cwd: spec.cwd,
     detached: true,
-    stdio: platform === "win32" ? "inherit" : "ignore",
+    stdio: normalized.platform === "win32" ? "inherit" : "ignore",
   } as const;
 
   await new Promise<void>((resolve, reject) => {

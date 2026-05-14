@@ -52,6 +52,7 @@ export interface TaskRecord {
   id: string;
   title: string;
   status: TaskStatus;
+  // Task ownership still needs the workspace fact even though runtime isolation no longer indexes by cwd.
   cwd: string;
   agentCount: number;
   createdAt: string;
@@ -568,6 +569,7 @@ export interface TaskSnapshot {
 }
 
 export interface WorkspaceSnapshot {
+  // UI snapshot keeps the current workspace fact for display only.
   cwd: string;
   name: string;
   agents: AgentRecord[];
@@ -580,6 +582,7 @@ export interface UiSnapshotPayload {
   workspace: WorkspaceSnapshot | null;
   task: TaskSnapshot | null;
   launchTaskId: string | null;
+  // Browser bootstrap only uses this to show where the current UI session was launched from.
   launchCwd: string | null;
   taskLogFilePath: string | null;
   taskUrl: string | null;
@@ -616,7 +619,6 @@ export interface AgentTeamEvent {
     | "task-updated"
     | "message-created"
     | "agent-status-changed";
-  cwd: string;
   payload: unknown;
 }
 
@@ -635,7 +637,7 @@ export function isDefaultTopologyTrigger(trigger: string): boolean {
   return trigger === DEFAULT_TOPOLOGY_TRIGGER;
 }
 
-function collectSourceTriggers(
+export function collectTopologyTriggerShapes(
   input: TopologyTriggerRouteInput,
 ): Array<{ source: string; trigger: TopologyTrigger }> {
   const routesBySourceAndTrigger = new Map<string, { source: string; trigger: TopologyTrigger }>();
@@ -665,12 +667,6 @@ function collectSourceTriggers(
   return [...routesBySourceAndTrigger.values()];
 }
 
-export function collectTopologyTriggerShapes(
-  input: TopologyTriggerRouteInput,
-): Array<{ source: string; trigger: TopologyTrigger }> {
-  return collectSourceTriggers(input);
-}
-
 export function resolveTriggerRoutingKindForSource(
   topology: Pick<TopologyRecord, "edges" | "flow">,
   source: string,
@@ -680,7 +676,7 @@ export function resolveTriggerRoutingKindForSource(
   if (isDefaultTopologyTrigger(normalizedTrigger)) {
     return { kind: "invalid" };
   }
-  const matched = collectSourceTriggers({
+  const matched = collectTopologyTriggerShapes({
     edges: topology.edges,
     endIncoming: getTopologyEndIncoming(topology),
   }).some(
