@@ -752,7 +752,6 @@ test("buildAgentHistoryItems 会按 runtime agent 对应模板的 trigger 集合
             messageMode: "last", maxTriggerRounds: 4,
           },
         ],
-        exitWhen: "all_completed",
         report: {
           sourceRole: "summary",
           templateName: "线索发现",
@@ -936,7 +935,6 @@ test("buildAgentHistoryItems 遇到归属多个 group rule 的模板时不会猜
             messageMode: "last", maxTriggerRounds: 4,
           },
         ],
-        exitWhen: "all_completed",
         report: {
           sourceRole: "summary",
           templateName: "入口甲",
@@ -959,7 +957,6 @@ test("buildAgentHistoryItems 遇到归属多个 group rule 的模板时不会猜
             messageMode: "last", maxTriggerRounds: 4,
           },
         ],
-        exitWhen: "all_completed",
         report: {
           sourceRole: "summary",
           templateName: "入口乙",

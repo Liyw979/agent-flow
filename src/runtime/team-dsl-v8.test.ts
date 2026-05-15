@@ -35,6 +35,12 @@ test("compileTeamDsl 支持 v8 递归式图 DSL，并保留 group 子图定义",
       maxTriggerRounds: 999,
     },
   ]);
+  assert.deepEqual(compiled.topology.flow.end.incoming, [
+    {
+      source: "线索完备性评估",
+      trigger: "<complete>",
+    },
+  ]);
   assert.equal(compiled.topology.groupRules?.[0]?.id, "group-rule:疑点辩论");
   assert.equal(compiled.topology.groupRules?.[0]?.entryRole, "漏洞挑战");
   assert.deepEqual(compiled.topology.groupRules?.[0]?.members, [

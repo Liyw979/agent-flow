@@ -363,6 +363,12 @@ test("compileTeamDsl 支持从内置漏洞拓扑编译出 group 辩论拓扑", (
       maxTriggerRounds: 999,
     },
   ]);
+  assert.deepEqual(compiled.topology.flow.end.incoming, [
+    {
+      source: "线索完备性评估",
+      trigger: "<complete>",
+    },
+  ]);
   assert.deepEqual(compiled.topology.groupRules?.[0]?.members, [
     { role: "漏洞挑战", templateName: "漏洞挑战" },
     { role: "漏洞论证", templateName: "漏洞论证" },

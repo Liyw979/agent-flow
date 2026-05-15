@@ -177,7 +177,6 @@ function buildGroupRules(input: CreateTopologyInput): GroupRule[] {
         templateName: target,
       }],
       edges: [],
-      exitWhen: "one_side_agrees",
       report: {
         sourceRole: "entry",
         templateName: config.reportTo,

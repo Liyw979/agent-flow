@@ -1,7 +1,7 @@
 import {
   DEFAULT_TOPOLOGY_TRIGGER,
-  getTopologyNodeRecords,
   getTopologyEdgeId,
+  getTopologyNodeRecords,
   resolveTriggerRoutingKindForSource,
   type TopologyEdge,
   type TopologyRecord,
@@ -288,7 +288,7 @@ export class GatingScheduler {
     if (
       triggerKind !== DEFAULT_TOPOLOGY_TRIGGER
       && incomingTriggeredEdges.length > 0
-      && !this.hasSatisfiedTriggeredEdgesForTarget(targetName, incomingTriggeredEdges, completedEdges, agentStates)
+      && !this.hasSatisfiedTriggeredEdgesForTarget(incomingTriggeredEdges, completedEdges)
     ) {
       return false;
     }
@@ -301,96 +301,14 @@ export class GatingScheduler {
   }
 
   private hasSatisfiedTriggeredEdgesForTarget(
-    targetName: string,
     incomingTriggeredEdges: TopologyEdge[],
     completedEdges: Set<string>,
-    agentStates: GatingAgentState[],
   ): boolean {
     if (incomingTriggeredEdges.length === 0) {
       return true;
     }
 
-    if (this.requiresAllTriggeredIncomingEdges(targetName, incomingTriggeredEdges)) {
-      return incomingTriggeredEdges.some((edge) => this.isIncomingEdgeSatisfied(edge, completedEdges))
-        && incomingTriggeredEdges.every((edge) => this.hasSettledAgentState(edge.source, agentStates));
-    }
-
     return incomingTriggeredEdges.some((edge) => this.isIncomingEdgeSatisfied(edge, completedEdges));
-  }
-
-  private requiresAllTriggeredIncomingEdges(
-    targetName: string,
-    incomingTriggeredEdges: TopologyEdge[],
-  ): boolean {
-    if (incomingTriggeredEdges.length <= 1) {
-      return false;
-    }
-
-    const targetTemplateName = this.getTemplateName(targetName);
-    if (!targetTemplateName) {
-      return false;
-    }
-    const actualSourceTemplateNames = this.uniqueValues(
-      incomingTriggeredEdges.map((edge) => this.getTemplateName(edge.source)).filter((value): value is string => Boolean(value)),
-    );
-    if (actualSourceTemplateNames.length !== incomingTriggeredEdges.length) {
-      return false;
-    }
-
-    return (this.topology.groupRules ?? []).some((rule) => {
-      if (rule.exitWhen !== "all_completed") {
-        return false;
-      }
-
-      const targetRoles = rule.members
-        .filter((agent) => agent.templateName === targetTemplateName)
-        .map((agent) => agent.role);
-      if (targetRoles.length === 0) {
-        return false;
-      }
-
-      const incomingTrigger = this.requireIncomingTriggeredEdge(incomingTriggeredEdges).trigger;
-      return targetRoles.some((targetRole) => {
-        const requiredEdges = rule.edges.filter(
-          (edge) => edge.trigger === incomingTrigger && edge.targetRole === targetRole,
-        );
-        if (requiredEdges.length <= 1) {
-          return false;
-        }
-
-        const requiredSourceTemplateNames = this.uniqueValues(
-          requiredEdges.map((edge) => this.getGroupMemberTemplateName(rule, edge.sourceRole)).filter((value): value is string => Boolean(value)),
-        );
-        return requiredSourceTemplateNames.length === actualSourceTemplateNames.length
-          && requiredSourceTemplateNames.every((templateName) => actualSourceTemplateNames.includes(templateName));
-      });
-    });
-  }
-
-  private getTemplateName(nodeId: string): string | null {
-    const nodeRecord = getTopologyNodeRecords(this.topology).find((node) => node.id === nodeId);
-    return nodeRecord?.templateName ?? nodeId;
-  }
-
-  private requireIncomingTriggeredEdge(
-    incomingTriggeredEdges: TopologyRecord["edges"],
-  ): TopologyRecord["edges"][number] {
-    const edge = incomingTriggeredEdges[0];
-    if (!edge) {
-      throw new Error("incoming triggered edge 缺失");
-    }
-    return edge;
-  }
-
-  private getGroupMemberTemplateName(
-    rule: NonNullable<TopologyRecord["groupRules"]>[number],
-    role: string,
-  ): string | null {
-    return rule.members.find((agent) => agent.role === role)?.templateName ?? null;
-  }
-
-  private uniqueValues(values: string[]): string[] {
-    return [...new Set(values)];
   }
 
   private hasSettledAgentState(agentId: string, agentStates: GatingAgentState[]): boolean {

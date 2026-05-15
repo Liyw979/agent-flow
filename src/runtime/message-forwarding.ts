@@ -219,7 +219,7 @@ function buildInitialMessageEntries(
     return [];
   }
 
-  return initialMessageRouting.agentIds.map((agentId) => {
+  return initialMessageRouting.agentIds.flatMap((agentId) => {
     const aliases = initialMessageSourceAliasesByAgentId[agentId];
     if (!aliases) {
       throw new Error(`initialMessage 指定的来源 Agent 缺少别名解析结果：${agentId}`);
@@ -230,9 +230,9 @@ function buildInitialMessageEntries(
       aliases,
     );
     if (resolution.kind === "missing") {
-      throw new Error(`initialMessage 指定的来源 Agent 缺少可转发消息：${agentId}`);
+      return [];
     }
-    return resolution.entry;
+    return [resolution.entry];
   });
 }
 

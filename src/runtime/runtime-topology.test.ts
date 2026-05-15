@@ -59,7 +59,6 @@ function createVulnTopology(): TopologyRecord {
           { sourceRole: "pro", targetRole: "summary", trigger: "<complete>", messageMode: "last", maxTriggerRounds: 4 },
           { sourceRole: "con", targetRole: "summary", trigger: "<complete>", messageMode: "last", maxTriggerRounds: 4 },
         ],
-        exitWhen: "one_side_agrees",
         report: {
           sourceRole: "summary",
           templateName: "线索发现",

@@ -896,6 +896,9 @@ function resolveScriptAgentId(
   state: ReturnType<typeof createEmptyGraphTaskState>,
   rawName: string,
 ): string {
+  if (rawName === FLOW_END_NODE_ID) {
+    return FLOW_END_NODE_ID;
+  }
   const effectiveTopology = buildEffectiveTopology(state);
   if (effectiveTopology.nodes.includes(rawName)) {
     return rawName;

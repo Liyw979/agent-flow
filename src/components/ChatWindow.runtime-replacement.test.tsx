@@ -183,7 +183,6 @@ function createWorkspaceAndTask(): {
             maxTriggerRounds: 4,
           },
         ],
-        exitWhen: "all_completed",
         report: {
           sourceRole: "summary",
           templateName: "线索发现",

@@ -217,19 +217,20 @@ test("scheduler script drived 支持漏洞团队 2 个 finding 且每个 finding
   await runSchedulerScriptDrived({ topology, script });
 });
 
-test("scheduler script drived 不接受内置漏洞团队拓扑里单边未回应完就直接进入讨论总结", async () => {
+test("scheduler script drived 接受内置漏洞团队拓扑里单边触发直接进入讨论总结", async () => {
   const topology = compileBuiltinTopology("vulnerability.yaml").topology;
 
   const script = [
     "user: @线索发现 请持续挖掘当前代码中的可疑漏洞点，直到没有新 finding 为止。",
     "线索发现: 发现第 1 个可疑点：上传文件名可能被直接拼进目标路径。 @漏洞挑战-1",
-    "漏洞挑战-1: 当前材料已经足够，可以进入总结。 @讨论总结-1",
+    "漏洞挑战-1: <agree>当前材料已经足够，可以进入总结。</agree> @讨论总结-1",
     "讨论总结-1: 当前这条更像误报。 @线索发现",
+    "线索发现: 已检查内部调试接口，当前没有新的可疑点。 @线索完备性评估",
+    `线索完备性评估: ${renderTriggerBlock("<complete>", "当前高价值入口已经覆盖，可以结束本轮。")}`,
   ];
 
-  await assert.rejects(
+  await assert.doesNotReject(
     () => runSchedulerScriptDrived({ topology, script }),
-    /讨论总结-1|调度|下一条回应 Agent 不匹配/u,
   );
 });
 

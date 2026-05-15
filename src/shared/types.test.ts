@@ -322,7 +322,6 @@ test("getGroupRules 保留显式声明的 messageMode，不再依赖默认补值
             messageMode: "last", maxTriggerRounds: 4,
           },
         ],
-        exitWhen: "all_completed",
         report: false,
       },
     ],

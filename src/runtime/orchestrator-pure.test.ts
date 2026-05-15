@@ -202,6 +202,46 @@ test("initialMessage 会额外注入指定来源的最后一条可转发消息",
   });
 });
 
+test("initialMessage 缺少部分来源消息时，不会阻断已有来源与当前上游的转发", () => {
+  const forwarded = buildDownstreamForwardedContextFromMessages(
+    [
+      createAgentFinalMessage({
+        sender: "线索发现",
+        content: "线索发现确认了入口参数可控。",
+        routingKind: "default",
+      }),
+      createAgentFinalMessage({
+        sender: "漏洞挑战",
+        content: "漏洞挑战认为当前材料已经足够进入总结。",
+        routingKind: "default",
+      }),
+    ],
+    "漏洞挑战认为当前材料已经足够进入总结。",
+    {
+      messageMode: "last",
+      initialMessageRouting: { mode: "list", agentIds: ["线索发现", "漏洞挑战", "漏洞论证"] },
+      sourceAgentId: "漏洞挑战",
+      initialMessageSourceAliasesByAgentId: {
+        "线索发现": ["线索发现"],
+        "漏洞挑战": ["漏洞挑战"],
+        "漏洞论证": ["漏洞论证"],
+      },
+      globalSourceOrder: GLOBAL_ORDER,
+    },
+  );
+
+  assert.deepEqual(forwarded, {
+    kind: "forwarded",
+    agentMessage: [
+      "[From 线索发现 Agent]",
+      "线索发现确认了入口参数可控。",
+      "",
+      "[From 漏洞挑战 Agent]",
+      "漏洞挑战认为当前材料已经足够进入总结。",
+    ].join("\n"),
+  });
+});
+
 test("resolveAgentStatusFromRouting 只区分 invalid 与非 invalid", () => {
   assert.equal(resolveAgentStatusFromRouting({ routingKind: "default" }), "completed");
   assert.equal(resolveAgentStatusFromRouting({ routingKind: "triggered" }), "completed");

@@ -664,7 +664,6 @@ function collectGroupRule(
       messageMode: edge.messageMode,
       maxTriggerRounds: edge.maxTriggerRounds,
     })),
-    exitWhen: "all_completed",
   } satisfies Omit<GroupRule, "report">;
   if (!onlyOutgoingEdge) {
     return {

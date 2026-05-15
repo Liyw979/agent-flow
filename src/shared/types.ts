@@ -109,7 +109,6 @@ interface GroupRuleBase {
     messageMode: TopologyEdgeMessageMode;
     maxTriggerRounds: number;
   }>;
-  exitWhen: "one_side_agrees" | "all_completed";
 }
 
 export type GroupRuleWithReport = GroupRuleBase & {
@@ -897,7 +896,6 @@ export function normalizeGroupRule(
         ),
       };
     }),
-    exitWhen: rule.exitWhen,
   } satisfies GroupRuleBase;
 
   if (rule.report === false) {

@@ -150,7 +150,6 @@ export function upsertDebateGroupDraft(
       { sourceRole: "pro", targetRole: "summary", trigger: DEBATE_SUMMARY_TRIGGER, messageMode: "last", maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS },
       { sourceRole: "con", targetRole: "summary", trigger: DEBATE_SUMMARY_TRIGGER, messageMode: "last", maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS },
     ],
-    exitWhen: "one_side_agrees",
     report: {
       sourceRole: "summary",
       templateName: input.reportToTemplateName,

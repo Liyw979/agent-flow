@@ -65,7 +65,6 @@ function buildGroupRuleFromReachable(topology: TopologyRecord, sourceNodeId: str
       messageMode: "last" as const,
       maxTriggerRounds: REQUIRED_MAX_TRIGGER_ROUNDS,
     })),
-    exitWhen: "one_side_agrees",
     report: {
       sourceRole: "summary",
       templateName: reportTarget,

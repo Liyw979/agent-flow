@@ -37,7 +37,6 @@ const topology: TopologyRecord = {
         { role: "challenge", templateName: "漏洞挑战" },
       ],
       edges: [],
-      exitWhen: "all_completed",
       report: false,
     },
   ],
