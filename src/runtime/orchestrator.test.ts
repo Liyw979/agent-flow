@@ -540,13 +540,13 @@ async function waitForTaskSnapshot(
   timeoutMs = 5000,
 ): Promise<Awaited<ReturnType<Orchestrator["getTaskSnapshot"]>>> {
   const startedAt = Date.now();
-  let latestSnapshot = await orchestrator.getTaskSnapshot(taskId);
+  let latestSnapshot = await orchestrator.getTaskSnapshot();
   while (Date.now() - startedAt < timeoutMs) {
     if (predicate(latestSnapshot)) {
       return latestSnapshot;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
-    latestSnapshot = await orchestrator.getTaskSnapshot(taskId);
+    latestSnapshot = await orchestrator.getTaskSnapshot();
   }
 
   throw new Error(
@@ -636,7 +636,7 @@ test("漏洞团队任务初始化时不会为仅作为 group 模板存在的静�
   assert.equal(vulnerabilityChallenger.opencodeSessionId, "");
   assert.equal(summaryAgent.opencodeSessionId, "");
 
-  await orchestrator.openAgentTerminal({ taskId: task.task.id,
+  await orchestrator.openAgentTerminal({
     agentId: "线索发现",
   });
 
@@ -783,7 +783,7 @@ test("任务本轮 finished 后再次 @Agent 时会回到 running 并在同一 T
     }),
   });
 
-  const submitted = await orchestrator.submitTask({ content: "@BA 请先完成第一轮",
+  await orchestrator.submitTask({ content: "@BA 请先完成第一轮",
     mentionAgentId: "BA",
   });
 
@@ -791,7 +791,7 @@ test("任务本轮 finished 后再次 @Agent 时会回到 running 并在同一 T
   await assert.doesNotReject(async () => {
     await backgroundRuns[0];
   });
-  const firstFinished = await orchestrator.getTaskSnapshot(submitted.task.id);
+  const firstFinished = await orchestrator.getTaskSnapshot();
   assert.notEqual(firstFinished.task.completedAt, "");
   assert.equal(Number.isFinite(Date.parse(firstFinished.task.completedAt)), true);
   assert.equal(firstFinished.task.status, "finished");
@@ -800,7 +800,7 @@ test("任务本轮 finished 后再次 @Agent 时会回到 running 并在同一 T
     1,
   );
 
-  const reopened = await orchestrator.submitTask({ taskId: submitted.task.id,
+  const reopened = await orchestrator.submitTask({
     content: "@BA 请继续第二轮",
     mentionAgentId: "BA",
   });
@@ -811,7 +811,7 @@ test("任务本轮 finished 后再次 @Agent 时会回到 running 并在同一 T
   await assert.doesNotReject(async () => {
     await secondRoundStarted;
   });
-  const runningSnapshot = await orchestrator.getTaskSnapshot(submitted.task.id);
+  const runningSnapshot = await orchestrator.getTaskSnapshot();
   assert.equal(runningSnapshot.task.status, "running");
   assert.equal(runningSnapshot.task.completedAt, "");
   assert.equal(
@@ -824,7 +824,7 @@ test("任务本轮 finished 后再次 @Agent 时会回到 running 并在同一 T
   await assert.doesNotReject(async () => {
     await backgroundRuns[1];
   });
-  const secondFinished = await orchestrator.getTaskSnapshot(submitted.task.id);
+  const secondFinished = await orchestrator.getTaskSnapshot();
   assert.notEqual(secondFinished.task.completedAt, "");
   assert.equal(Number.isFinite(Date.parse(secondFinished.task.completedAt)), true);
   assert.equal(secondFinished.task.status, "finished");
@@ -1285,7 +1285,7 @@ test("漏洞团队 group runtime agent 尚未落库时，getTaskSnapshot 不会�
     .listTaskAgents(task.task.id)
     .map((agent) => agent.id);
 
-  const snapshotDuringDispatchWindow = await orchestrator.getTaskSnapshot(task.task.id);
+  const snapshotDuringDispatchWindow = await orchestrator.getTaskSnapshot();
 
   assert.notEqual(snapshotDuringDispatchWindow.task.status, "finished");
   assert.equal(
@@ -1318,26 +1318,7 @@ test("漏洞团队 group runtime agent 尚未落库时，getTaskSnapshot 不会�
   assert.equal(settledSnapshot.task.status, "failed");
 });
 
-test("initializeTask reuses a preallocated task id when provided", async () => {
-  const userDataPath = createTempDir();
-  const projectPath = createTempDir();
-  const orchestrator = new TestOrchestrator({
-    cwd: projectPath,
-    userDataPath,
-    enableEventStream: false,
-  });
-  stubOpenCodeSessions(orchestrator);
-
-  await orchestrator.getWorkspaceSnapshot();
-  await addBuiltinAgents(orchestrator, ["Build"], "Build", ["Build"]);
-  const task = await orchestrator.initializeTask({ title: "demo",
-    taskId: "task-preallocated",
-  });
-
-  assert.equal(task.task.id, "task-preallocated");
-});
-
-test("getTaskSnapshot 在新的 Orchestrator 进程里不会再按 taskId 恢复跨进程任务", async () => {
+test("getTaskSnapshot 在新的 Orchestrator 进程里不会恢复跨进程任务", async () => {
   const userDataPath = createTempDir();
   const workspacePath = createTempDir();
 
@@ -1353,9 +1334,7 @@ test("getTaskSnapshot 在新的 Orchestrator 进程里不会再按 taskId 恢复
     { id: "BA", prompt: getTestAgentPrompt("BA"), isWritable: false },
   ]);
 
-  const created = await writer.initializeTask({ title: "跨工作区 show",
-  });
-  const taskId = created.task.id;
+  await writer.initializeTask({ title: "跨工作区 show" });
 
   await writer.dispose();
   activeOrchestrators.delete(writer);
@@ -1368,8 +1347,8 @@ test("getTaskSnapshot 在新的 Orchestrator 进程里不会再按 taskId 恢复
   stubOpenCodeSessions(reader);
 
   await assert.rejects(
-    () => reader.getTaskSnapshot(taskId),
-    /Task .* not found/,
+    () => reader.getTaskSnapshot(),
+    /当前进程没有可用的 Task/,
   );
 });
 
@@ -2091,7 +2070,10 @@ test("同一 cwd 下多个 task 只会启动一次 OpenCode serve", async () => 
     await addBuiltinAgents(orchestrator, ["Build"], "Build", []);
 
     await orchestrator.initializeTask({ title: "task-a" });
-    await orchestrator.initializeTask({ title: "task-b" });
+    await assert.rejects(
+      () => orchestrator.initializeTask({ title: "task-b" }),
+      /当前进程只允许一个 Task/,
+    );
 
     assert.equal(startServerCount, 1);
   } finally {
@@ -2126,8 +2108,8 @@ test("新的 Orchestrator 进程里不会再从旧工作区快照恢复 task att
     enableEventStream: false,
   });
   await assert.rejects(
-    () => reloaded.getTaskSnapshot(created.task.id),
-    /Task .* not found/,
+    () => reloaded.getTaskSnapshot(),
+    /当前进程没有可用的 Task/,
   );
 });
 
@@ -3922,7 +3904,7 @@ test("Agent 返回 completed 但正文为空时，任务必须失败而不是写
     },
   });
 
-  const snapshot = await orchestrator.getTaskSnapshot(task.task.id);
+  const snapshot = await orchestrator.getTaskSnapshot();
   assert.equal(snapshot.task.status, "failed");
   assert.equal(
     snapshot.messages.some((message) => message.sender === "BA" && message.kind === "agent-final"),
@@ -4204,7 +4186,7 @@ test("runStandaloneAgent 会用后续同步拿到的真实参数覆盖占位 age
   );
   await runPromise;
 
-  const finalSnapshot = await orchestrator.getTaskSnapshot(task.task.id);
+  const finalSnapshot = await orchestrator.getTaskSnapshot();
   const progressMessages = finalSnapshot.messages.filter(
     (message) => message.kind === "agent-progress" && message.sender === "BA",
   );
@@ -4330,7 +4312,7 @@ test("runStandaloneAgent 在同为 complete 时会按结构化来源优先级覆
   );
   await runPromise;
 
-  const finalSnapshot = await orchestrator.getTaskSnapshot(task.task.id);
+  const finalSnapshot = await orchestrator.getTaskSnapshot();
   const progressMessages = finalSnapshot.messages.filter(
     (message) => message.kind === "agent-progress" && message.sender === "BA",
   );
@@ -4696,7 +4678,7 @@ test("判定 Agent 执行中止时不会伪造成整改意见", async () => {
     },
   });
 
-  const snapshot = await orchestrator.getTaskSnapshot(task.task.id);
+  const snapshot = await orchestrator.getTaskSnapshot();
   assert.equal(snapshot.task.status, "failed");
   assert.equal(
     snapshot.messages.some(
@@ -4768,7 +4750,7 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
     },
   });
 
-  let snapshot = await orchestrator.getTaskSnapshot(task.task.id);
+  let snapshot = await orchestrator.getTaskSnapshot();
   assert.equal(snapshot.task.status, "finished");
 
   await orchestrator.runStandaloneAgent({
@@ -4781,7 +4763,7 @@ test("Task 进入 finished 状态时会统一把所有 Agent 节点显示为已�
     },
   });
 
-  snapshot = await orchestrator.getTaskSnapshot(task.task.id);
+  snapshot = await orchestrator.getTaskSnapshot();
   assert.equal(snapshot.task.status, "finished");
   assert.notEqual(snapshot.task.completedAt, "");
   assert.equal(Number.isFinite(Date.parse(snapshot.task.completedAt)), true);

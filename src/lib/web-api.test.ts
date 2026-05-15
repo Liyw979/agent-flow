@@ -11,7 +11,6 @@ test("fetchUiSnapshot 会按 JSON 解析响应体", async () => {
     return new Response(JSON.stringify({
       workspace: null,
       task: null,
-      launchTaskId: "task-123",
       launchCwd: "/tmp/demo",
       taskLogFilePath: "/tmp/demo.log",
       taskUrl: "http://localhost:4310/",
@@ -21,7 +20,6 @@ test("fetchUiSnapshot 会按 JSON 解析响应体", async () => {
   try {
     const payload = await fetchUiSnapshot();
     assert.equal(requestedUrl, "/api/ui-snapshot");
-    assert.equal(payload.launchTaskId, "task-123");
     assert.equal(payload.launchCwd, "/tmp/demo");
   } finally {
     globalThis.fetch = originalFetch;

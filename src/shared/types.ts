@@ -581,7 +581,6 @@ export interface WorkspaceSnapshot {
 export interface UiSnapshotPayload {
   workspace: WorkspaceSnapshot | null;
   task: TaskSnapshot | null;
-  launchTaskId: string | null;
   // Browser bootstrap only uses this to show where the current UI session was launched from.
   launchCwd: string | null;
   taskLogFilePath: string | null;
@@ -589,28 +588,16 @@ export interface UiSnapshotPayload {
 }
 
 export interface SubmitTaskPayload {
-  taskId?: string;
-  newTaskId?: string;
   content: string;
   mentionAgentId?: string;
 }
 
 export interface InitializeTaskPayload {
   title?: string;
-  taskId?: string;
-}
-
-export interface GetTaskRuntimePayload {
-  taskId: string;
 }
 
 export interface OpenAgentTerminalPayload {
-  taskId: string;
   agentId: string;
-}
-
-export interface DeleteTaskPayload {
-  taskId: string;
 }
 
 export interface AgentTeamEvent {

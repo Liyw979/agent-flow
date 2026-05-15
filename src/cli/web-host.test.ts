@@ -72,7 +72,6 @@ test("startWebHost 会按 JSON 解析 /api/tasks/submit 请求体", async () => 
         throw new Error("unexpected openAgentTerminal");
       },
     } as never,
-    taskId: "task-123",
     port,
     webRoot: null,
     userDataPath: "/tmp",
@@ -94,7 +93,6 @@ test("startWebHost 会按 JSON 解析 /api/tasks/submit 请求体", async () => 
     assert.equal(response.status, 200);
     assert.deepEqual(capturedPayload, {
       content: "请开始执行",
-      newTaskId: "task-123",
     });
   } finally {
     await host.close();
@@ -109,20 +107,6 @@ test("startWebHost 会同时监听 IPv4 和 IPv6 loopback，避免 localhost 命
       submitTask: async () => {
         throw new Error("unexpected submitTask");
       },
-      getTaskSnapshot: async () => ({
-        task: {
-          id: "task-123",
-          title: "demo",
-          status: "running",
-          cwd: "/tmp/demo",
-          agentCount: 0,
-          createdAt: "2026-04-28T00:00:00.000Z",
-          completedAt: "",
-          initializedAt: "",
-        },
-        agents: [],
-        messages: [],
-      }),
       getWorkspaceSnapshot: async () => ({
         cwd: "/tmp/demo",
         agents: [],
@@ -130,10 +114,34 @@ test("startWebHost 会同时监听 IPv4 和 IPv6 loopback，避免 localhost 命
           nodes: [],
           edges: [],
           flow: {
-            nodes: [],
-            edges: [],
+            start: { id: "__start__", targets: [] },
+            end: { id: "__end__", sources: [], incoming: [] },
           },
         },
+        messages: [],
+        tasks: [{
+          task: {
+            id: "task-123",
+            title: "demo",
+            status: "running",
+            cwd: "/tmp/demo",
+            agentCount: 0,
+            createdAt: "2026-04-28T00:00:00.000Z",
+            completedAt: "",
+            initializedAt: "",
+          },
+          agents: [],
+          messages: [],
+          topology: {
+            nodes: [],
+            edges: [],
+            flow: {
+              start: { id: "__start__", targets: [] },
+              end: { id: "__end__", sources: [], incoming: [] },
+            },
+            nodeRecords: [],
+          },
+        }],
       }),
       getTaskRuntime: async () => {
         throw new Error("unexpected getTaskRuntime");
@@ -142,7 +150,6 @@ test("startWebHost 会同时监听 IPv4 和 IPv6 loopback，避免 localhost 命
         throw new Error("unexpected openAgentTerminal");
       },
     } as never,
-    taskId: "task-123",
     port,
     webRoot: null,
     userDataPath: "/tmp",
@@ -156,7 +163,6 @@ test("startWebHost 会同时监听 IPv4 和 IPv6 loopback，避免 localhost 命
     assert.equal(ipv4Response.status, 200);
     assert.deepEqual(await ipv4Response.json(), {
       ok: true,
-      taskId: "task-123",
       port,
     });
     if (availableBindHosts.includes(UI_LOOPBACK_IPV6_HOST)) {
@@ -164,7 +170,6 @@ test("startWebHost 会同时监听 IPv4 和 IPv6 loopback，避免 localhost 命
       assert.equal(ipv6Response.status, 200);
       assert.deepEqual(await ipv6Response.json(), {
         ok: true,
-        taskId: "task-123",
         port,
       });
     }
@@ -175,17 +180,27 @@ test("startWebHost 会同时监听 IPv4 和 IPv6 loopback，避免 localhost 命
 
 test("startWebHost 的 /api/tasks/runtime 始终绑定当前进程 task，不接受查询参数覆盖", async () => {
   const port = await reservePort();
-  const capturedSnapshotTaskIds: string[] = [];
-  const capturedRuntimePayloads: Array<{ taskId: string }> = [];
+  let runtimeCallCount = 0;
   const host = await startWebHost({
     orchestrator: {
       subscribe: () => () => undefined,
       submitTask: async () => {
         throw new Error("unexpected submitTask");
       },
-      getTaskSnapshot: async (taskId: string) => {
-        capturedSnapshotTaskIds.push(taskId);
-        return {
+      getWorkspaceSnapshot: async () => ({
+        cwd: "/tmp/demo",
+        agents: [],
+        topology: {
+          nodes: [],
+          edges: [],
+          flow: {
+            start: { id: "__start__", targets: [] },
+            end: { id: "__end__", sources: [], incoming: [] },
+          },
+          nodeRecords: [],
+        },
+        messages: [],
+        tasks: [{
           task: {
             id: "task-123",
             title: "demo",
@@ -198,15 +213,21 @@ test("startWebHost 的 /api/tasks/runtime 始终绑定当前进程 task，不接
           },
           agents: [],
           messages: [],
-        };
-      },
-      getWorkspaceSnapshot: async () => {
-        throw new Error("unexpected getWorkspaceSnapshot");
-      },
-      getTaskRuntime: async (payload: { taskId: string }) => {
-        capturedRuntimePayloads.push(payload);
+          topology: {
+            nodes: [],
+            edges: [],
+            flow: {
+              start: { id: "__start__", targets: [] },
+              end: { id: "__end__", sources: [], incoming: [] },
+            },
+            nodeRecords: [],
+          },
+        }],
+      }),
+      getTaskRuntime: async () => {
+        runtimeCallCount += 1;
         return {
-          taskId: payload.taskId,
+          taskId: "task-123",
           agents: [],
         };
       },
@@ -214,7 +235,6 @@ test("startWebHost 的 /api/tasks/runtime 始终绑定当前进程 task，不接
         throw new Error("unexpected openAgentTerminal");
       },
     } as never,
-    taskId: "task-123",
     port,
     webRoot: null,
     userDataPath: "/tmp",
@@ -224,8 +244,178 @@ test("startWebHost 的 /api/tasks/runtime 始终绑定当前进程 task，不接
   try {
     const response = await fetch(`http://localhost:${port}/api/tasks/runtime?taskId=task-overridden`);
     assert.equal(response.status, 200);
-    assert.deepEqual(capturedSnapshotTaskIds, ["task-123"]);
-    assert.deepEqual(capturedRuntimePayloads, [{ taskId: "task-123" }]);
+    assert.equal(runtimeCallCount, 1);
+  } finally {
+    await host.close();
+  }
+});
+
+test("startWebHost 的 /api/tasks/open-agent-terminal 只透传 agentId", async () => {
+  const port = await reservePort();
+  const capturedPayloads: Array<{ agentId: string }> = [];
+  const host = await startWebHost({
+    orchestrator: {
+      subscribe: () => () => undefined,
+      submitTask: async () => {
+        throw new Error("unexpected submitTask");
+      },
+      getWorkspaceSnapshot: async () => {
+        throw new Error("unexpected getWorkspaceSnapshot");
+      },
+      getTaskRuntime: async () => {
+        throw new Error("unexpected getTaskRuntime");
+      },
+      openAgentTerminal: async (payload: { agentId: string }) => {
+        capturedPayloads.push(payload);
+      },
+    } as never,
+    port,
+    webRoot: null,
+    userDataPath: "/tmp",
+    bindHosts: [UI_LOOPBACK_IPV4_HOST],
+  });
+
+  try {
+    const response = await fetch(`http://localhost:${port}/api/tasks/open-agent-terminal`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        agentId: "Build",
+        taskId: "task-overridden",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(capturedPayloads, [{ agentId: "Build" }]);
+  } finally {
+    await host.close();
+  }
+});
+
+test("startWebHost 在 submit 请求缺少有效 content 时返回 400", async () => {
+  const port = await reservePort();
+  const host = await startWebHost({
+    orchestrator: {
+      subscribe: () => () => undefined,
+      submitTask: async () => {
+        throw new Error("unexpected submitTask");
+      },
+      getWorkspaceSnapshot: async () => {
+        throw new Error("unexpected getWorkspaceSnapshot");
+      },
+      getTaskRuntime: async () => {
+        throw new Error("unexpected getTaskRuntime");
+      },
+      openAgentTerminal: async () => {
+        throw new Error("unexpected openAgentTerminal");
+      },
+    } as never,
+    port,
+    webRoot: null,
+    userDataPath: "/tmp",
+    bindHosts: [UI_LOOPBACK_IPV4_HOST],
+  });
+
+  try {
+    const response = await fetch(`http://localhost:${port}/api/tasks/submit`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        content: "   ",
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(await response.text(), "非法请求：content 必须是非空字符串");
+  } finally {
+    await host.close();
+  }
+});
+
+test("startWebHost 在 submit 请求提供非法 mentionAgentId 时返回 400", async () => {
+  const port = await reservePort();
+  const host = await startWebHost({
+    orchestrator: {
+      subscribe: () => () => undefined,
+      submitTask: async () => {
+        throw new Error("unexpected submitTask");
+      },
+      getWorkspaceSnapshot: async () => {
+        throw new Error("unexpected getWorkspaceSnapshot");
+      },
+      getTaskRuntime: async () => {
+        throw new Error("unexpected getTaskRuntime");
+      },
+      openAgentTerminal: async () => {
+        throw new Error("unexpected openAgentTerminal");
+      },
+    } as never,
+    port,
+    webRoot: null,
+    userDataPath: "/tmp",
+    bindHosts: [UI_LOOPBACK_IPV4_HOST],
+  });
+
+  try {
+    const response = await fetch(`http://localhost:${port}/api/tasks/submit`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        content: "请开始执行",
+        mentionAgentId: "",
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(await response.text(), "非法请求：mentionAgentId 必须是非空字符串");
+  } finally {
+    await host.close();
+  }
+});
+
+test("startWebHost 在 open-agent-terminal 请求缺少有效 agentId 时返回 400", async () => {
+  const port = await reservePort();
+  const host = await startWebHost({
+    orchestrator: {
+      subscribe: () => () => undefined,
+      submitTask: async () => {
+        throw new Error("unexpected submitTask");
+      },
+      getWorkspaceSnapshot: async () => {
+        throw new Error("unexpected getWorkspaceSnapshot");
+      },
+      getTaskRuntime: async () => {
+        throw new Error("unexpected getTaskRuntime");
+      },
+      openAgentTerminal: async () => {
+        throw new Error("unexpected openAgentTerminal");
+      },
+    } as never,
+    port,
+    webRoot: null,
+    userDataPath: "/tmp",
+    bindHosts: [UI_LOOPBACK_IPV4_HOST],
+  });
+
+  try {
+    const response = await fetch(`http://localhost:${port}/api/tasks/open-agent-terminal`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        agentId: "",
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(await response.text(), "非法请求：agentId 必须是非空字符串");
   } finally {
     await host.close();
   }
@@ -273,7 +463,6 @@ test("startWebHost 任一 bind host 监听失败时会关闭已监听 server 并
             throw new Error("unexpected openAgentTerminal");
           },
         } as never,
-        taskId: "task-123",
         port,
         webRoot: null,
         userDataPath: "/tmp",
@@ -292,20 +481,6 @@ test("startWebHost 任一 bind host 监听失败时会关闭已监听 server 并
       submitTask: async () => {
         throw new Error("unexpected submitTask");
       },
-      getTaskSnapshot: async () => ({
-        task: {
-          id: "task-123",
-          title: "demo",
-          status: "running",
-          cwd: "/tmp/demo",
-          agentCount: 0,
-          createdAt: "2026-04-28T00:00:00.000Z",
-          completedAt: "",
-          initializedAt: "",
-        },
-        agents: [],
-        messages: [],
-      }),
       getWorkspaceSnapshot: async () => ({
         cwd: "/tmp/demo",
         agents: [],
@@ -313,10 +488,34 @@ test("startWebHost 任一 bind host 监听失败时会关闭已监听 server 并
           nodes: [],
           edges: [],
           flow: {
-            nodes: [],
-            edges: [],
+            start: { id: "__start__", targets: [] },
+            end: { id: "__end__", sources: [], incoming: [] },
           },
         },
+        messages: [],
+        tasks: [{
+          task: {
+            id: "task-123",
+            title: "demo",
+            status: "running",
+            cwd: "/tmp/demo",
+            agentCount: 0,
+            createdAt: "2026-04-28T00:00:00.000Z",
+            completedAt: "",
+            initializedAt: "",
+          },
+          agents: [],
+          messages: [],
+          topology: {
+            nodes: [],
+            edges: [],
+            flow: {
+              start: { id: "__start__", targets: [] },
+              end: { id: "__end__", sources: [], incoming: [] },
+            },
+            nodeRecords: [],
+          },
+        }],
       }),
       getTaskRuntime: async () => {
         throw new Error("unexpected getTaskRuntime");
@@ -325,7 +524,6 @@ test("startWebHost 任一 bind host 监听失败时会关闭已监听 server 并
         throw new Error("unexpected openAgentTerminal");
       },
     } as never,
-    taskId: "task-123",
     port,
     webRoot: null,
     userDataPath: "/tmp",

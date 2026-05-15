@@ -1,15 +1,11 @@
 #!/usr/bin/env node
-
-import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { buildCliOpencodeAttachCommand } from "@shared/terminal-commands";
 import type { TaskSnapshot, WorkspaceSnapshot } from "@shared/types";
 import open from "open";
 import {
-  appendAppLog,
   buildTaskLogFilePath,
   initAppFileLogger,
-  runWithTaskLogScope,
 } from "../runtime/app-log";
 import { Orchestrator } from "../runtime/orchestrator";
 import { resolveCliUserDataPath } from "../runtime/user-data-path";
@@ -31,6 +27,7 @@ import {
   renderTaskAttachCommands,
   type TaskAttachCommandEntry,
 } from "./task-attach-display";
+import { reportCliRunFailure } from "./cli-run-failure";
 import { renderOpenCodeCleanupReport } from "./opencode-cleanup-report";
 import { ensureOpencodePreflightPassed } from "./opencode-preflight";
 import {
@@ -42,6 +39,7 @@ import {
   reserveLoopbackPort,
   resolveAvailableLoopbackBindHosts,
 } from "./loopback-bindings";
+import type { CliRunFailureContext } from "./cli-run-failure";
 import { startWebHost } from "./web-host";
 import { resolveWorkspaceCwdFromFilesystem } from "./workspace-cwd";
 
@@ -52,11 +50,6 @@ interface CliContext {
   userDataPath: string;
 }
 
-interface TaskRunDiagnostics {
-  taskId: string;
-  logFilePath: string;
-}
-
 interface CliDisposeOptions {
   awaitPendingTaskRuns: boolean;
 }
@@ -65,7 +58,11 @@ interface ActiveUiHost {
   close: () => Promise<void>;
 }
 
-let activeTaskDiagnosticsForCrash: TaskRunDiagnostics | null = null;
+const WITHOUT_TASK_RUN_FAILURE_CONTEXT: CliRunFailureContext = {
+  kind: "without-task",
+};
+
+let activeRunFailureContextForCrash: CliRunFailureContext = WITHOUT_TASK_RUN_FAILURE_CONTEXT;
 let didPrintTaskDiagnosticsForCrash = false;
 
 function fail(message: string): never {
@@ -76,16 +73,9 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildTaskRunDiagnostics(userDataPath: string, taskId: string): TaskRunDiagnostics {
-  return {
-    taskId,
-    logFilePath: buildTaskLogFilePath(userDataPath, taskId),
-  };
-}
-
-function printTaskRunDiagnostics(diagnostics: TaskRunDiagnostics, taskUrl?: string | null) {
+function printRunDiagnostics(logFilePath: string, taskUrl?: string | null) {
   process.stdout.write(`${renderTaskSessionSummary({
-    logFilePath: diagnostics.logFilePath,
+    logFilePath,
     ...(taskUrl ? { taskUrl } : {}),
   })}\n\n`);
 }
@@ -185,7 +175,6 @@ function buildTaskAttachEntries(task: TaskSnapshot): TaskAttachCommandEntry[] {
 
 async function renderTaskMessages(
   context: CliContext,
-  taskId: string,
   previousMessages: TaskSnapshot["messages"],
   options?: {
     includeHistory?: boolean;
@@ -200,7 +189,7 @@ async function renderTaskMessages(
   const printMessages = options?.printMessages !== false;
 
   while (true) {
-    const snapshot = await context.orchestrator.getTaskSnapshot(taskId);
+    const snapshot = await context.orchestrator.getTaskSnapshot();
     const attachEntries = buildTaskAttachEntries(snapshot);
 
     if (!attachPrinted) {
@@ -268,14 +257,12 @@ async function resolveUiHostBinding() {
 
 async function ensureUiHost(
   context: CliContext,
-  taskId: string,
   webRoot: string,
   port: number,
   bindHosts: readonly UiLoopbackBindHost[],
 ) : Promise<{ host: ActiveUiHost; port: number; url: string }> {
   const host = await startWebHost({
     orchestrator: context.orchestrator,
-    taskId,
     port,
     webRoot,
     userDataPath: context.userDataPath,
@@ -307,7 +294,6 @@ async function ensureUiAssetsAvailable(userDataPath: string): Promise<string> {
 async function handleTaskHeadlessCommand(
   context: CliContext,
   command: Extract<ParsedCliCommand, { kind: "task.headless" }>,
-  diagnostics: TaskRunDiagnostics,
   compiledTopology: ReturnType<typeof compileTeamDsl>,
 ) {
   let workspace = await context.orchestrator.getWorkspaceSnapshot();
@@ -315,10 +301,14 @@ async function handleTaskHeadlessCommand(
   const initialMessage = command.message!.trim();
 
   const snapshot = await context.orchestrator.submitTask({
-    newTaskId: diagnostics.taskId,
     content: initialMessage,
   });
-  printTaskRunDiagnostics(diagnostics);
+  activeRunFailureContextForCrash = {
+    kind: "task",
+    taskId: snapshot.task.id,
+    logFilePath: buildTaskLogFilePath(context.userDataPath, snapshot.task.id),
+  };
+  printRunDiagnostics(activeRunFailureContextForCrash.logFilePath);
 
   const streamingPlan = resolveCliTaskStreamingPlan({
     command,
@@ -328,7 +318,7 @@ async function handleTaskHeadlessCommand(
     return;
   }
 
-  await renderTaskMessages(context, snapshot.task.id, [], {
+  await renderTaskMessages(context, [], {
     includeHistory: streamingPlan.includeHistory,
     printAttach: streamingPlan.printAttach,
     printMessages: streamingPlan.printMessages,
@@ -338,7 +328,6 @@ async function handleTaskHeadlessCommand(
 async function handleTaskUiCommand(
   context: CliContext,
   command: Extract<ParsedCliCommand, { kind: "task.ui" }>,
-  diagnostics: TaskRunDiagnostics,
   compiledTopology: ReturnType<typeof compileTeamDsl>,
 ): Promise<ActiveUiHost> {
   const streamingPlan = resolveCliTaskStreamingPlan({
@@ -350,7 +339,6 @@ async function handleTaskUiCommand(
   workspace = await ensureYamlTopologyApplied(context, workspace, compiledTopology);
   const webRoot = await ensureUiAssetsAvailable(context.userDataPath);
   const snapshot = await context.orchestrator.submitTask({
-    newTaskId: diagnostics.taskId,
     content: command.message!.trim(),
   });
   const uiHostBinding = await resolveUiHostBinding();
@@ -358,17 +346,21 @@ async function handleTaskUiCommand(
   const uiUrl = buildUiUrl({
     port: uiPort,
   });
-  printTaskRunDiagnostics(diagnostics, uiUrl);
+  activeRunFailureContextForCrash = {
+    kind: "task",
+    taskId: snapshot.task.id,
+    logFilePath: buildTaskLogFilePath(context.userDataPath, snapshot.task.id),
+  };
+  printRunDiagnostics(activeRunFailureContextForCrash.logFilePath, uiUrl);
   const { host, url } = await ensureUiHost(
     context,
-    snapshot.task.id,
     webRoot,
     uiPort,
     uiHostBinding.bindHosts,
   );
   await open(url);
   if (streamingPlan.enabled) {
-    await renderTaskMessages(context, snapshot.task.id, [], {
+    await renderTaskMessages(context, [], {
       includeHistory: streamingPlan.includeHistory,
       printAttach: streamingPlan.printAttach,
       printMessages: streamingPlan.printMessages,
@@ -385,22 +377,19 @@ async function run() {
   }
 
   let userDataPath: string | null = null;
-  let activeTaskDiagnostics: TaskRunDiagnostics | null = null;
   let compiledTopology: ReturnType<typeof compileTeamDsl> | null = null;
   if (command.kind === "task.headless") {
     validateTaskHeadlessCommand(command);
     compiledTopology = compileTeamDsl(loadTeamDslDefinitionFile(command.file!));
     userDataPath = resolveCliUserDataPath();
     initAppFileLogger(userDataPath);
-    activeTaskDiagnostics = buildTaskRunDiagnostics(userDataPath, randomUUID());
   } else if (command.kind === "task.ui") {
     validateTaskUiCommand(command);
     compiledTopology = compileTeamDsl(loadTeamDslDefinitionFile(command.file!));
     userDataPath = resolveCliUserDataPath();
     initAppFileLogger(userDataPath);
-    activeTaskDiagnostics = buildTaskRunDiagnostics(userDataPath, randomUUID());
   }
-  activeTaskDiagnosticsForCrash = activeTaskDiagnostics;
+  activeRunFailureContextForCrash = WITHOUT_TASK_RUN_FAILURE_CONTEXT;
   didPrintTaskDiagnosticsForCrash = false;
 
   if (command.kind === "task.headless" || command.kind === "task.ui") {
@@ -450,11 +439,11 @@ async function run() {
   process.once("SIGTERM", handleSignal);
   try {
     if (command.kind === "task.headless") {
-      await handleTaskHeadlessCommand(context, command, activeTaskDiagnostics!, compiledTopology!);
+      await handleTaskHeadlessCommand(context, command, compiledTopology!);
       didPrintTaskDiagnosticsForCrash = true;
       observedSettledTaskState = true;
     } else if (command.kind === "task.ui") {
-      activeUiHost = await handleTaskUiCommand(context, command, activeTaskDiagnostics!, compiledTopology!);
+      activeUiHost = await handleTaskUiCommand(context, command, compiledTopology!);
       didPrintTaskDiagnosticsForCrash = true;
       observedSettledTaskState = true;
       const disposeOptions = resolveCliDisposeOptions({
@@ -494,18 +483,15 @@ async function run() {
 
 void run().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  if (activeTaskDiagnosticsForCrash) {
-    runWithTaskLogScope(activeTaskDiagnosticsForCrash.taskId, () => {
-      appendAppLog("error", "cli.run_failed", {
-        cwd: process.cwd(),
-        message,
-      });
-    });
-  }
-  if (activeTaskDiagnosticsForCrash && !didPrintTaskDiagnosticsForCrash) {
-    printTaskRunDiagnostics(activeTaskDiagnosticsForCrash);
-    didPrintTaskDiagnosticsForCrash = true;
-  }
+  didPrintTaskDiagnosticsForCrash = reportCliRunFailure({
+    context: activeRunFailureContextForCrash,
+    message,
+    cwd: process.cwd(),
+    didPrintDiagnostics: didPrintTaskDiagnosticsForCrash,
+    printDiagnostics: (logFilePath) => {
+      printRunDiagnostics(logFilePath);
+    },
+  });
   process.stderr.write(`${message}\n`);
   process.exitCode = 1;
 });

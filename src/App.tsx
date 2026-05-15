@@ -193,11 +193,9 @@ function App() {
       return;
     }
 
-    const { task } = uiSnapshot.taskView;
     setAgentTerminalActionError("");
     try {
       await openAgentTerminal({
-        taskId: task.task.id,
         agentId,
       });
     } catch (error) {
@@ -271,7 +269,6 @@ function App() {
               }}
               onSubmit={async ({ content, mentionAgentId }) => {
                 await submitTaskMutation.mutateAsync(withOptionalString({
-                  taskId: task.task.id,
                   content,
                 }, "mentionAgentId", mentionAgentId));
               }}
@@ -316,7 +313,6 @@ function App() {
                   }}
                   onSubmit={async ({ content, mentionAgentId }) => {
                     await submitTaskMutation.mutateAsync(withOptionalString({
-                      taskId: task.task.id,
                       content,
                     }, "mentionAgentId", mentionAgentId));
                   }}

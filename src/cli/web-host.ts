@@ -4,7 +4,6 @@ import path from "node:path";
 import { URL } from "node:url";
 import type {
   AgentTeamEvent,
-  GetTaskRuntimePayload,
   OpenAgentTerminalPayload,
   SubmitTaskPayload,
   UiSnapshotPayload,
@@ -20,7 +19,6 @@ import { buildUiUrl } from "./ui-host-launch";
 
 interface StartWebHostOptions {
   orchestrator: Orchestrator;
-  taskId: string;
   port: number;
   webRoot: string | null;
   userDataPath: string;
@@ -55,19 +53,52 @@ async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseSubmitTaskPayload(body: unknown): SubmitTaskPayload {
+  const content = isRecord(body) ? body["content"] : undefined;
+  const hasMentionAgentId = isRecord(body) && Object.hasOwn(body, "mentionAgentId");
+  const mentionAgentId = isRecord(body) ? body["mentionAgentId"] : undefined;
+  if (typeof content !== "string" || content.trim() === "") {
+    throw new Error("非法请求：content 必须是非空字符串");
+  }
+  if (
+    hasMentionAgentId
+    && (typeof mentionAgentId !== "string" || mentionAgentId.trim() === "")
+  ) {
+    throw new Error("非法请求：mentionAgentId 必须是非空字符串");
+  }
+  return {
+    content,
+    ...(hasMentionAgentId ? { mentionAgentId: mentionAgentId as string } : {}),
+  };
+}
+
+function parseOpenAgentTerminalPayload(body: unknown): OpenAgentTerminalPayload {
+  const agentId = isRecord(body) ? body["agentId"] : undefined;
+  if (typeof agentId !== "string" || agentId.trim() === "") {
+    throw new Error("非法请求：agentId 必须是非空字符串");
+  }
+  return {
+    agentId,
+  };
+}
+
 async function buildUiSnapshotPayload(
   orchestrator: Orchestrator,
-  taskId: string,
   options: Pick<StartWebHostOptions, "port" | "userDataPath">,
 ): Promise<UiSnapshotPayload> {
-  const task = await orchestrator.getTaskSnapshot(taskId);
   const workspace = await orchestrator.getWorkspaceSnapshot();
+  const task = workspace.tasks.length === 0
+    ? null
+    : await orchestrator.getTaskSnapshot();
   return {
     workspace,
     task,
-    launchTaskId: taskId,
     launchCwd: workspace.cwd,
-    taskLogFilePath: buildTaskLogFilePath(options.userDataPath, taskId),
+    taskLogFilePath: task ? buildTaskLogFilePath(options.userDataPath, task.task.id) : null,
     taskUrl: buildUiUrl({
       port: options.port,
     }),
@@ -139,34 +170,29 @@ export async function startWebHost(
       if (request.method === "GET" && url.pathname === "/healthz") {
         json(response, 200, {
           ok: true,
-          taskId: options.taskId,
           port: options.port,
         });
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/ui-snapshot") {
-        json(response, 200, await buildUiSnapshotPayload(options.orchestrator, options.taskId, options));
+        json(response, 200, await buildUiSnapshotPayload(options.orchestrator, options));
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/api/tasks/runtime") {
-        const snapshot = await options.orchestrator.getTaskSnapshot(options.taskId);
-        const payload: GetTaskRuntimePayload = {
-          taskId: snapshot.task.id,
-        };
-        json(response, 200, await options.orchestrator.getTaskRuntime(payload));
+        json(response, 200, await options.orchestrator.getTaskRuntime());
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/submit") {
-        const payload = await readJsonBody(request) as SubmitTaskPayload;
+        const payload = parseSubmitTaskPayload(await readJsonBody(request));
         json(response, 200, await options.orchestrator.submitTask(payload));
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/tasks/open-agent-terminal") {
-        const payload = await readJsonBody(request) as OpenAgentTerminalPayload;
+        const payload = parseOpenAgentTerminalPayload(await readJsonBody(request));
         await options.orchestrator.openAgentTerminal(payload);
         json(response, 200, { ok: true });
         return;
@@ -201,6 +227,10 @@ export async function startWebHost(
 
       text(response, 500, "web assets unavailable");
     } catch (error) {
+      if (error instanceof Error && error.message.startsWith("非法请求：")) {
+        text(response, 400, error.message);
+        return;
+      }
       json(response, 500, {
         message: error instanceof Error ? error.message : String(error),
       });

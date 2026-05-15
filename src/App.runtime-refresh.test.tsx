@@ -132,7 +132,6 @@ function createUiSnapshot(input: {
       messages: input.messages,
       topology: createSingleAgentTopology("漏洞挑战-1"),
     },
-    launchTaskId: TASK_ID,
     launchCwd: WORKSPACE_CWD,
     taskLogFilePath: null,
     taskUrl: "http://localhost:4310/",
@@ -284,7 +283,6 @@ function SubmitTaskInvalidationProbe() {
 
   useEffect(() => {
     void submitTaskMutation.mutateAsync({
-      taskId: TASK_ID,
       content: "请继续推进当前任务",
     });
   }, []);

@@ -25,8 +25,6 @@ import {
   normalizeGroupRule,
   normalizeTopologyEdgeTrigger,
   resolveTriggerRoutingKindForSource,
-  type DeleteTaskPayload,
-  type GetTaskRuntimePayload,
   type InitializeTaskPayload,
   getWorkspaceNameFromPath,
   type MessageRecord,
@@ -372,7 +370,9 @@ export class Orchestrator {
     return this.hydrateWorkspace();
   }
 
-  async getTaskSnapshot(taskId: string): Promise<TaskSnapshot> {
+  async getTaskSnapshot(): Promise<TaskSnapshot> {
+    const task = this.requireCurrentTask();
+    const taskId = task.id;
     await this.reconcilePersistedTaskStatus(taskId);
     return this.hydrateTask(taskId);
   }
@@ -423,8 +423,8 @@ export class Orchestrator {
     return this.hydrateWorkspace();
   }
 
-  async deleteTask(payload: DeleteTaskPayload): Promise<WorkspaceSnapshot> {
-    const task = this.store.getTask(payload.taskId);
+  async deleteTask(): Promise<WorkspaceSnapshot> {
+    const task = this.requireCurrentTask();
     await this.runtime.deleteTask(task.id);
     this.taskRuntimeOverlays.delete(task.id);
     const runtimeSyncTimer = this.pendingRuntimeSyncTasks.get(task.id);
@@ -464,9 +464,10 @@ export class Orchestrator {
     }
     const mentionAgentId = resolution.targetAgentId;
 
-    if (payload.taskId) {
+    if (this.listCurrentTasks().length !== 0) {
+      const currentTask = this.requireCurrentTask();
       return this.continueTask(
-        payload.taskId,
+        currentTask.id,
         payload.content,
         mentionAgentId,
         agents,
@@ -474,7 +475,6 @@ export class Orchestrator {
     }
 
     const initialized = await this.createTask(agents, {
-      taskId: payload.newTaskId ?? null,
       title: this.createTaskTitle(payload.content),
       source: "submit",
     });
@@ -493,14 +493,13 @@ export class Orchestrator {
     this.syncTopology(agents);
 
     return this.createTask(agents, {
-      taskId: payload.taskId ?? null,
       title: (payload.title ?? "").trim() || "未命名任务",
       source: "initialize",
     });
   }
 
   async openAgentTerminal(payload: OpenAgentTerminalPayload) {
-    const task = this.store.getTask(payload.taskId);
+    const task = this.requireCurrentTask();
     const snapshot = await this.ensureTaskInitialized(
       task,
       this.listWorkspaceAgents(),
@@ -527,10 +526,8 @@ export class Orchestrator {
     );
   }
 
-  async getTaskRuntime(
-    payload: GetTaskRuntimePayload,
-  ): Promise<AgentRuntimeSnapshot[]> {
-    const task = this.store.getTask(payload.taskId);
+  async getTaskRuntime(): Promise<AgentRuntimeSnapshot[]> {
+    const task = this.requireCurrentTask();
     const overlayAgents = this.overlayTaskAgents(
       task,
       this.store.listTaskAgents(task.id),
@@ -583,16 +580,16 @@ export class Orchestrator {
   private async createTask(
     agents: AgentRecord[],
     options: {
-      taskId?: string | null;
       title: string;
       source: "initialize" | "submit";
     },
   ): Promise<TaskSnapshot> {
+    this.assertTaskCreationAllowed();
     if (agents.length === 0) {
       throw new Error("当前工作区没有可用的 Agent");
     }
 
-    const taskId = options.taskId?.trim() || randomUUID();
+    const taskId = randomUUID();
     const createdAt = new Date().toISOString();
 
     const task: TaskRecord = {
@@ -720,6 +717,29 @@ export class Orchestrator {
         this.pendingTaskRuns.delete(tracked);
       });
     this.pendingTaskRuns.add(tracked);
+  }
+
+  private requireCurrentTask(): TaskRecord {
+    const tasks = this.listCurrentTasks();
+    const task = tasks[0];
+    if (!task) {
+      throw new Error("当前进程没有可用的 Task");
+    }
+    return task;
+  }
+
+  private assertTaskCreationAllowed() {
+    if (this.listCurrentTasks().length !== 0) {
+      throw new Error("当前进程只允许一个 Task");
+    }
+  }
+
+  private listCurrentTasks(): TaskRecord[] {
+    const tasks = this.store.listTasks();
+    if (tasks.length > 1) {
+      throw new Error(`当前进程只允许一个 Task，实际存在 ${tasks.length} 个`);
+    }
+    return tasks;
   }
 
   private createUserMessage(
