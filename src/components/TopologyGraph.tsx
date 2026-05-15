@@ -117,7 +117,7 @@ function TopologyAgentHistoryList(input: {
         {input.historyItems.map((item) => (
           <article
             key={item.id}
-            className={`${getTopologyHistoryItemButtonClassName()} min-w-0 flex-none border-emerald-200 bg-emerald-50 text-emerald-900`}
+            className={`${getTopologyHistoryItemButtonClassName()} min-w-0 flex-none border-slate-200 bg-slate-50 text-slate-800`}
             data-topology-history-item={item.id}
           >
             <div className="min-w-0 flex-1 select-text">

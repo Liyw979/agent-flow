@@ -736,6 +736,9 @@ test("TopologyGraph 的单条最终历史消息按文字自然撑高，滚动发
     assert.equal(viewportParent.className.includes("flex-col"), true);
     assert.equal(historyList.className.includes("space-y-1"), true);
     assert.equal(firstItem.className.includes("flex-none"), true);
+    assert.equal(firstItem.className.includes("border-slate-200"), true);
+    assert.equal(firstItem.className.includes("bg-slate-50"), true);
+    assert.equal(firstItem.className.includes("text-slate-800"), true);
     const firstItemText = firstItem.textContent;
     const secondItemText = secondItem.textContent;
     assert.ok(firstItemText !== null);
